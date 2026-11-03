@@ -202,9 +202,15 @@ impl Snapshots {
         Some(output.stdout)
     }
 
-    /// The working tree, including untracked files that are not ignored, as a tree id.
+    /// The session folder in the working tree: only files there are snapshotted and compared
+    /// (`limit-viewer-data` design decision 4). The rest of the index stays as the repository's.
+    fn pathspec(&self) -> String {
+        if self.prefix.is_empty() { ":/".into() } else { format!(":(top,literal){}", self.prefix) }
+    }
+
+    /// The session folder, including untracked files that are not ignored, as a tree id.
     fn snapshot(&self) -> Option<String> {
-        self.git(&["add", "--all", "--ignore-errors", "--", ":/"])?;
+        self.git(&["add", "--all", "--ignore-errors", "--", &self.pathspec()])?;
         let tree = self.git(&["write-tree"])?;
         Some(String::from_utf8_lossy(&tree).trim().to_owned())
     }
@@ -213,8 +219,9 @@ impl Snapshots {
         if before == after {
             return Vec::new();
         }
-        let Some(names) = self.git(&["diff", "--name-status", "--no-renames", "-z", before, after])
-        else {
+        let pathspec = self.pathspec();
+        let args = ["diff", "--name-status", "--no-renames", "-z", before, after, "--", &pathspec];
+        let Some(names) = self.git(&args) else {
             return Vec::new();
         };
         let fields: Vec<String> = names
@@ -488,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn paths_outside_the_session_folder_stay_absolute_from_the_top() {
+    fn changes_outside_the_session_folder_are_not_seen() {
         let repo = Repo::new();
         repo.write("sub/inner.txt", "x\n");
         let sub = repo.dir.path().join("sub");
@@ -497,18 +504,18 @@ mod tests {
         tracker.observe(&hook("PreToolUse", "Bash", "t1"));
         repo.write("sub/inner.txt", "y\n");
         repo.write("a.txt", "outside\n");
+        // Untracked and not ignored, next to the session folder.
+        repo.write(".env", "TOKEN=secret\n");
         let paths: Vec<String> = files(tracker.observe(&hook("PostToolUse", "Bash", "t1")))
             .into_iter()
             .map(|f| f.0)
             .collect();
-        let top = repo.git(&["rev-parse", "--show-toplevel"]);
-        assert_eq!(
-            paths,
-            [
-                Path::new(top.trim()).join("a.txt").to_string_lossy().into_owned(),
-                sub.join("inner.txt").to_string_lossy().into_owned()
-            ]
-        );
+        assert_eq!(paths, [sub.join("inner.txt").to_string_lossy().into_owned()]);
+
+        // Only outside: nothing at all.
+        tracker.observe(&hook("PreToolUse", "Bash", "t2"));
+        repo.write("a.txt", "outside again\n");
+        assert_eq!(tracker.observe(&hook("PostToolUse", "Bash", "t2")), None);
     }
 
     #[test]

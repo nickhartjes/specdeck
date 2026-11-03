@@ -26,6 +26,7 @@ use crate::mirror::{Colors, Mirror, Responder};
 use crate::output_log::{Batcher, OutputLog};
 use crate::plans::{self, ChangeRef, Plans};
 use crate::program_status::{self, Scanner, Signal};
+use crate::session_folder::SessionFolder;
 use crate::shell_changes::{CommandChanges, ShellChanges};
 use crate::status::{self, StatusLineReader};
 use crate::timeline::{self, TimelineBuilder, stamp};
@@ -179,11 +180,12 @@ impl HostSession {
             std::fs::create_dir_all(&config.data_dir).map_err(io_error)?;
             let sender = commands.clone();
             let shell_changes = ShellChanges::new(&config.folder, &config.data_dir, env);
+            let folder = SessionFolder::from_environment(&config.folder, env);
             let endpoint = HookEndpoint::start(move |payload| {
                 let mut changes = shell_changes.as_ref().and_then(|shell| shell.observe(&payload));
                 let mut texts: Vec<DocumentText> =
                     changes.as_mut().map(|c| std::mem::take(&mut c.documents)).unwrap_or_default();
-                texts.extend(documents::from_file_tool(&payload));
+                texts.extend(documents::from_file_tool(&payload, &folder));
                 let _ = sender.send(Command::Hook(payload, changes, texts));
             })
             .await
@@ -249,7 +251,7 @@ impl HostSession {
             responder: Responder::Mirror,
             writer: session.writer.clone(),
             activity: Activity::new(config.agent),
-            builder: TimelineBuilder::new(config.folder.to_string_lossy()),
+            builder: TimelineBuilder::new(SessionFolder::from_environment(&config.folder, env)),
             usage: config.agent.has_timeline().then(|| UsageReader::new(usage::projects_dir(env))),
             status_line: StatusLineReader::default(),
             git: None,

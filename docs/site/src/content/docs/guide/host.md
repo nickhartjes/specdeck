@@ -19,6 +19,20 @@ The link also names your sharing service, so it works for viewers whose SpecDeck
 
 You host one session at a time. To host or join another, end this one first.
 
+## What viewers see
+
+- **The whole session so far.** Anyone who joins later can scroll back to the start of the terminal and the timeline, as the note under the invite code says.
+- **The terminal**: everything the agent or shell prints. Claude Code itself prints part of what it reads and writes, such as the first lines of a file it creates, and that is shared like any other output.
+- **With Claude Code, the timeline**: your prompts, Claude's responses, the tools it uses, and diffs of the files it creates or changes in the session folder. Markdown files in the session folder can also be read whole.
+- **In the timeline, files outside the session folder only by name.** When the agent reads or changes a file elsewhere, such as Claude Code's own notes under `~/.claude/`, the timeline shows that it happened and the file's path, starting with `~` in your home folder, but no diff and no text. What the agent prints about it in the terminal is still shared.
+- **Shell commands as Claude typed them**, including any paths in them.
+
+Start the session in the folder you mean to share, not a folder above it: the timeline does not show changes elsewhere in a git repository.
+
+:::caution[Anything in the terminal is shared]
+SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a command prints while people watch, for example by not asking the agent to show `.env` files.
+:::
+
 ## While you host
 
 | To | Do this |

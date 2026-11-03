@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde_json::Value;
 use specdeck_core::hooks::{HOOK_EVENTS, HookPayload};
+use specdeck_core::session_folder::SessionFolder;
 use specdeck_core::timeline::TimelineBuilder;
 use specdeck_protocol::timeline::{
     Answer, DiffHunk, Entry, FileChangeKind, Permission, ToolOutcome, ToolStatus,
@@ -26,7 +27,7 @@ fn payloads(session: &str) -> Vec<HookPayload> {
 }
 
 fn replay(session: &str) -> Vec<Entry> {
-    let mut builder = TimelineBuilder::new("/workspace/project");
+    let mut builder = TimelineBuilder::new(SessionFolder::new("/workspace/project", None));
     payloads(session).into_iter().flat_map(|p| builder.handle(p).unwrap()).collect()
 }
 
@@ -121,7 +122,7 @@ fn all_events_of_a_prompt_share_its_id() {
 
 #[test]
 fn malformed_payload_is_an_error() {
-    let mut builder = TimelineBuilder::new("/workspace/project");
+    let mut builder = TimelineBuilder::new(SessionFolder::new("/workspace/project", None));
     let mut payload = payloads("edit-session").remove(0);
     payload.remove("prompt");
     let error = builder.handle(payload).unwrap_err();
@@ -130,7 +131,7 @@ fn malformed_payload_is_an_error() {
 
 #[test]
 fn unregistered_event_is_an_error() {
-    let mut builder = TimelineBuilder::new("/workspace/project");
+    let mut builder = TimelineBuilder::new(SessionFolder::new("/workspace/project", None));
     let payload = serde_json::json!({ "hook_event_name": "SessionStart" });
     let Value::Object(payload) = payload else { unreachable!() };
     assert!(builder.handle(payload).is_err());
@@ -138,7 +139,7 @@ fn unregistered_event_is_an_error() {
 
 #[test]
 fn successful_read_is_a_touched_file_outside_paths_stay_absolute() {
-    let mut builder = TimelineBuilder::new("/workspace/project");
+    let mut builder = TimelineBuilder::new(SessionFolder::new("/workspace/project", None));
     let read = |path: &str| {
         let payload = serde_json::json!({
             "hook_event_name": "PostToolUse", "prompt_id": "p", "tool_use_id": path,

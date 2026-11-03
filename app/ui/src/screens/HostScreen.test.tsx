@@ -114,6 +114,13 @@ describe('host screen', () => {
     expect(screen.getByLabelText('Maximum viewers')).toHaveTextContent('19');
   });
 
+  it('says that anyone who joins sees the whole session, once the code is ready', async () => {
+    await setup();
+    expect(screen.getByLabelText('Invite code')).toHaveAccessibleDescription('Anyone who joins sees the whole session so far.');
+    act(() => emit({ type: 'sharing', state: 'connecting', code: null }));
+    expect(screen.queryByText('Anyone who joins sees the whole session so far.')).not.toBeInTheDocument();
+  });
+
   it('keeps running and says so when sharing is unavailable', async () => {
     await setup();
     act(() => emit({ type: 'sharing', state: 'unavailable', code: null }));

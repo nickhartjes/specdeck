@@ -251,31 +251,37 @@ function InviteCode(props: {
     );
   }
   return (
-    <div className="invite" aria-label="Invite code">
-      <span className="label">Invite code</span>
-      <code className="selectable">{formatCode(props.code)}</code>
-      <button className="btn ghost small" onClick={props.onCopyCode} title="Copy the code">
-        <Copy aria-hidden /> Copy
-      </button>
-      <button className="btn ghost small icon" onClick={props.onCopyLink} aria-label="Copy join link" title="Copy a join link">
-        <Link2 aria-hidden />
-      </button>
-      <button className="btn ghost small icon" onClick={() => setConfirmNew(true)} aria-label="Make a new code" title="New code">
-        <RefreshCw aria-hidden />
-      </button>
-      {confirmNew && (
-        <ConfirmDialog
-          title="Make a new invite code?"
-          confirm="New code"
-          onCancel={() => setConfirmNew(false)}
-          onConfirm={() => {
-            setConfirmNew(false);
-            props.onNewCode();
-          }}
-        >
-          <p>The current code stops working. People already watching stay; share the new code with anyone still to join.</p>
-        </ConfirmDialog>
-      )}
+    <div className="invite-wrap">
+      <div className="invite" aria-label="Invite code" aria-describedby="invite-note">
+        <span className="label">Invite code</span>
+        <code className="selectable">{formatCode(props.code)}</code>
+        <button className="btn ghost small" onClick={props.onCopyCode} title="Copy the code">
+          <Copy aria-hidden /> Copy
+        </button>
+        <button className="btn ghost small icon" onClick={props.onCopyLink} aria-label="Copy join link" title="Copy a join link">
+          <Link2 aria-hidden />
+        </button>
+        <button className="btn ghost small icon" onClick={() => setConfirmNew(true)} aria-label="Make a new code" title="New code">
+          <RefreshCw aria-hidden />
+        </button>
+        {confirmNew && (
+          <ConfirmDialog
+            title="Make a new invite code?"
+            confirm="New code"
+            onCancel={() => setConfirmNew(false)}
+            onConfirm={() => {
+              setConfirmNew(false);
+              props.onNewCode();
+            }}
+          >
+            <p>The current code stops working. People already watching stay; share the new code with anyone still to join.</p>
+          </ConfirmDialog>
+        )}
+      </div>
+      {/* Late joiners get the whole history, terminal and timeline (session-streaming spec). */}
+      <span className="invite-note" id="invite-note">
+        Anyone who joins sees the whole session so far.
+      </span>
     </div>
   );
 }

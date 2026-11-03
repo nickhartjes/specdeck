@@ -7,6 +7,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::hooks::HookPayload;
+use crate::session_folder::SessionFolder;
 
 /// Larger documents are announced without their text; their diffs are still sent.
 pub const MAX_DOCUMENT_BYTES: u64 = 200 * 1024;
@@ -41,14 +42,15 @@ pub fn read(path: &str) -> Option<DocumentText> {
 }
 
 /// The document one of Claude Code's file tools just changed, read from disk. Must run before the
-/// hook is answered, so the text is the one the change produced.
-pub fn from_file_tool(payload: &HookPayload) -> Option<DocumentText> {
+/// hook is answered, so the text is the one the change produced. Only documents inside the
+/// session folder are read: elsewhere viewers learn only that the file changed.
+pub fn from_file_tool(payload: &HookPayload, folder: &SessionFolder) -> Option<DocumentText> {
     let text = |key: &str| payload.get(key).and_then(Value::as_str);
     if text("hook_event_name")? != "PostToolUse" || !FILE_TOOLS.contains(&text("tool_name")?) {
         return None;
     }
     let path = payload.get("tool_input")?.get("file_path")?.as_str()?;
-    is_document(path).then(|| read(path)).flatten()
+    (is_document(path) && folder.contains(path)).then(|| read(path)).flatten()
 }
 
 #[cfg(test)]
@@ -75,6 +77,10 @@ mod tests {
         assert!(!is_document("Makefile"));
     }
 
+    fn session(dir: &Path) -> SessionFolder {
+        SessionFolder::new(dir, None)
+    }
+
     #[test]
     fn reads_the_text_an_edit_left_on_disk() {
         let dir = tempfile::tempdir().unwrap();
@@ -82,7 +88,7 @@ mod tests {
         std::fs::write(&path, "# Design\n\nNew section.\n").unwrap();
         for tool in ["Write", "Edit", "MultiEdit"] {
             assert_eq!(
-                from_file_tool(&post(tool, &path)),
+                from_file_tool(&post(tool, &path), &session(dir.path())),
                 Some(DocumentText {
                     path: path.to_string_lossy().into(),
                     text: Some("# Design\n\nNew section.\n".into())
@@ -94,17 +100,42 @@ mod tests {
     #[test]
     fn source_files_reads_and_failures_give_no_document() {
         let dir = tempfile::tempdir().unwrap();
+        let folder = session(dir.path());
         let source = dir.path().join("server.ts");
         std::fs::write(&source, "export {}").unwrap();
-        assert_eq!(from_file_tool(&post("Edit", &source)), None);
+        assert_eq!(from_file_tool(&post("Edit", &source), &folder), None);
         let doc = dir.path().join("a.md");
         std::fs::write(&doc, "# A").unwrap();
-        assert_eq!(from_file_tool(&post("Read", &doc)), None);
+        assert_eq!(from_file_tool(&post("Read", &doc), &folder), None);
         let mut pre = post("Edit", &doc);
         pre.insert("hook_event_name".into(), json!("PreToolUse"));
-        assert_eq!(from_file_tool(&pre), None);
+        assert_eq!(from_file_tool(&pre, &folder), None);
         // A failed or deleted file: nothing to read.
-        assert_eq!(from_file_tool(&post("Write", &dir.path().join("gone.md"))), None);
+        assert_eq!(from_file_tool(&post("Write", &dir.path().join("gone.md")), &folder), None);
+    }
+
+    #[test]
+    fn documents_outside_the_session_folder_are_not_read() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let memory = home.path().join("memory.md");
+        std::fs::write(&memory, "# Private").unwrap();
+        assert_eq!(from_file_tool(&post("Write", &memory), &session(&project)), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_document_through_a_symlink_pointing_outside_is_not_read() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("project");
+        let notes = home.path().join("notes");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&notes).unwrap();
+        std::fs::write(notes.join("plan.md"), "# Private").unwrap();
+        std::os::unix::fs::symlink(&notes, project.join("notes")).unwrap();
+        let through_link = project.join("notes/plan.md");
+        assert_eq!(from_file_tool(&post("Edit", &through_link), &session(&project)), None);
     }
 
     #[test]
