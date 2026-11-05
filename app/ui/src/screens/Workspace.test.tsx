@@ -25,14 +25,17 @@ function renderWorkspace(props: Partial<Parameters<typeof Workspace>[0]> = {}) {
 beforeEach(() => vi.clearAllMocks());
 
 describe('timeline panel', () => {
-  it('shows prompts with the agent text, tool calls with their outcome, and diffs', () => {
+  it('shows prompts with the agent text, tool calls with their outcome, and diffs', async () => {
     renderWorkspace();
     const first = screen.getByRole('article', { name: 'Prompt 1' });
     expect(first).toHaveTextContent('Add a /health endpoint');
     expect(within(first).getByText('Write')).toBeInTheDocument();
-    expect(within(first).getByLabelText('Created src/routes/health.ts')).toHaveTextContent("+import { Router } from 'express';");
-    expect(within(first).getByText('Failed')).toBeInTheDocument();
-    expect(within(first).getByText(/no test files match/)).toBeInTheDocument();
+    // A finished turn shows its diffs once a call is opened.
+    expect(within(first).queryByLabelText('Created src/routes/health.ts')).not.toBeInTheDocument();
+    await userEvent.click(within(first).getByText('Write'));
+    expect(await within(first).findByLabelText('Created src/routes/health.ts')).toHaveTextContent("+import { Router } from 'express';");
+    await userEvent.click(within(first).getByText('Failed'));
+    expect(await within(first).findByText(/no test files match/)).toBeInTheDocument();
     expect(screen.getByRole('article', { name: 'Prompt 2' })).toHaveTextContent('Running');
   });
 
@@ -86,9 +89,9 @@ describe('summary steps', () => {
       'Changed 2 filesDone',
       'Ran the health testsAllowed by the hostFailed',
     ]);
-    expect(within(first).queryByLabelText('Created src/routes/health.ts')).not.toBeVisible();
+    expect(within(first).queryByLabelText('Created src/routes/health.ts')).not.toBeInTheDocument();
     await userEvent.click(within(first).getByText('Changed 2 files'));
-    expect(within(first).getByLabelText('Created src/routes/health.ts')).toBeVisible();
+    expect(await within(first).findByLabelText('Created src/routes/health.ts')).toBeVisible();
   });
 
   it('says what the agent does right now when the terminal is hidden', () => {

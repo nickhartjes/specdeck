@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, X } from 'lucide-react';
 import type { TimelineModel, ToolItem, Turn } from '../model/timeline';
 import { SHOWN_IN_PART, toolSummary } from '../model/timeline';
@@ -37,6 +37,12 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
     const seen = new Set<string>();
     return model.turns.map((turn) => summarize(turn, seen));
   }, [model]);
+  // What a turn shows changes with its own events, and in summary mode also with earlier turns' plans.
+  const revisions = useMemo(() => {
+    const result: number[] = [];
+    for (const turn of model.turns) result.push(turn.revision + (steps === 'summary' ? (result.at(-1) ?? 0) : 0));
+    return result;
+  }, [model, steps]);
   const lastTurn = model.turns.at(-1);
   const plansBeforeLast = useMemo(() => {
     const seen = new Set<string>();
@@ -132,6 +138,8 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
               key={turn.promptId}
               turn={turn}
               summary={steps === 'summary' ? summaries[i]! : null}
+              revision={revisions[i]!}
+              latest={turn === lastTurn}
               onReadPlan={onReadPlan}
               number={i + 1}
               match={matches.has(turn.promptId)}
@@ -175,19 +183,26 @@ function StepView({ step, onJump, onReadPlan }: { step: Step; onJump: (seq: numb
   const Icon = OUTCOME_ICON[step.outcome];
   const plan = step.plan;
   const details = (
-    <details className={`step ${step.outcome}`} open={step.tools.some(asksTheHost)}>
-      <summary onClick={() => onJump(step.tools[0]!.outputSeq)}>
-        <Icon className="status-icon" aria-hidden />
-        <span className="what">{step.label}</span>
-        {step.outcome !== 'denied' && step.tools.some((item) => item.permission === 'allowed') && <PermissionBadge permission="allowed" />}
-        <span className="state">{STATUS_TEXT[step.outcome]}</span>
-      </summary>
-      <div className="step-body">
-        {step.tools.map((item) => (
-          <ToolView key={item.id} item={item} onJump={onJump} />
-        ))}
-      </div>
-    </details>
+    <Disclosure
+      className={`step ${step.outcome}`}
+      open={step.tools.some(asksTheHost)}
+      summary={
+        <summary onClick={() => onJump(step.tools[0]!.outputSeq)}>
+          <Icon className="status-icon" aria-hidden />
+          <span className="what">{step.label}</span>
+          {step.outcome !== 'denied' && step.tools.some((item) => item.permission === 'allowed') && <PermissionBadge permission="allowed" />}
+          <span className="state">{STATUS_TEXT[step.outcome]}</span>
+        </summary>
+      }
+    >
+      {() => (
+        <div className="step-body">
+          {step.tools.map((item) => (
+            <ToolView key={item.id} item={item} showChanges onJump={onJump} />
+          ))}
+        </div>
+      )}
+    </Disclosure>
   );
   if (!plan || !onReadPlan) return details;
   const paths = [...new Set(step.tools.flatMap((item) => item.changes.map((change) => change.path)))];
@@ -201,23 +216,31 @@ function StepView({ step, onJump, onReadPlan }: { step: Step; onJump: (seq: numb
   );
 }
 
-function TurnView({
-  turn,
-  summary,
-  onReadPlan,
-  number,
-  match,
-  current,
-  onJump,
-}: {
+interface TurnProps {
   turn: Turn;
   summary: SummaryEntry[] | null;
+  /** Changes whenever what the turn shows changes; see `revisions`. */
+  revision: number;
+  /** The newest turn, which shows its file changes opened. */
+  latest: boolean;
   onReadPlan?: (change: string, paths: string[]) => void;
   number: number;
   match: boolean;
   current: boolean;
   onJump: (seq: number) => void;
-}) {
+}
+
+// Long sessions have hundreds of turns: render only the ones that changed. The model is rebuilt
+// on every event, so a turn is compared by its revision instead of by identity.
+const TurnView = memo(
+  TurnBody,
+  (prev, next) =>
+    prev.turn.promptId === next.turn.promptId &&
+    (prev.summary === null) === (next.summary === null) &&
+    (Object.keys(next) as (keyof TurnProps)[]).every((key) => key === 'turn' || key === 'summary' || prev[key] === next[key]),
+);
+
+function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, onJump }: TurnProps) {
   const texts = turn.items.filter((item) => item.kind === 'text');
   const showResponse = turn.response && !texts.some((item) => item.text.trim() === turn.response?.trim());
   return (
@@ -242,7 +265,7 @@ function TurnView({
             <Hand aria-hidden /> {item.text}
           </p>
         ) : (
-          <ToolView key={item.id} item={item} onJump={onJump} />
+          <ToolView key={item.id} item={item} showChanges={latest} onJump={onJump} />
         ),
       )}
       {showResponse && <Markdown text={turn.response ?? ''} />}
@@ -252,26 +275,53 @@ function TurnView({
 
 const STATUS_TEXT = { running: 'Running', succeeded: 'Done', failed: 'Failed', 'not-run': 'Did not run', denied: 'Denied by the host' } as const;
 
-function ToolView({ item, onJump }: { item: ToolItem; onJump: (seq: number) => void }) {
+/** `showChanges`: opens a call that changed files, which costs a diff each, so only where they are wanted. */
+function ToolView({ item, showChanges, onJump }: { item: ToolItem; showChanges: boolean; onJump: (seq: number) => void }) {
   const Icon = { running: Loader, succeeded: Check, failed: X, 'not-run': CircleSlash }[item.status];
   return (
-    <details className={`tool ${item.status}`} open={item.changes.length > 0 || asksTheHost(item)}>
-      <summary onClick={() => onJump(item.outputSeq)}>
-        <Icon className="status-icon" aria-hidden />
-        <span className="name">{item.toolName}</span>
-        <span className="what" title={toolSummary(item)}>
-          {toolSummary(item)}
-        </span>
-        <PermissionBadge permission={item.permission} />
-        <span className="state">{STATUS_TEXT[item.status]}</span>
-      </summary>
-      <div className="tool-body">
-        {item.error && <div className="error-text selectable">{item.error}</div>}
-        {item.truncated && <p className="hint">{SHOWN_IN_PART}</p>}
-        {item.changes.length > 0
-          ? item.changes.map((change, i) => <DiffView key={i} change={change} />)
-          : (interactionBody(item) ?? <pre className="tool-input selectable">{JSON.stringify(item.input, null, 2)}</pre>)}
-      </div>
+    <Disclosure
+      className={`tool ${item.status}`}
+      open={(showChanges && item.changes.length > 0) || asksTheHost(item)}
+      summary={
+        <summary onClick={() => onJump(item.outputSeq)}>
+          <Icon className="status-icon" aria-hidden />
+          <span className="name">{item.toolName}</span>
+          <span className="what" title={toolSummary(item)}>
+            {toolSummary(item)}
+          </span>
+          <PermissionBadge permission={item.permission} />
+          <span className="state">{STATUS_TEXT[item.status]}</span>
+        </summary>
+      }
+    >
+      {() => (
+        <div className="tool-body">
+          {item.error && <div className="error-text selectable">{item.error}</div>}
+          {item.truncated && <p className="hint">{SHOWN_IN_PART}</p>}
+          {item.changes.length > 0
+            ? item.changes.map((change, i) => <DiffView key={i} change={change} />)
+            : (interactionBody(item) ?? <pre className="tool-input selectable">{JSON.stringify(item.input, null, 2)}</pre>)}
+        </div>
+      )}
+    </Disclosure>
+  );
+}
+
+/**
+ * A `<details>` whose body is rendered only while it is open, so closed entries of a long session
+ * cost nothing. `open` sets how it starts, and opens or closes it again whenever it changes.
+ */
+function Disclosure({ open: wanted, className, summary, children }: { open: boolean; className: string; summary: ReactNode; children: () => ReactNode }) {
+  const [open, setOpen] = useState(wanted);
+  const [lastWanted, setLastWanted] = useState(wanted);
+  if (wanted !== lastWanted) {
+    setLastWanted(wanted);
+    setOpen(wanted);
+  }
+  return (
+    <details className={className} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      {summary}
+      {open && children()}
     </details>
   );
 }
