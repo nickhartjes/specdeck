@@ -5,6 +5,7 @@
 //! local gathering is complete: checks started before the local relay address exists are sent
 //! without it and can leave a relayed connection stuck.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use datachannel::{
@@ -147,6 +148,48 @@ pub struct Peer {
     /// Process-local number in diagnostic events.
     number: u32,
     state: Arc<Mutex<LinkState>>,
+    candidates: Arc<Mutex<Candidates>>,
+}
+
+/// The address and type of every candidate either side offered, to tell the type of the
+/// selected pair from its addresses.
+///
+/// datachannel's `selected_candidate_pair` sizes both strings to the longer one and then fails
+/// on the shorter one's terminator, so it reports no pair whenever the two lines differ in
+/// length. The selected addresses come back one at a time and are read correctly.
+#[derive(Default)]
+struct Candidates {
+    local: HashMap<String, CandidateType>,
+    remote: HashMap<String, CandidateType>,
+}
+
+#[derive(Clone, Copy)]
+enum Side {
+    Local,
+    Remote,
+}
+
+impl Candidates {
+    /// Keeps a candidate line's `address:port`, as libjuice writes selected addresses.
+    fn add(&mut self, side: Side, candidate: &str) {
+        let line = candidate.strip_prefix("a=").unwrap_or(candidate);
+        let mut fields = line.split_ascii_whitespace().skip(4);
+        let (Some(address), Some(port)) = (fields.next(), fields.next()) else { return };
+        let known = match side {
+            Side::Local => &mut self.local,
+            Side::Remote => &mut self.remote,
+        };
+        known.insert(format!("{address}:{port}"), CandidateType::parse(line));
+    }
+
+    /// The types of the selected local and remote addresses. A remote address the other side
+    /// never signalled was learnt from its checks: peer reflexive.
+    fn types(&self, local: &str, remote: &str) -> (CandidateType, CandidateType) {
+        (
+            self.local.get(local).copied().unwrap_or(CandidateType::Unknown),
+            self.remote.get(remote).copied().unwrap_or(CandidateType::Prflx),
+        )
+    }
 }
 
 #[derive(Default)]
@@ -194,6 +237,7 @@ impl Peer {
         let number = diag::next_peer_number();
         diag::peer_created(number, offer, config.uses_turn());
         let state: Arc<Mutex<LinkState>> = Arc::default();
+        let candidates: Arc<Mutex<Candidates>> = Arc::default();
         let handler = Handler {
             events,
             channels: channels.clone(),
@@ -203,9 +247,10 @@ impl Peer {
             number,
             scope: diag::Scope::current(),
             state: state.clone(),
+            candidates: candidates.clone(),
         };
         let pc = RtcPeerConnection::new(&config.rtc(), handler)?;
-        Ok(Self { pc, channels, gathered, number, state })
+        Ok(Self { pc, channels, gathered, number, state, candidates })
     }
 
     /// This connection's number in diagnostic events.
@@ -236,6 +281,7 @@ impl Peer {
 
     /// Adds the other side's candidate, or keeps it until local gathering is complete.
     pub fn add_remote_candidate(&mut self, candidate: String, mid: String) -> Result<(), String> {
+        self.candidates.lock().unwrap().add(Side::Remote, &candidate);
         let candidate = IceCandidate { candidate, mid };
         {
             let mut gathered = self.gathered.lock().unwrap();
@@ -282,15 +328,11 @@ impl Peer {
         channels[channel as usize].as_ref().map_or(usize::MAX, |dc| dc.buffered_amount())
     }
 
-    pub fn selected_pair(&self) -> Option<(String, String)> {
-        self.pc.selected_candidate_pair().map(|pair| (pair.local, pair.remote))
-    }
-
     /// Records the selected pair's candidate types; call once connected. Returns whether the
     /// connection is relayed, or `None` while no pair is selected.
     pub fn report_path(&self) -> Option<bool> {
-        let (local, remote) = self.selected_pair()?;
-        let (local, remote) = (CandidateType::parse(&local), CandidateType::parse(&remote));
+        let (local, remote) = (self.pc.local_address()?, self.pc.remote_address()?);
+        let (local, remote) = self.candidates.lock().unwrap().types(&local, &remote);
         diag::peer_path(self.number, local, remote);
         Some(local == CandidateType::Relay || remote == CandidateType::Relay)
     }
@@ -306,6 +348,7 @@ struct Handler {
     /// libdatachannel calls back on its own threads; events go to the peer's subscriber.
     scope: diag::Scope,
     state: Arc<Mutex<LinkState>>,
+    candidates: Arc<Mutex<Candidates>>,
 }
 
 impl PeerConnectionHandler for Handler {
@@ -331,6 +374,7 @@ impl PeerConnectionHandler for Handler {
     }
 
     fn on_candidate(&mut self, candidate: IceCandidate) {
+        self.candidates.lock().unwrap().add(Side::Local, &candidate.candidate);
         if candidate.candidate.contains(" typ relay") && !self.saw_relay {
             self.saw_relay = true;
             let _ = self.events.send(PeerEvent::RelayGathered);
@@ -409,6 +453,37 @@ mod tests {
 
     fn loopback() -> PeerConfig {
         PeerConfig { bind_address: Some("127.0.0.1".into()), ..PeerConfig::default() }
+    }
+
+    #[test]
+    fn the_selected_addresses_are_typed_by_the_candidates_they_came_from() {
+        let mut candidates = Candidates::default();
+        // Lines of different lengths, as libdatachannel gives and the other side signals them.
+        candidates.add(Side::Local, "a=candidate:1 1 UDP 2122317823 192.168.1.20 54321 typ host");
+        candidates.add(
+            Side::Local,
+            "candidate:2 1 UDP 8331263 198.51.100.7 3478 typ relay raddr 0.0.0.0 rport 0",
+        );
+        candidates.add(
+            Side::Remote,
+            "candidate:1 1 UDP 1686052607 203.0.113.9 61234 typ srflx raddr 0.0.0.0 rport 0",
+        );
+        candidates.add(Side::Remote, "candidate:1 1 UDP 2122317823 fe80::1 5000 typ host");
+
+        assert_eq!(
+            candidates.types("192.168.1.20:54321", "203.0.113.9:61234"),
+            (CandidateType::Host, CandidateType::Srflx)
+        );
+        assert_eq!(
+            candidates.types("198.51.100.7:3478", "fe80::1:5000"),
+            (CandidateType::Relay, CandidateType::Host)
+        );
+        // Checks from an address the other side never signalled: peer reflexive.
+        assert_eq!(
+            candidates.types("192.168.1.20:54321", "203.0.113.9:40000"),
+            (CandidateType::Host, CandidateType::Prflx)
+        );
+        assert_eq!(candidates.types("10.0.0.1:1", "203.0.113.9:61234").0, CandidateType::Unknown);
     }
 
     /// Delivers one side's events to the other until both channels are open on both sides.
