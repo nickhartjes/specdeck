@@ -6,6 +6,14 @@ const LABELS = {
   deleted: { verb: 'Deleted', kind: 'deleted' },
 } as const;
 
+/**
+ * Whether the host showed this path from outside the session folder: paths inside it are
+ * relative, others start with `~` or are absolute. The host sends no diff for those.
+ */
+function outsideFolder(path: string): boolean {
+  return path.startsWith('~') || path.startsWith('/') || path.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(path);
+}
+
 /** One change to one file, as unified diff hunks with line numbers. */
 export function DiffView({ change, showPath = true }: { change: FileChange; showPath?: boolean }) {
   const label = LABELS[change.change];
@@ -17,8 +25,8 @@ export function DiffView({ change, showPath = true }: { change: FileChange; show
           <span className="kind">{label.kind}</span>
         </div>
       )}
-      {/* Binary files, and changes too large to send, come without hunks. */}
-      {change.hunks.length === 0 && <div className="hunk">No diff to show</div>}
+      {/* Binary files, changes too large to send, and files outside the session folder come without hunks. */}
+      {change.hunks.length === 0 && <div className="hunk">{outsideFolder(change.path) ? 'Outside the session folder' : 'No diff to show'}</div>}
       {change.hunks.map((hunk, i) => {
         let oldLine = hunk.oldStart;
         let newLine = hunk.newStart;

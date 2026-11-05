@@ -3,7 +3,6 @@
 //! ignored.
 
 use std::collections::HashMap;
-use std::path::{Component, Path};
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -13,6 +12,7 @@ use specdeck_protocol::timeline::{
 
 use crate::documents::DocumentText;
 use crate::hooks::HookPayload;
+use crate::session_folder::SessionFolder;
 use crate::shell_changes::CommandChanges;
 
 #[derive(Debug, thiserror::Error)]
@@ -146,6 +146,16 @@ fn present_or_null<'de, D: serde::Deserializer<'de>>(
 }
 
 const FILE_EDITING_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+/// The fields of each file-editing tool's input that carry file contents, left out of what
+/// viewers get (the diff shows the change). MultiEdit's are in each item of its `edits`.
+const CONTENT_FIELDS: [(&str, &[&str]); 4] = [
+    ("Write", &["content"]),
+    ("Edit", &["old_string", "new_string"]),
+    ("MultiEdit", &["old_string", "new_string"]),
+    ("NotebookEdit", &["new_source"]),
+];
+/// Input fields that name a file, shown like other paths.
+const PATH_FIELDS: [&str; 3] = ["file_path", "notebook_path", "path"];
 const FILE_READING_TOOLS: [&str; 1] = ["Read"];
 const QUESTION_TOOL: &str = "AskUserQuestion";
 const PLAN_TOOL: &str = "ExitPlanMode";
@@ -154,11 +164,8 @@ const HELPER_TOOLS: [&str; 2] = ["Agent", "Task"];
 const MAX_REPORT_BYTES: usize = 200 * 1024;
 
 pub struct TimelineBuilder {
-    /// Session folder; file paths inside it are shown relative to it.
-    cwd: String,
-    /// The same folder with symlinks resolved, as the agent may report it (`/private/var` for
-    /// `/var` on macOS).
-    resolved_cwd: Option<std::path::PathBuf>,
+    /// Session folder: only files inside it are shared in full, and paths are shown by it.
+    folder: SessionFolder,
     /// Tool calls without a result yet, in call order.
     open_calls: Vec<OpenCall>,
     /// Helpers running in the background: agent id → (tool_use_id, prompt_id) of their call.
@@ -169,13 +176,9 @@ pub struct TimelineBuilder {
 }
 
 impl TimelineBuilder {
-    pub fn new(cwd: impl Into<String>) -> Self {
-        let cwd = cwd.into();
-        let resolved_cwd =
-            Path::new(&cwd).canonicalize().ok().filter(|resolved| *resolved != Path::new(&cwd));
+    pub fn new(folder: SessionFolder) -> Self {
         Self {
-            cwd,
-            resolved_cwd,
+            folder,
             open_calls: Vec::new(),
             background_helpers: HashMap::new(),
             requested_notice: false,
@@ -216,11 +219,12 @@ impl TimelineBuilder {
                     awaiting_permission: false,
                     noticed: false,
                 });
+                let input = self.shared_input(&call.tool_name, call.tool_input);
                 vec![Entry::ToolCall {
                     prompt_id: call.prompt_id,
                     tool_use_id: call.tool_use_id,
                     tool_name: call.tool_name,
-                    input: call.tool_input,
+                    input,
                 }]
             }
             Payload::PostToolUse { call, tool_response } => {
@@ -432,9 +436,9 @@ impl TimelineBuilder {
             .map(|file| Entry::FileChange {
                 prompt_id: changes.prompt_id.clone(),
                 tool_use_id: changes.tool_use_id.clone(),
+                hunks: if self.folder.contains(&file.path) { file.hunks } else { Vec::new() },
                 path: self.display_path(&file.path),
                 change: file.change,
-                hunks: file.hunks,
             })
             .collect()
     }
@@ -448,11 +452,15 @@ impl TimelineBuilder {
     fn file_change(&self, call: &ToolCall, response: Value) -> Option<Entry> {
         let response: FileResponse = serde_json::from_value(response).ok()?;
         let created = response.original_file == Some(None);
-        let hunks = match (created, response.content) {
+        let mut hunks = match (created, response.content) {
             (true, Some(content)) => vec![added_file(&content)],
             _ if !response.structured_patch.is_empty() => response.structured_patch,
             _ => return None,
         };
+        // Outside the session folder, viewers learn only that the file changed.
+        if !self.folder.contains(&response.file_path) {
+            hunks.clear();
+        }
         Some(Entry::FileChange {
             prompt_id: call.prompt_id.clone(),
             tool_use_id: call.tool_use_id.clone(),
@@ -462,21 +470,32 @@ impl TimelineBuilder {
         })
     }
 
-    /// Paths inside the session folder relative to it; others unchanged.
-    fn display_path(&self, path: &str) -> String {
-        let full = Path::new(path);
-        let inside = full.strip_prefix(&self.cwd).or_else(|e| {
-            self.resolved_cwd.as_ref().map_or(Err(e), |resolved| full.strip_prefix(resolved))
-        });
-        match inside {
-            Ok(inside)
-                if !inside.as_os_str().is_empty()
-                    && inside.components().all(|c| matches!(c, Component::Normal(_))) =>
-            {
-                inside.to_string_lossy().into_owned()
+    /// A tool call's input as viewers get it: without file contents, and with its paths shown
+    /// like other paths. Shell commands stay as typed.
+    fn shared_input(&self, tool_name: &str, mut input: Map<String, Value>) -> Map<String, Value> {
+        if let Some((_, fields)) = CONTENT_FIELDS.iter().find(|(tool, _)| *tool == tool_name) {
+            for field in *fields {
+                input.remove(*field);
             }
-            _ => path.to_owned(),
+            if let Some(Value::Array(edits)) = input.get_mut("edits") {
+                for edit in edits.iter_mut().filter_map(Value::as_object_mut) {
+                    for field in *fields {
+                        edit.remove(*field);
+                    }
+                }
+            }
         }
+        for field in PATH_FIELDS {
+            if let Some(Value::String(path)) = input.get_mut(field) {
+                *path = self.display_path(path);
+            }
+        }
+        input
+    }
+
+    /// A path as viewers see it (see `SessionFolder::display`).
+    fn display_path(&self, path: &str) -> String {
+        self.folder.display(path)
     }
 }
 
@@ -585,6 +604,19 @@ fn report(mut text: String) -> ToolOutcome {
 mod tests {
     use super::*;
 
+    /// A home folder that is absolute on this platform (`/home/…` is not, on Windows).
+    const HOME: &str = if cfg!(windows) { r"C:\Users\someone" } else { "/home/someone" };
+
+    /// `rest` (written with `/`) in the home folder, as the agent reports it.
+    fn in_home(rest: &str) -> String {
+        format!("{HOME}/{rest}")
+    }
+
+    /// `rest` (written with `/`) as viewers see it in the home folder.
+    fn from_home(rest: &str) -> String {
+        format!("~/{rest}")
+    }
+
     #[test]
     fn stamps_terminal_position_and_time() {
         assert_eq!(stamp(Entry::SessionStarted, None, 5).output_seq, -1);
@@ -613,7 +645,7 @@ mod tests {
         let links = tempfile::tempdir().unwrap();
         let link = links.path().join("project");
         std::os::unix::fs::symlink(real.path(), &link).unwrap();
-        let builder = TimelineBuilder::new(link.to_string_lossy());
+        let builder = TimelineBuilder::new(SessionFolder::new(&link, None));
         let resolved = real.path().canonicalize().unwrap().join("docs/a.md");
         assert_eq!(builder.display_path(&resolved.to_string_lossy()), "docs/a.md");
         assert_eq!(builder.display_path(&link.join("b.md").to_string_lossy()), "b.md");
@@ -622,7 +654,7 @@ mod tests {
 
     #[test]
     fn a_document_follows_its_change() {
-        let builder = TimelineBuilder::new("/work");
+        let builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         let entries = vec![
             Entry::ToolResult {
                 prompt_id: "p".into(),
@@ -666,7 +698,7 @@ mod tests {
 
     #[test]
     fn a_permission_request_asks_for_attention_and_idle_reminders_do_not() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         let asked = builder.handle(payload(serde_json::json!({
             "hook_event_name": "Notification",
             "message": "Claude needs your permission to use Bash",
@@ -702,7 +734,7 @@ mod tests {
 
     #[test]
     fn answers_keep_notes_and_unanswered_questions() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         let response = serde_json::json!({ "tool_response": {
             "questions": [
                 { "question": "Which database?", "multiSelect": false,
@@ -732,7 +764,7 @@ mod tests {
 
     #[test]
     fn a_foreground_helper_reports_in_its_result() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         let response = serde_json::json!({ "tool_response": { "content": [
             { "type": "text", "text": "Two files." },
             { "type": "image", "source": {} },
@@ -759,7 +791,7 @@ mod tests {
 
     #[test]
     fn unrecognised_responses_give_no_outcome() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         for tool in ["AskUserQuestion", "Agent", "Task"] {
             let entries = builder.handle(call("PostToolUse", tool, tool, serde_json::json!({})));
             assert_eq!(outcome(entries.unwrap()), None, "{tool}");
@@ -771,7 +803,7 @@ mod tests {
 
     #[test]
     fn a_helpers_calls_stay_open_while_the_main_conversation_goes_on() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         let by_helper = serde_json::json!({ "agent_id": "a1" });
         builder.handle(call("PreToolUse", "Bash", "main", serde_json::json!({}))).unwrap();
         builder.handle(call("PreToolUse", "Bash", "helper", by_helper.clone())).unwrap();
@@ -796,7 +828,7 @@ mod tests {
 
     #[test]
     fn a_permission_prompt_for_a_question_or_plan_is_no_permission_decision() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         let prompt = || {
             payload(serde_json::json!({
                 "hook_event_name": "Notification", "message": "Claude needs your permission",
@@ -860,7 +892,7 @@ mod tests {
 
     #[test]
     fn a_permission_request_after_its_notice_adds_none() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         let input = serde_json::json!({ "tool_input": { "command": "ls" } });
         builder.handle(call("PreToolUse", "Bash", "b", input)).unwrap();
         let notice = builder.handle(permission_prompt()).unwrap();
@@ -871,9 +903,131 @@ mod tests {
         assert_eq!(decision(ran.unwrap()), Some(Permission::Allowed));
     }
 
+    fn tool_input(entries: Vec<Entry>) -> Map<String, Value> {
+        match entries.into_iter().next() {
+            Some(Entry::ToolCall { input, .. }) => input,
+            other => panic!("not a tool call: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_tool_inputs_carry_no_file_contents() {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", Some(HOME.into())));
+        let mut sent = |tool: &str, input: Value| {
+            let extra = serde_json::json!({ "tool_input": input });
+            Value::Object(tool_input(builder.handle(call("PreToolUse", tool, "t", extra)).unwrap()))
+        };
+        let write = serde_json::json!({ "file_path": "/work/a.rs", "content": "secret" });
+        assert_eq!(sent("Write", write), serde_json::json!({ "file_path": "a.rs" }));
+        let edit = serde_json::json!({
+            "file_path": in_home("notes.md"), "old_string": "a", "new_string": "b",
+            "replace_all": true
+        });
+        assert_eq!(
+            sent("Edit", edit),
+            serde_json::json!({ "file_path": from_home("notes.md"), "replace_all": true })
+        );
+        let multi = serde_json::json!({
+            "file_path": "/work/b.rs", "edits": [{ "old_string": "a", "new_string": "b" }]
+        });
+        assert_eq!(
+            sent("MultiEdit", multi),
+            serde_json::json!({ "file_path": "b.rs", "edits": [{}] })
+        );
+        let notebook = serde_json::json!({
+            "notebook_path": "/work/n.ipynb", "new_source": "print(1)", "cell_id": "c"
+        });
+        assert_eq!(
+            sent("NotebookEdit", notebook),
+            serde_json::json!({ "notebook_path": "n.ipynb", "cell_id": "c" })
+        );
+    }
+
+    #[test]
+    fn a_shell_command_is_sent_as_typed() {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", Some(HOME.into())));
+        let command = serde_json::json!({ "command": format!("cat {}", in_home(".ssh/config")) });
+        let extra = serde_json::json!({ "tool_input": command.clone() });
+        let input = tool_input(builder.handle(call("PreToolUse", "Bash", "b", extra)).unwrap());
+        assert_eq!(Value::Object(input), command);
+    }
+
+    fn wrote(builder: &mut TimelineBuilder, path: &str, original: Value) -> Vec<Entry> {
+        let response = serde_json::json!({
+            "tool_input": { "file_path": path, "content": "secret\n" },
+            "tool_response": { "filePath": path, "originalFile": original, "content": "secret\n" }
+        });
+        builder.handle(call("PostToolUse", "Write", "w", response)).unwrap()
+    }
+
+    fn changed_file(entries: Vec<Entry>) -> (String, Vec<DiffHunk>) {
+        entries
+            .into_iter()
+            .find_map(|entry| match entry {
+                Entry::FileChange { path, hunks, .. } => Some((path, hunks)),
+                _ => None,
+            })
+            .expect("a file change")
+    }
+
+    #[test]
+    fn a_file_outside_the_session_folder_has_no_diff() {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", Some(HOME.into())));
+        let outside = wrote(&mut builder, &in_home(".claude/memory.md"), Value::Null);
+        assert_eq!(changed_file(outside), (from_home(".claude/memory.md"), Vec::new()));
+
+        let (path, hunks) = changed_file(wrote(&mut builder, "/work/new.rs", Value::Null));
+        assert_eq!(path, "new.rs");
+        assert_eq!(hunks[0].lines, ["+secret"]);
+    }
+
+    #[test]
+    fn a_read_outside_the_session_folder_is_shown_from_home() {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", Some(HOME.into())));
+        let read = serde_json::json!({ "tool_input": { "file_path": in_home(".env") } });
+        let entries = builder.handle(call("PostToolUse", "Read", "r", read)).unwrap();
+        let path = entries.into_iter().find_map(|entry| match entry {
+            Entry::FileRead { path, .. } => Some(path),
+            _ => None,
+        });
+        assert_eq!(path, Some(from_home(".env")));
+    }
+
+    #[test]
+    fn a_shell_change_outside_the_session_folder_has_no_diff() {
+        let builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        let hunk = added_file("secret");
+        let file = |path: &str| crate::shell_changes::ChangedFile {
+            path: path.into(),
+            change: FileChangeKind::Edited,
+            hunks: vec![hunk.clone()],
+        };
+        let entries = builder.command_changes(CommandChanges {
+            prompt_id: "p".into(),
+            tool_use_id: "b".into(),
+            files: vec![file("/work/a.rs"), file("/repo/.env")],
+            documents: Vec::new(),
+        });
+        let hunks: Vec<usize> = entries
+            .into_iter()
+            .map(|entry| match entry {
+                Entry::FileChange { hunks, .. } => hunks.len(),
+                other => panic!("not a file change: {other:?}"),
+            })
+            .collect();
+        assert_eq!(hunks, [1, 0]);
+    }
+
+    #[test]
+    fn every_file_editing_tool_has_its_content_fields_listed() {
+        for tool in FILE_EDITING_TOOLS {
+            assert!(CONTENT_FIELDS.iter().any(|(name, _)| *name == tool), "{tool}");
+        }
+    }
+
     #[test]
     fn a_permission_request_is_for_its_own_call_when_others_are_open() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         let write = serde_json::json!({ "file_path": "/work/src/main.rs", "content": "x" });
         builder
             .handle(call("PreToolUse", "Write", "w", serde_json::json!({ "tool_input": write })))
@@ -894,7 +1048,7 @@ mod tests {
 
     #[test]
     fn a_permission_request_without_a_matching_call_takes_the_newest() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         builder.handle(call("PreToolUse", "Bash", "b", serde_json::json!({}))).unwrap();
         let asked = builder.handle(permission_request("WebFetch", serde_json::json!({}))).unwrap();
         assert_eq!(messages(asked), ["Claude wants to use WebFetch"]);
@@ -905,7 +1059,7 @@ mod tests {
     #[test]
     fn a_permission_request_summarises_what_the_tool_acts_on() {
         let text = |tool: &str, input: Value| {
-            let mut builder = TimelineBuilder::new("/work");
+            let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
             messages(builder.handle(permission_request(tool, input)).unwrap()).remove(0)
         };
         use serde_json::json;
@@ -947,7 +1101,7 @@ mod tests {
 
     #[test]
     fn an_mcp_dialog_in_a_browser_asks_for_attention() {
-        let mut builder = TimelineBuilder::new("/work");
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
         let asked = builder.handle(payload(serde_json::json!({
             "hook_event_name": "Notification",
             "message": "Claude is waiting for you in your browser",

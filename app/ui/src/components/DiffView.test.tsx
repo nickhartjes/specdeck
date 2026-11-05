@@ -14,6 +14,16 @@ const created = (truncated?: boolean): FileChange => ({
   ...(truncated && { truncated }),
 });
 
+const change = (path: string): FileChange => ({
+  path,
+  change: 'edited',
+  hunks: [],
+  promptId: 'p',
+  toolUseId: 't',
+  at: 0,
+  outputSeq: 0,
+});
+
 describe('diff view', () => {
   it('says when the host cut a change to fit in one message, after the lines it sent', () => {
     const { container } = render(<DiffView change={created(true)} />);
@@ -25,5 +35,20 @@ describe('diff view', () => {
   it('says nothing of the kind for a whole change', () => {
     render(<DiffView change={created()} />);
     expect(screen.queryByText(SHOWN_IN_PART)).not.toBeInTheDocument();
+  });
+});
+
+describe('a diff without hunks', () => {
+  it('says the file is outside the session folder when the host shows it from outside', () => {
+    for (const path of ['~/.claude/memory.md', '/etc/hosts', 'C:\\Users\\nick\\notes.md']) {
+      const { unmount } = render(<DiffView change={change(path)} />);
+      expect(screen.getByText('Outside the session folder')).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('says there is no diff for a file inside the session folder', () => {
+    render(<DiffView change={change('assets/logo.png')} />);
+    expect(screen.getByText('No diff to show')).toBeInTheDocument();
   });
 });
