@@ -54,13 +54,13 @@ impl SessionFolder {
                 .or_else(|| self.resolved.as_deref().and_then(|folder| below(&full, folder)))
                 .or_else(|| below(resolved.as_deref()?, self.resolved.as_deref()?));
             if let Some(inside) = inside {
-                return native(inside);
+                return slashed(inside);
             }
         }
         if let Some((home, resolved_home)) = &self.home {
             let in_home = below(&full, home).or_else(|| below(&full, resolved_home.as_deref()?));
             if let Some(rest) = in_home {
-                return native(&Path::new("~").join(rest));
+                return slashed(&Path::new("~").join(rest));
             }
         }
         path.to_owned()
@@ -80,10 +80,11 @@ fn below<'a>(path: &'a Path, folder: &Path) -> Option<&'a Path> {
     plain.then_some(inside)
 }
 
-/// `path` with this platform's separator throughout, so a path an agent on Windows wrote as
-/// `src/a.rs` is shown as `src\a.rs`, like the rest of the host's paths.
-fn native(path: &Path) -> String {
-    path.components().collect::<PathBuf>().to_string_lossy().into_owned()
+/// `path`, whose parts are all plain names, written with `/` on every platform, as git writes the
+/// paths of shell changes: one form for viewers, whichever way the agent wrote a path.
+fn slashed(path: &Path) -> String {
+    let names: Vec<_> = path.components().map(|part| part.as_os_str().to_string_lossy()).collect();
+    names.join("/")
 }
 
 /// `path` with symlinks resolved, through its nearest existing parent for a path that does not
@@ -122,18 +123,12 @@ mod tests {
         let session = folder(&project, Some(home.path()));
 
         assert!(session.contains(&text(&project.join("src/main.rs"))));
-        assert_eq!(
-            session.display(&text(&project.join("src/main.rs"))),
-            Path::new("src").join("main.rs").to_string_lossy()
-        );
+        assert_eq!(session.display(&text(&project.join("src/main.rs"))), "src/main.rs");
         assert!(session.contains("src/main.rs"));
 
         let notes = home.path().join(".claude/notes.md");
         assert!(!session.contains(&text(&notes)));
-        assert_eq!(
-            session.display(&text(&notes)),
-            Path::new("~").join(".claude").join("notes.md").to_string_lossy()
-        );
+        assert_eq!(session.display(&text(&notes)), "~/.claude/notes.md");
     }
 
     #[test]
@@ -158,10 +153,7 @@ mod tests {
         let session = folder(project.path(), None);
         let new = project.path().join("docs/new/plan.md");
         assert!(session.contains(&text(&new)));
-        assert_eq!(
-            session.display(&text(&new)),
-            Path::new("docs").join("new").join("plan.md").to_string_lossy()
-        );
+        assert_eq!(session.display(&text(&new)), "docs/new/plan.md");
     }
 
     #[test]
@@ -180,10 +172,7 @@ mod tests {
     fn a_folder_that_cannot_be_resolved_is_compared_by_text() {
         let session = SessionFolder::new("/work", None);
         assert!(session.contains("/work/src/a.rs"));
-        assert_eq!(
-            session.display("/work/src/a.rs"),
-            Path::new("src").join("a.rs").to_string_lossy()
-        );
+        assert_eq!(session.display("/work/src/a.rs"), "src/a.rs");
         assert!(!session.contains("/elsewhere/a.rs"));
         assert!(!session.contains("/work"));
     }

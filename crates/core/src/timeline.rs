@@ -614,10 +614,7 @@ mod tests {
 
     /// `rest` (written with `/`) as viewers see it in the home folder.
     fn from_home(rest: &str) -> String {
-        rest.split('/')
-            .fold(std::path::PathBuf::from("~"), |path, name| path.join(name))
-            .to_string_lossy()
-            .into_owned()
+        format!("~/{rest}")
     }
 
     #[test]
