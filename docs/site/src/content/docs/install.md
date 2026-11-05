@@ -14,7 +14,7 @@ Viewers who cannot install apps, for example on a company laptop, can [watch in 
 | macOS 11 or later (Apple silicon) | `brew install --cask nickhartjes/tap/specdeck`, or `SpecDeck-arm64.dmg` |
 | macOS 11 or later (Intel) | `brew install --cask nickhartjes/tap/specdeck`, or `SpecDeck-x64.dmg` |
 | Windows | `SpecDeck-x64-setup.exe` |
-| Linux | `SpecDeck-x86_64.AppImage`, `SpecDeck-amd64.deb`, or [Nix](#nix) |
+| Linux | `SpecDeck-x86_64.AppImage`, `SpecDeck-amd64.deb`, [Nix](#nix), or [from source](#from-source-debian-ubuntu-and-wsl) |
 
 The release files keep the same names from version to version, so a link such as `https://github.com/nickhartjes/specdeck/releases/latest/download/SpecDeck-arm64.dmg` always gets the newest one.
 
@@ -47,6 +47,23 @@ specdeck.override { signallingUrl = "wss://specdeck.example.com/signal"; }
 
 Or set the service in [Settings](/specdeck/guide/settings/), which works for every install.
 
+## From source (Debian, Ubuntu and WSL)
+
+When the release files cannot be used, for example on a work laptop that blocks installers, build SpecDeck from source with one script. On Windows this works in Ubuntu under [WSL 2](https://learn.microsoft.com/windows/wsl/install): the SpecDeck window opens on the Windows desktop. Check first that your organisation allows running software in WSL.
+
+```sh
+git clone https://github.com/nickhartjes/specdeck.git ~/specdeck
+~/specdeck/scripts/install-from-source.sh
+```
+
+The script asks for your sudo password once to install the system libraries, installs Rust, Node and the other build tools for your user only with [mise](https://mise.jdx.dev), and builds the app with the public sharing service, like the release builds. The first build takes several minutes.
+
+Then start SpecDeck with `specdeck`, or from the application menu. `specdeck` keeps the terminal attached, with the app's output there, until you close the window or press Ctrl+C; `specdeck --background` frees the terminal and logs to `~/.cache/specdeck.log`. In WSL it also appears in the Windows Start menu under **Ubuntu**, and `wsl -- bash -lc specdeck` starts it from PowerShell.
+
+- **Coding agents run inside Linux**: install the agent (Claude Code, Codex, …) in Ubuntu as well; the Windows one is not used.
+- **Update**: run `git -C ~/specdeck pull` and the script again. A build from source does not update itself.
+- **Your team's own sharing service**: set it in [Settings](/specdeck/guide/settings/), or build it in with `SPECDECK_SIGNALLING_URL=wss://specdeck.example.com/signal ~/specdeck/scripts/install-from-source.sh`.
+
 ## Update
 
 From version 1.2.0, SpecDeck updates itself when it was installed from the `.dmg`, with Homebrew, with the Windows installer, or as the AppImage. It checks for a new release when it starts and every 6 hours, downloads it in the background, and then shows **SpecDeck 1.2.1 is ready** (with the new version) and **Restart to update**. Nothing is installed until you choose that, and SpecDeck never restarts by itself. While you host or watch a session, it asks first: restarting ends your hosted session for everyone, or leaves the one you watch.
@@ -61,6 +78,7 @@ Where SpecDeck does not update itself:
 
 - **`.deb`**: download the new release and install it over the old one. Your settings stay.
 - **Nix**: update the flake input.
+- **From source**: pull and run `scripts/install-from-source.sh` again.
 - **Homebrew** leaves SpecDeck to update itself; `brew upgrade --greedy --cask specdeck` updates it through Homebrew instead.
 
 When the host's and a viewer's versions cannot work together, SpecDeck says **Update SpecDeck to join** or **The host needs to update**.
