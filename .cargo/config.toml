@@ -1,0 +1,4 @@
+# `cargo test --target wasm32-unknown-unknown` runs the web viewer's WebAssembly tests in Node, with
+# the wasm-bindgen CLI from mise.toml.
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"

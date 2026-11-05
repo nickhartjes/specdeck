@@ -42,6 +42,11 @@ jobs:
 
       - run: just check
 
+      # The web viewer is the same on every platform, and its recipes use bash: once, on Linux.
+      - name: Web viewer
+        if: runner.os == 'Linux'
+        run: just check-web
+
       # session-streaming: Session capacity. A measurement, so it runs on its own after the tests,
       # in a step rather than a job so it shares this job's Rust cache. Reported, not enforced, for
       # now: on Ubuntu runners 20 viewers added 15 to 110 ms to the host's echo between runs, even
@@ -65,3 +70,21 @@ jobs:
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/deb/*.deb
           if-no-files-found: error
+
+  # The signalling image with the web viewer built in (web-viewer design decision 5), as
+  # self-hosters build it: it builds, runs as UID 10001, and serves the page next to /signal.
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: docker build -f docker/signalling.Dockerfile -t specdeck-signalling:ci .
+
+      - name: Serve the web viewer from the image
+        run: |
+          test "$(docker inspect --format '{{.Config.User}}' specdeck-signalling:ci)" = 10001
+          docker run --detach --name signalling --publish 8080:8080 specdeck-signalling:ci
+          for _ in $(seq 30); do curl -sf http://127.0.0.1:8080/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:8080/web-viewer.json | grep -q '"protocol"'
+          curl -sf http://127.0.0.1:8080/join | grep -q '<div id="root">'
+          curl -sfI http://127.0.0.1:8080/join | grep -qi '^content-security-policy:'

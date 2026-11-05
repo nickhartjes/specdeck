@@ -17,3 +17,7 @@ deploy/compose/.env
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# The web viewer: WebAssembly package (just web-wasm) and page build (pnpm build:web)
+crates/web/pkg/
+dist-web/

@@ -62,7 +62,9 @@ Keep `.env` private: anyone with `TURN_SECRET` can use your relay.
 docker compose up -d --build
 ```
 
-The first start builds the signalling service from source, which takes a few minutes. Caddy gets its certificate as soon as the DNS records resolve to the server.
+The first start builds the signalling service from source, with the [web viewer](/specdeck/guide/join/#watch-in-a-browser) built in, which takes a few minutes. The build downloads from crates.io, the npm registry (`registry.npmjs.org`) and Docker Hub, so the server needs to reach them. If your network only allows a company npm registry, build the image once with your npm config as a build secret, which is not stored in the image: `docker build --secret id=npmrc,src=$HOME/.npmrc -f docker/signalling.Dockerfile -t specdeck-signalling:local ../..`, then start without `--build`. Caddy gets its certificate as soon as the DNS records resolve to the server.
+
+Once it runs, `https://<SPECDECK_DOMAIN>/` is the web viewer, and hosts on this service copy join links that open there.
 
 Check that the service answers:
 

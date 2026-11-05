@@ -15,6 +15,7 @@ use specdeck_protocol::AgentId;
 use specdeck_protocol::control::{PROTOCOL_VERSION, Participant, RefusalReason};
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
+use specdeck_protocol::timeline::Entry;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -55,16 +56,28 @@ while read line; do
 done
 "#;
 
+/// Hosts a session running a fake terminal-only agent.
 async fn host_with(url: &str, username: &str, script: &str) -> Hosted {
+    host_agent(url, username, AgentId::OpenCode, "opencode", script).await
+}
+
+/// Hosts a session running `script` as `agent`, installed as the command `command`.
+async fn host_agent(
+    url: &str,
+    username: &str,
+    agent: AgentId,
+    command: &str,
+    script: &str,
+) -> Hosted {
     let bin = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
-    let agent = bin.path().join("opencode");
-    std::fs::write(&agent, script).unwrap();
-    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let program = bin.path().join(command);
+    std::fs::write(&program, script).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     let env: Environment =
         [("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))].into_iter().collect();
     let config = HostConfig {
-        agent: AgentId::OpenCode,
+        agent,
         folder: bin.path().to_owned(),
         cols: 80,
         rows: 24,
@@ -512,4 +525,58 @@ while read line; do echo "got:$line"; done
     );
     assert!(watched_worst < Duration::from_millis(500), "host echo stalled: {watched:?}");
     assert!(viewer_worst < Duration::from_secs(1), "a viewer took {viewer_worst:?}");
+}
+
+/// A fake Claude Code that, on the line "go", reports through its hooks that it wrote a new file
+/// of about 1.15 MB, then echoes lines.
+const LARGE_WRITE_AGENT: &str = r#"#!/bin/sh
+[ "$1" = "--settings" ] || { echo "no settings"; exit 9; }
+url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$2" | head -n 1)
+post() { curl -s -o /dev/null -X POST -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -H 'Content-Type: application/json' --data-binary "$1" "$url"; }
+body="$(dirname "$0")/write.json"
+awk 'BEGIN {
+  printf "{\"hook_event_name\":\"PostToolUse\",\"prompt_id\":\"p1\",\"tool_name\":\"Write\",\"tool_use_id\":\"w\",\"tool_input\":{\"file_path\":\"big.rs\"},\"tool_response\":{\"filePath\":\"big.rs\",\"originalFile\":null,\"content\":\"";
+  for (i = 0; i < 20000; i++) printf "const VALUE_%d: &str = \\\"some generated line of code\\\";\\n", i;
+  printf "\"}}";
+}' > "$body"
+echo ready
+read go
+post '{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"write a big file"}'
+post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"big.rs"}}'
+post "@$body"
+echo posted
+while read line; do echo "got:$line"; done
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_very_large_file_change_reaches_viewers_cut_and_keeps_them_connected() {
+    let url = signalling().await;
+    let mut hosted =
+        host_agent(&url, "nick", AgentId::ClaudeCode, "claude", LARGE_WRITE_AGENT).await;
+    let code = ready(&mut hosted.events).await;
+    let (_viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("ready")).await;
+
+    hosted.session.input(b"go\r").unwrap();
+    let dropped =
+        |event: &ViewerEvent| assert_ne!(event, &ViewerEvent::Reconnecting, "viewer dropped");
+    let change = until(&mut events, &mut seen, |_, event| {
+        dropped(event);
+        matches!(event, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::FileChange { .. }))
+    })
+    .await;
+    let ViewerEvent::Timeline { event, .. } = change else { unreachable!() };
+    assert!(event.truncated);
+    let Entry::FileChange { hunks, .. } = event.entry else { unreachable!() };
+    assert!(hunks[0].lines.len() > 1_000, "{} lines", hunks[0].lines.len());
+    assert_eq!(hunks[0].lines[0], "+const VALUE_0: &str = \"some generated line of code\";");
+
+    // Still connected: live output keeps arriving.
+    hosted.session.input(b"after\r").unwrap();
+    until(&mut events, &mut seen, |seen, event| {
+        dropped(event);
+        seen.text.contains("got:after")
+    })
+    .await;
 }

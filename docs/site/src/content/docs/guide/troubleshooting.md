@@ -15,6 +15,8 @@ SpecDeck says why on the start screen:
 | SpecDeck cannot reach its sharing service | Check your internet connection, and the [sharing service in Settings](/specdeck/guide/settings/#sharing-service) |
 | Your network does not allow the connection | Your network blocks UDP. Try another network, such as your phone's hotspot |
 | Update SpecDeck to join / The host needs to update | You and the host use versions that do not match. Versions that offer Codex, Grok and pi as agents cannot connect to older versions, in either direction |
+| This web viewer needs to be updated | In the [web viewer](/specdeck/guide/join/#watch-in-a-browser): the host uses a newer SpecDeck than the page the sharing service serves. Ask whoever runs the service to update it, or watch in the app |
+| This browser blocks the connection | In the [web viewer](/specdeck/guide/join/#watch-in-a-browser): the browser has WebRTC turned off, as LibreWolf can. Allow WebRTC (`media.peerconnection.enabled` in `about:config` for LibreWolf and Firefox), use another browser, or watch in the app |
 
 A code typed on its own always uses your own sharing service. If the host uses another one, the code does not work for you: ask for the link instead (see [Through another sharing service](/specdeck/guide/join/#through-another-sharing-service)).
 

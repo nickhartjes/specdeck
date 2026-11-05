@@ -4,7 +4,9 @@
 //! over every byte before it. Because the signature covers `kind` and `seq`, a frame cannot be
 //! moved to another position or turned into another kind without detection.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier as _, VerifyingKey};
+use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
+#[cfg(not(target_arch = "wasm32"))]
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 
 use crate::timeline::TimelineEvent;
@@ -18,6 +20,10 @@ const SIGNATURE: usize = 64;
 
 /// Largest history batch after decompression, so a malicious frame cannot exhaust memory.
 pub const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
+
+/// Largest encoded frame: the message size libdatachannel and browsers accept on a data channel.
+/// Larger messages are refused when sent (`web-viewer` design decision 8).
+pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 
 /// One record of a session's terminal history. Output and resizes share one gap-free sequence.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,9 +58,11 @@ pub enum FrameError {
     Malformed,
 }
 
-/// The host's per-session signing key.
+/// The host's per-session signing key. Hosts run the app, so the WebAssembly build has none.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct SessionKey(SigningKey);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl SessionKey {
     pub fn generate() -> Self {
         let mut secret = [0u8; 32];
@@ -138,15 +146,47 @@ impl FrameVerifier {
 }
 
 /// Records as postcard, compressed with zstd.
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_history(records: &[Record]) -> Vec<u8> {
     let raw = postcard::to_allocvec(records).expect("records always encode");
     zstd::bulk::compress(&raw, 3).expect("compression into memory")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn decompress(payload: &[u8]) -> Result<Vec<u8>, FrameError> {
+    zstd::bulk::decompress(payload, MAX_HISTORY_BYTES).map_err(|_| FrameError::Malformed)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decompress(payload: &[u8]) -> Result<Vec<u8>, FrameError> {
+    decompress_pure(payload)
+}
+
+/// zstd decompression in pure Rust, for the WebAssembly build, which cannot use the C library.
+/// Stops past `MAX_HISTORY_BYTES`, like the native path.
+#[cfg(any(target_arch = "wasm32", test))]
+fn decompress_pure(payload: &[u8]) -> Result<Vec<u8>, FrameError> {
+    use std::io::Read;
+    let mut decoder =
+        ruzstd::decoding::StreamingDecoder::new(payload).map_err(|_| FrameError::Malformed)?;
+    let mut raw = Vec::new();
+    (&mut decoder)
+        .take(MAX_HISTORY_BYTES as u64 + 1)
+        .read_to_end(&mut raw)
+        .map_err(|_| FrameError::Malformed)?;
+    if raw.len() > MAX_HISTORY_BYTES {
+        return Err(FrameError::Malformed);
+    }
+    Ok(raw)
+}
+
 fn decode_history(payload: &[u8]) -> Result<Vec<Record>, FrameError> {
-    let raw =
-        zstd::bulk::decompress(payload, MAX_HISTORY_BYTES).map_err(|_| FrameError::Malformed)?;
-    let records: Vec<Record> = match postcard::take_from_bytes(&raw) {
+    let raw = decompress(payload)?;
+    parse_history(&raw)
+}
+
+fn parse_history(raw: &[u8]) -> Result<Vec<Record>, FrameError> {
+    let records: Vec<Record> = match postcard::take_from_bytes(raw) {
         Ok((records, [])) => records,
         _ => return Err(FrameError::Malformed),
     };
@@ -185,7 +225,12 @@ mod tests {
             ]),
             Frame::Event {
                 seq: 0,
-                event: TimelineEvent { output_seq: -1, at: 5, entry: Entry::SessionStarted },
+                event: TimelineEvent {
+                    output_seq: -1,
+                    at: 5,
+                    entry: Entry::SessionStarted,
+                    truncated: false,
+                },
             },
         ];
         for frame in frames {
@@ -235,11 +280,53 @@ mod tests {
     }
 
     #[test]
+    fn the_web_viewers_decoder_reads_what_hosts_compress() {
+        // The WebAssembly build decompresses with ruzstd; hosts compress with zstd.
+        let pure = |payload: &[u8]| parse_history(&decompress_pure(payload).unwrap()).unwrap();
+        let records = vec![
+            Record::Output { seq: 0, bytes: b"hello ".repeat(20) },
+            Record::Resize { seq: 1, cols: 100, rows: 32 },
+        ];
+        assert_eq!(pure(&HISTORY_1_1_0), records);
+        assert_eq!(pure(&encode_history(&records)), records);
+        let long: Vec<Record> = (0..200)
+            .map(|seq| Record::Output {
+                seq,
+                bytes: format!("\x1b[32mline {seq}\x1b[0m\r\n").repeat(50).into_bytes(),
+            })
+            .collect();
+        assert_eq!(pure(&encode_history(&long)), long);
+        assert_eq!(decompress_pure(b"not zstd"), Err(FrameError::Malformed));
+    }
+
+    #[test]
     fn history_is_compressed() {
         let (key, _) = keys();
         let records =
             vec![Record::Output { seq: 0, bytes: b"\x1b[2K\rThinking...".repeat(10_000) }];
         assert!(key.encode(&Frame::History(records)).len() < 10_000);
+    }
+
+    #[test]
+    fn a_full_batch_of_incompressible_output_fits_in_a_frame() {
+        // The host reads history in batches of 192 KiB (`READ_BYTES` in specdeck-core's
+        // sharing.rs); zstd adds a little to input it cannot compress.
+        let (key, _) = keys();
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let noise: Vec<u8> = (0..192 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+        let records = noise
+            .chunks(4096)
+            .enumerate()
+            .map(|(seq, bytes)| Record::Output { seq: seq as u64, bytes: bytes.to_vec() })
+            .collect();
+        assert!(key.encode(&Frame::History(records)).len() <= MAX_FRAME_BYTES);
     }
 
     #[test]

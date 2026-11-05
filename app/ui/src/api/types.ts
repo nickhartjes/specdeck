@@ -114,7 +114,8 @@ export interface DiffHunk {
   lines: string[];
 }
 
-type Stamp = { outputSeq: number; at: number };
+/** `truncated`: cut by the host to fit in one message, so only part of it is shown. */
+type Stamp = { outputSeq: number; at: number; truncated?: boolean };
 
 /** Use of one of the host account's rate-limit windows. */
 export interface RateLimit {
@@ -201,6 +202,8 @@ export type HostEvent =
       code: string | null;
       /** The sharing service the session uses, which join links name. */
       service: string;
+      /** The service serves the web viewer, so join links open in a browser. */
+      webViewer: boolean;
       participants: Participant[];
       status: AgentStatus;
       viewerLimit: number;
@@ -208,6 +211,8 @@ export type HostEvent =
       timeline: TimelineEvent[];
     }
   | { type: 'sharing'; state: SharingState; code: string | null }
+  /** Whether the sharing service serves the web viewer, once checked. */
+  | { type: 'web-viewer'; available: boolean }
   | { type: 'participants'; participants: Participant[] }
   | { type: 'status'; status: AgentStatus }
   | { type: 'timeline'; event: TimelineEvent }
@@ -222,7 +227,11 @@ export type EndReason =
   | 'service-unavailable'
   | 'network-blocked'
   | 'update-app'
-  | 'host-update';
+  | 'host-update'
+  /** The web viewer is older than the host's app: its sharing service needs updating. */
+  | 'service-outdated'
+  /** The web viewer's browser has WebRTC turned off. */
+  | 'webrtc-off';
 
 export type ViewEvent =
   | { type: 'joined'; viewerId: number; agent: AgentId; timelineSupported: boolean; cols: number; rows: number }

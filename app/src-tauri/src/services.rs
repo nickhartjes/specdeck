@@ -39,6 +39,38 @@ impl Services {
     }
 }
 
+/// How long the web viewer check waits; join links fall back to `specdeck://` meanwhile.
+const WEB_VIEWER_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Where a service says it serves the web viewer: `wss://host/prefix/signal` gives
+/// `https://host/prefix/web-viewer.json`, and `ws://` gives `http://`.
+pub fn web_viewer_url(service: &str) -> String {
+    let (scheme, rest) = match service.split_once("://") {
+        Some(("ws", rest)) => ("http", rest),
+        Some((_, rest)) => ("https", rest),
+        None => ("https", service),
+    };
+    let base = rest.rsplit_once('/').map_or(rest, |(base, _)| base);
+    format!("{scheme}://{base}/web-viewer.json")
+}
+
+/// Whether `service` serves the web viewer (`web-viewer` design decision 6). Asked from Rust, so
+/// the window's content security policy stays as it is; any failure counts as no.
+pub async fn web_viewer(service: &str) -> bool {
+    // reqwest's rustls comes without a crypto provider; ring is the one the app builds with, and
+    // the updater installs it the same way. Installing twice is harmless.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let check = async {
+        let response = reqwest::get(web_viewer_url(service)).await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let body: serde_json::Value = serde_json::from_slice(&response.bytes().await.ok()?).ok()?;
+        body.get("protocol")?.as_u64()
+    };
+    matches!(tokio::time::timeout(WEB_VIEWER_TIMEOUT, check).await, Ok(Some(_)))
+}
+
 /// The result of the check in Settings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,6 +143,51 @@ mod tests {
             Arc::new(specdeck_signalling::Service::default()),
         ));
         assert_eq!(check(&url).await, ServiceCheck { reachable: true, problem: None });
+    }
+
+    #[test]
+    fn the_web_viewer_is_asked_for_next_to_the_signalling_path() {
+        assert_eq!(
+            web_viewer_url("wss://specdeck.example.com/signal"),
+            "https://specdeck.example.com/web-viewer.json"
+        );
+        assert_eq!(
+            web_viewer_url("wss://example.com/x/signal"),
+            "https://example.com/x/web-viewer.json"
+        );
+        assert_eq!(
+            web_viewer_url("ws://127.0.0.1:18081/signal"),
+            "http://127.0.0.1:18081/web-viewer.json"
+        );
+    }
+
+    async fn service_with(web: Option<specdeck_signalling::WebViewer>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+        let config = specdeck_signalling::Config { web, ..Default::default() };
+        tokio::spawn(specdeck_signalling::serve(
+            listener,
+            Arc::new(specdeck_signalling::Service::new(config)),
+        ));
+        url
+    }
+
+    #[tokio::test]
+    async fn a_service_with_the_web_viewer_says_so() {
+        let page = specdeck_signalling::WebViewer::from_files([(
+            "web.html".to_owned(),
+            b"<html>".to_vec(),
+        )]);
+        assert!(web_viewer(&service_with(Some(page)).await).await);
+    }
+
+    #[tokio::test]
+    async fn a_service_without_it_or_no_service_does_not() {
+        assert!(!web_viewer(&service_with(None).await).await);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed = format!("ws://{}/signal", listener.local_addr().unwrap());
+        drop(listener);
+        assert!(!web_viewer(&closed).await);
     }
 
     #[tokio::test]

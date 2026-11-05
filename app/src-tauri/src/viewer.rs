@@ -10,7 +10,7 @@ use specdeck_protocol::timeline::TimelineEvent;
 use specdeck_protocol::{AgentId, AgentStatus};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
-use crate::terminal::encode_records;
+use specdeck_protocol::terminal_stream::encode_records;
 
 /// What a viewer's window hears about.
 #[derive(Clone, Debug, Serialize)]

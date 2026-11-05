@@ -42,3 +42,17 @@ describe('invite codes', () => {
     );
   });
 });
+
+describe('web join links', () => {
+  it('are made when the service serves the web viewer, next to its signalling path', () => {
+    expect(joinLink('7k2m9qxh4tpa', 'wss://specdeck.example.com/signal', true)).toBe('https://specdeck.example.com/join#7K2M-9QXH-4TPA');
+    expect(joinLink('7K2M9QXH4TPA', 'wss://example.com/x/signal', true)).toBe('https://example.com/x/join#7K2M-9QXH-4TPA');
+    expect(joinLink('7K2M9QXH4TPA', 'ws://127.0.0.1:18081/signal', true)).toBe('http://127.0.0.1:18081/join#7K2M-9QXH-4TPA');
+  });
+
+  it('are read when pasted, code and all', () => {
+    expect(isJoinLink('https://specdeck.example.com/join#7K2M-9QXH-4TPA')).toBe(true);
+    expect(isJoinLink('https://specdeck.example.com/other')).toBe(false);
+    expect(codeCharacters('https://specdeck.example.com/join#7K2M-9QXH-4TPA')).toBe('7K2M9QXH4TPA');
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TimelineEvent, ToolOutcome } from '../api/types';
-import { buildTimeline, toolSummary, turnText } from './timeline';
+import { buildTimeline, SHOWN_IN_PART, toolSummary, turnText } from './timeline';
 
 let at = 1000;
 const stamp = () => ({ outputSeq: at - 1000, at: at++ });
@@ -111,5 +111,25 @@ describe('host interactions', () => {
       { toolName: 'Bash', status: 'not-run', permission: 'denied' },
       { toolName: 'Agent', status: 'succeeded', outcome: { kind: 'report', text: 'Done.' } },
     ]);
+  });
+});
+
+describe('entries the host cut to fit in one message', () => {
+  it('carry a note, and whole entries do not', () => {
+    const { turns, files } = buildTimeline([
+      { ...stamp(), kind: 'prompt', promptId: 'p1', text: 'a long prompt', truncated: true },
+      { ...stamp(), kind: 'message', promptId: 'p1', messageId: 'm1', text: 'short', final: true },
+      { ...stamp(), kind: 'tool-call', promptId: 'p1', toolUseId: 't1', toolName: 'Bash', input: { command: 'cut' }, truncated: true },
+      { ...stamp(), kind: 'tool-call', promptId: 'p1', toolUseId: 't2', toolName: 'Write', input: { file_path: 'big.rs' } },
+      { ...stamp(), kind: 'file-change', promptId: 'p1', toolUseId: 't2', path: 'big.rs', change: 'created', hunks: [], truncated: true },
+      { ...stamp(), kind: 'response', promptId: 'p1', text: 'done', truncated: true },
+    ]);
+    const turn = turns[0]!;
+    expect(turn.prompt).toBe(`a long prompt\n\n${SHOWN_IN_PART}`);
+    expect(turn.response).toBe(`done\n\n${SHOWN_IN_PART}`);
+    expect(turn.items[0]).toMatchObject({ kind: 'text', text: 'short' });
+    expect(turn.items[1]).toMatchObject({ kind: 'tool', truncated: true });
+    expect(turn.items[2]).not.toHaveProperty('truncated');
+    expect(files[0]!.changes[0]).toMatchObject({ path: 'big.rs', truncated: true });
   });
 });

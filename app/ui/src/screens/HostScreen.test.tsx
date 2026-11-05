@@ -68,6 +68,13 @@ describe('host screen', () => {
     expect(bridge.copyText).toHaveBeenCalledWith('specdeck://join/7K2M-9QXH-4TPA?server=wss%3A%2F%2Fspecdeck.hartj.es%2Fsignal');
   });
 
+  it('copies a link that opens in a browser when the service serves the web viewer', async () => {
+    const { bridge } = await setup();
+    act(() => emit({ type: 'web-viewer', available: true }));
+    await userEvent.click(screen.getByRole('button', { name: 'Copy join link' }));
+    expect(bridge.copyText).toHaveBeenCalledWith('https://specdeck.hartj.es/join#7K2M-9QXH-4TPA');
+  });
+
   it('makes a new code after confirming', async () => {
     const { bridge } = await setup();
     await userEvent.click(screen.getByRole('button', { name: 'Make a new code' }));
@@ -127,6 +134,7 @@ describe('host screen', () => {
         sharing: 'ready',
         code: '7K2M9QXH4TPA',
         service: 'wss://specdeck.hartj.es/signal',
+        webViewer: false,
         participants: demoParticipants,
         status: 'waiting',
         viewerLimit: 20,
@@ -150,6 +158,7 @@ describe('host screen', () => {
         sharing: 'ready',
         code: '7K2M9QXH4TPA',
         service: 'wss://specdeck.hartj.es/signal',
+        webViewer: false,
         participants: demoParticipants,
         status: 'unknown',
         viewerLimit: 20,

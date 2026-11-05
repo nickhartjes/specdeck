@@ -20,9 +20,11 @@ use tokio::sync::mpsc;
 
 mod limits;
 mod turn;
+mod web;
 
 use limits::RateLimiter;
 pub use turn::TurnConfig;
+pub use web::WebViewer;
 
 /// Largest message accepted from a client. Descriptions are a few KB.
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -42,6 +44,8 @@ pub struct Config {
     /// is then read from `X-Forwarded-For`, counting this many entries from the right, so a
     /// client cannot choose its own address for rate limiting. 0 uses the peer address.
     pub trusted_proxies: usize,
+    /// The web viewer's page; without it, the service serves none.
+    pub web: Option<WebViewer>,
 }
 
 impl Default for Config {
@@ -52,6 +56,7 @@ impl Default for Config {
             window: Duration::from_secs(60),
             turn: None,
             trusted_proxies: 0,
+            web: None,
         }
     }
 }
@@ -93,12 +98,15 @@ enum Role {
     },
 }
 
-/// The service's HTTP routes: `/signal` (WebSocket) and `/health`.
+/// The service's HTTP routes: `/signal` (WebSocket) and `/health`, and the web viewer's when
+/// the service has one.
 pub fn router(service: Arc<Service>) -> Router {
+    let web = service.config.web.clone().map(web::routes).unwrap_or_default();
     Router::new()
         .route("/signal", get(upgrade))
         .route("/health", get(|| async { "ok" }))
         .with_state(service)
+        .merge(web)
 }
 
 /// Serves until the listener fails.

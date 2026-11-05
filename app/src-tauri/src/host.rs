@@ -19,7 +19,7 @@ use specdeck_protocol::timeline::{Entry, TimelineEvent};
 use specdeck_protocol::{AgentId, AgentStatus};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
-use crate::terminal::encode_records;
+use specdeck_protocol::terminal_stream::encode_records;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -42,6 +42,8 @@ pub enum HostEvent {
         code: Option<String>,
         /// The sharing service the session uses, which join links name.
         service: String,
+        /// The service serves the web viewer, so join links open in a browser.
+        web_viewer: bool,
         participants: Vec<Participant>,
         status: AgentStatus,
         viewer_limit: u8,
@@ -51,6 +53,10 @@ pub enum HostEvent {
     Sharing {
         state: SharingState,
         code: Option<String>,
+    },
+    /// Whether the sharing service serves the web viewer, once checked.
+    WebViewer {
+        available: bool,
     },
     Participants {
         participants: Vec<Participant>,
@@ -116,6 +122,8 @@ struct Ui {
     viewer_limit: u8,
     exited: Option<u32>,
     status: AgentStatus,
+    /// The sharing service serves the web viewer (`services::web_viewer`).
+    web_viewer: bool,
     events: Option<Channel<HostEvent>>,
     observer: Observer,
     last_summary: Option<Summary>,
@@ -219,6 +227,7 @@ impl HostRuntime {
             viewer_limit: MAX_VIEWERS,
             exited: None,
             status: session.status(),
+            web_viewer: false,
             events: None,
             observer,
             last_summary: None,
@@ -226,6 +235,17 @@ impl HostRuntime {
         }));
         let notice = ui.lock().unwrap().observe();
         notice.tell();
+
+        // Join links open in a browser when the service serves the web viewer
+        // (`web-viewer` design decision 6).
+        let checked = ui.clone();
+        let service = options.signalling_url.clone();
+        tokio::spawn(async move {
+            let available = crate::services::web_viewer(&service).await;
+            let mut ui = checked.lock().unwrap();
+            ui.web_viewer = available;
+            ui.send(HostEvent::WebViewer { available });
+        });
 
         let shared = ui.clone();
         tokio::spawn(async move {
@@ -324,6 +344,7 @@ impl HostRuntime {
                 sharing: ui.sharing,
                 code: ui.code.clone(),
                 service: self.service.clone(),
+                web_viewer: ui.web_viewer,
                 participants: ui.participants.clone(),
                 status: view.status(),
                 viewer_limit: ui.viewer_limit,

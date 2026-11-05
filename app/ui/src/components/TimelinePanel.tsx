@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, X } from 'lucide-react';
 import type { TimelineModel, ToolItem, Turn } from '../model/timeline';
-import { toolSummary } from '../model/timeline';
+import { SHOWN_IN_PART, toolSummary } from '../model/timeline';
 import { liveLine, summarize, type Step, type SummaryEntry } from '../model/steps';
 import type { Steps } from '../api/types';
 import { DiffView } from './DiffView';
@@ -267,6 +267,7 @@ function ToolView({ item, onJump }: { item: ToolItem; onJump: (seq: number) => v
       </summary>
       <div className="tool-body">
         {item.error && <div className="error-text selectable">{item.error}</div>}
+        {item.truncated && <p className="hint">{SHOWN_IN_PART}</p>}
         {item.changes.length > 0
           ? item.changes.map((change, i) => <DiffView key={i} change={change} />)
           : (interactionBody(item) ?? <pre className="tool-input selectable">{JSON.stringify(item.input, null, 2)}</pre>)}

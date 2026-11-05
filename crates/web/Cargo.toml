@@ -1,0 +1,21 @@
+[package]
+name = "specdeck-web"
+description = "SpecDeck's viewer logic for the web viewer, as WebAssembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+specdeck-protocol.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6.5"
+# Exact: the wasm-bindgen CLI in mise.toml must be the same version.
+wasm-bindgen = "=0.2.130"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.80"

@@ -7,6 +7,8 @@ pub mod invite;
 pub mod service;
 pub mod signal_auth;
 pub mod signalling;
+pub mod terminal_stream;
 pub mod timeline;
+pub mod viewer_state;
 
 pub use agent::{AgentId, AgentStatus};

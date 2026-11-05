@@ -1,4 +1,4 @@
-import type { FileChange } from '../model/timeline';
+import { SHOWN_IN_PART, type FileChange } from '../model/timeline';
 
 const LABELS = {
   created: { verb: 'Created', kind: 'new file' },
@@ -48,6 +48,7 @@ export function DiffView({ change, showPath = true }: { change: FileChange; show
           </div>
         );
       })}
+      {change.truncated && <div className="hunk">{SHOWN_IN_PART}</div>}
     </div>
   );
 }

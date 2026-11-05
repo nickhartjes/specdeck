@@ -1,8 +1,9 @@
-//! Terminal records as the window receives them over a binary channel: a sequence of
-//! `1, len (u32 BE), bytes` for output and `2, cols (u16 BE), rows (u16 BE)` for a resize.
-//! Binary keeps a long replay cheap; the UI decodes it in `src/terminal/stream.ts`.
+//! Terminal records as a window receives them, in the app over a binary channel and in the web
+//! viewer from WebAssembly: a sequence of `1, len (u32 BE), bytes` for output and
+//! `2, cols (u16 BE), rows (u16 BE)` for a resize. Binary keeps a long replay cheap; the UI
+//! decodes it in `app/ui/src/terminal/stream.ts`.
 
-use specdeck_core::output_log::Record;
+use crate::frames::Record;
 
 pub fn encode_records(records: &[Record]) -> Vec<u8> {
     let size = records

@@ -85,9 +85,25 @@ impl InviteCode {
         Self::parse_join_link(link).map(|(code, _)| code)
     }
 
-    /// Reads the code and the sharing service from a join link. A link without a service, or
-    /// with one that cannot be read, still gives its code.
+    /// The link that opens the web viewer of `service` with this code: `wss://host/prefix/signal`
+    /// gives `https://host/prefix/join#CODE`, and `ws://` gives `http://`. The code is in the
+    /// fragment, which browsers never send to the server (`web-viewer` design decision 6).
+    pub fn web_link(&self, service: &str) -> String {
+        let (scheme, rest) = match service.split_once("://") {
+            Some(("ws", rest)) => ("http", rest),
+            Some((_, rest)) => ("https", rest),
+            None => ("https", service),
+        };
+        let base = rest.rsplit_once('/').map_or(rest, |(base, _)| base);
+        format!("{scheme}://{base}/join#{self}")
+    }
+
+    /// Reads the code and the sharing service from a join link, `specdeck://` or web. A link
+    /// without a service, or with one that cannot be read, still gives its code.
     pub fn parse_join_link(link: &str) -> Result<(Self, Option<String>), InvalidCode> {
+        if link.starts_with("https://") || link.starts_with("http://") {
+            return Self::parse_web_link(link);
+        }
         let rest = link.strip_prefix("specdeck://join/").ok_or(InvalidCode)?;
         let (code, query) = rest.split_once('?').unwrap_or((rest, ""));
         let code = Self::parse(code.trim_end_matches('/'))?;
@@ -96,6 +112,24 @@ impl InviteCode {
             .find_map(|pair| pair.strip_prefix("server="))
             .and_then(percent_decode)
             .and_then(|service| crate::service::normalize(&service).ok());
+        Ok((code, service))
+    }
+
+    /// `https://host/prefix/join#CODE`, from [`Self::web_link`]; the service is
+    /// `wss://host/prefix/signal`. Only the fragment carries the code.
+    fn parse_web_link(link: &str) -> Result<(Self, Option<String>), InvalidCode> {
+        let (scheme, rest) = match link.split_once("://") {
+            Some(("https", rest)) => ("wss", rest),
+            Some(("http", rest)) => ("ws", rest),
+            _ => return Err(InvalidCode),
+        };
+        let (address, code) = rest.split_once('#').ok_or(InvalidCode)?;
+        let base = address.trim_end_matches('/').strip_suffix("/join").ok_or(InvalidCode)?;
+        if base.is_empty() || base.contains(['?', '#']) {
+            return Err(InvalidCode);
+        }
+        let code = Self::parse(code)?;
+        let service = crate::service::normalize(&format!("{scheme}://{base}/signal")).ok();
         Ok((code, service))
     }
 }
@@ -248,6 +282,46 @@ mod tests {
             InviteCode::parse_join_link("specdeck://join/7K2M-9QXH-4TP?server=example.com"),
             Err(InvalidCode)
         );
+    }
+
+    #[test]
+    fn web_links_round_trip() {
+        let code = InviteCode::parse("7K2M-9QXH-4TPA").unwrap();
+        for (service, link) in [
+            (
+                "wss://specdeck.example.com/signal",
+                "https://specdeck.example.com/join#7K2M-9QXH-4TPA",
+            ),
+            (
+                "wss://example.com/specdeck/signal",
+                "https://example.com/specdeck/join#7K2M-9QXH-4TPA",
+            ),
+            ("ws://127.0.0.1:18081/signal", "http://127.0.0.1:18081/join#7K2M-9QXH-4TPA"),
+        ] {
+            assert_eq!(code.web_link(service), link);
+            assert_eq!(InviteCode::parse_join_link(link), Ok((code.clone(), Some(service.into()))));
+            assert_eq!(InviteCode::from_join_link(link), Ok(code.clone()));
+        }
+        // Typed differently, or with a slash after `join`.
+        assert_eq!(
+            InviteCode::parse_join_link("https://specdeck.example.com/join/#7k2m9qxh4tpa"),
+            Ok((code, Some("wss://specdeck.example.com/signal".into())))
+        );
+    }
+
+    #[test]
+    fn web_links_must_carry_the_code_in_the_fragment_after_join() {
+        for link in [
+            "https://example.com/7K2M-9QXH-4TPA",
+            "https://example.com/join/7K2M-9QXH-4TPA",
+            "https://example.com/join?code=7K2M-9QXH-4TPA",
+            "https://example.com/other#7K2M-9QXH-4TPA",
+            "https://example.com/join#7K2M-9QXH-4TP",
+            "https:///join#7K2M-9QXH-4TPA",
+            "ftp://example.com/join#7K2M-9QXH-4TPA",
+        ] {
+            assert_eq!(InviteCode::parse_join_link(link), Err(InvalidCode), "{link}");
+        }
     }
 
     #[test]
