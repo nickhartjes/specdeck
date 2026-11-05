@@ -95,7 +95,7 @@ The app SHALL follow the OS light or dark appearance and switch live when it cha
 
 #### Scenario: Ordinary text keeps the platform font
 - **WHEN** the terminal shows letters, digits and box-drawing characters
-- **THEN** they are drawn in the platform's own monospace font, as before this change
+- **THEN** they are drawn in the platform's own monospace font
 
 ### Requirement: Window state
 The app SHALL remember the main window's size, position and pane sizes and restore them on the next start, unless that position is no longer on any screen.
