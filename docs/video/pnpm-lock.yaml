@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       hyperframes:
-        specifier: 0.8.214
-        version: 0.8.214
+        specifier: 0.9.13
+        version: 0.9.13
       playwright:
         specifier: ^1.64.0
         version: 1.64.1
@@ -476,8 +476,8 @@ packages:
     resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
     engines: {node: '>=16.9.0'}
 
-  hyperframes@0.8.214:
-    resolution: {integrity: sha512-ZPxgxGB5nYzqq67We1XtSdj6QbXIkubp/QxgVQXl3BvfmZnLmYVLyL2gDPixydV51OpZCG8pBTd5yELzEaahIQ==}
+  hyperframes@0.9.13:
+    resolution: {integrity: sha512-neTJ9pvGt6CWHV+A1WW+VcMAUr3ADIfINe5rLSkMYFmQGiRcsC1ZRnigNSpKUwIBVenl2kQC+lw2lH/boKeteA==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -522,7 +522,7 @@ packages:
     engines: {node: '>=18'}
 
   pako@0.2.9:
-    resolution: {integrity: sha1-8/dSL073gjSNqBYbrZ7P1Rv4OnU=}
+    resolution: {integrity: sha512-NUcwaKxUxWrZLpDG+z/xZaCgQITkA/Dv4V/T6bw7VON6l1Xz/VnrBqrYjZQ12TamKHzITTfOEIYUj48y2KXImA==}
 
   pend@1.2.0:
     resolution: {integrity: sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==}
@@ -593,6 +593,10 @@ packages:
 
   typed-query-selector@2.12.3:
     resolution: {integrity: sha512-/dtuMZyutHLlrxWhhC1uib00ELUr2dZ8C9B8YzZYsJmeE3V56OxRblrSM2UaF142pcMtak7ehZ6+poWGeehNIg==}
+
+  undici@7.25.0:
+    resolution: {integrity: sha512-xXnp4kTyor2Zq+J1FfPI6Eq3ew5h6Vl0F/8d9XU5zZQf1tX9s2Su1/3PiMmUANFULpmksxkClamIZcaUqryHsQ==}
+    engines: {node: '>=20.18.1'}
 
   unicode-properties@1.4.1:
     resolution: {integrity: sha512-CLjCCLQ6UuMxWnbIylkisbRj31qxHPAurvena/0iwSVbQ2G1VY5/HjV0IRabOEbDHlzZlRdCrD4NhB0JtU40Pg==}
@@ -963,7 +967,7 @@ snapshots:
 
   hono@4.13.16: {}
 
-  hyperframes@0.8.214:
+  hyperframes@0.9.13:
     dependencies:
       '@hono/node-server': 2.1.6(hono@4.13.16)
       '@puppeteer/browsers': 3.2.6(yauzl@3.4.0)
@@ -981,6 +985,7 @@ snapshots:
       open: 10.2.0
       postcss: 8.5.32
       puppeteer-core: 25.16.0(yauzl@3.4.0)
+      undici: 7.25.0
       yauzl: 3.4.0
     optionalDependencies:
       sharp: 0.35.5
@@ -1115,6 +1120,8 @@ snapshots:
     optional: true
 
   typed-query-selector@2.12.3: {}
+
+  undici@7.25.0: {}
 
   unicode-properties@1.4.1:
     dependencies:
