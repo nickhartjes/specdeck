@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use serde::Serialize;
 use specdeck_protocol::AgentStatus;
 use specdeck_protocol::control::{
     self, HostMessage, PROTOCOL_VERSION, Participant, RefusalReason, Role, ViewerMessage,
@@ -19,9 +20,11 @@ use specdeck_protocol::invite::{InviteCode, InviteKeys};
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
 use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage, SignalPayload};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::watch;
 
+use crate::diag::{self, LeaveReason};
 use crate::ice::turn_url_with_credentials;
-use crate::peer::{Channel, Peer, PeerConfig, PeerEvent};
+use crate::peer::{Channel, LinkState, Peer, PeerConfig, PeerEvent};
 use crate::session::SessionView;
 use crate::signalling_client::{self, SignallingSender};
 
@@ -30,6 +33,9 @@ pub const MAX_VIEWERS: u8 = 20;
 
 /// A viewer's stream channel may hold this much before its sender pauses.
 const HIGH_WATER: usize = 1024 * 1024;
+
+/// A new viewer's connection starting this close to the TURN credentials' expiry is recorded.
+const CREDENTIALS_MARGIN: Duration = Duration::from_secs(10 * 60);
 
 /// Records read per step; a step behind by more than one record goes as one compressed batch.
 /// Well under `MAX_FRAME_BYTES`, so even incompressible output fits in one frame.
@@ -58,6 +64,56 @@ pub enum SharingEvent {
     Participants(Vec<Participant>),
 }
 
+/// What the host's side of sharing is doing, for the Connection status panel. Times are Unix
+/// milliseconds.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharingStatus {
+    pub service: ServiceState,
+    /// The next attempt to reach the service, while it is unavailable.
+    pub retry_at: Option<u64>,
+    /// When the TURN credentials for new connections stop working.
+    pub turn_expires_at: Option<u64>,
+    /// One per viewer connection, admitted or not yet; ordered by peer number.
+    pub viewers: Vec<ViewerLink>,
+    /// The latest viewer connection to go away, and why.
+    pub last_departure: Option<Departure>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceState {
+    #[default]
+    Connecting,
+    Connected,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewerLink {
+    pub peer: u32,
+    /// The viewer's number once admitted.
+    pub viewer: Option<u32>,
+    pub state: LinkState,
+    /// Whether the connection goes through the TURN relay, once connected.
+    pub relayed: Option<bool>,
+    pub records_sent: u64,
+    pub events_sent: u64,
+    pub bytes_sent: u64,
+    /// Bytes waiting in the stream channel.
+    pub queued: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Departure {
+    pub viewer: Option<u32>,
+    pub peer: u32,
+    pub reason: LeaveReason,
+    pub at: u64,
+}
+
 enum Command {
     NewCode,
     Remove(u32),
@@ -68,6 +124,7 @@ enum Command {
 /// Controls a shared session. Dropping it stops sharing as [`Sharing::close`] does.
 pub struct Sharing {
     commands: UnboundedSender<Command>,
+    status: watch::Receiver<SharingStatus>,
 }
 
 impl Sharing {
@@ -78,9 +135,15 @@ impl Sharing {
     ) -> (Self, UnboundedReceiver<SharingEvent>) {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (events, event_rx) = mpsc::unbounded_channel();
-        let host = Host::new(view, config, events);
-        tokio::spawn(host.run(command_rx));
-        (Self { commands }, event_rx)
+        let (status_tx, status) = watch::channel(SharingStatus::default());
+        let host = Host::new(view, config, events, status_tx);
+        diag::spawn(host.run(command_rx));
+        (Self { commands, status }, event_rx)
+    }
+
+    /// The latest status, updated as it changes.
+    pub fn status(&self) -> watch::Receiver<SharingStatus> {
+        self.status.clone()
     }
 
     /// Replaces the invite code; viewers who already joined stay.
@@ -125,6 +188,8 @@ struct Slot {
     auth: Auth,
     /// Set once the viewer is admitted.
     admitted: Option<Admitted>,
+    /// Whether the connection is relayed, once connected.
+    relayed: Option<bool>,
 }
 
 #[derive(Clone, Copy)]
@@ -143,6 +208,11 @@ struct Admitted {
     event_cursor: usize,
     last_status: Option<AgentStatus>,
     stream_open: bool,
+    records_sent: u64,
+    events_sent: u64,
+    /// Frames sent on the stream channel, and their bytes.
+    frames_sent: u64,
+    bytes_sent: u64,
 }
 
 struct Host {
@@ -156,12 +226,19 @@ struct Host {
     rejoin_room: String,
     signalling: Option<SignallingSender>,
     ice_servers: Vec<String>,
+    /// When the TURN credentials in `ice_servers` stop working.
+    credentials_expire: Option<Instant>,
     /// By the viewer's connection id on the signalling service.
     slots: HashMap<String, Slot>,
     identities: HashMap<[u8; 32], Identity>,
     removed: HashSet<[u8; 32]>,
     next_viewer_id: u32,
     peer_tx: UnboundedSender<(String, PeerEvent)>,
+    status: watch::Sender<SharingStatus>,
+    /// Set when the service could not be reached or closed, until it is reached again.
+    service_down: bool,
+    last_departure: Option<Departure>,
+    traffic: diag::Traffic,
 }
 
 impl Host {
@@ -169,6 +246,7 @@ impl Host {
         view: SessionView,
         config: SharingConfig,
         events: UnboundedSender<SharingEvent>,
+        status: watch::Sender<SharingStatus>,
     ) -> Self {
         let code = InviteCode::generate();
         let keys = code.keys();
@@ -185,11 +263,16 @@ impl Host {
             rejoin_room: rejoin_room.iter().map(|b| format!("{b:02x}")).collect(),
             signalling: None,
             ice_servers,
+            credentials_expire: None,
             slots: HashMap::new(),
             identities: HashMap::new(),
             removed: HashSet::new(),
             next_viewer_id: 1,
             peer_tx: mpsc::unbounded_channel().0,
+            status,
+            service_down: false,
+            last_departure: None,
+            traffic: diag::Traffic::default(),
         }
     }
 
@@ -200,6 +283,7 @@ impl Host {
         let mut changes = self.view.subscribe();
         let mut server_rx = None;
         let (mut next_attempt, mut backoff) = (Instant::now(), Duration::ZERO);
+        let mut traffic = diag::traffic_interval();
 
         loop {
             if server_rx.is_none() && Instant::now() >= next_attempt {
@@ -218,6 +302,8 @@ impl Host {
                     None => {
                         server_rx = None;
                         self.signalling = None;
+                        self.service_down = true;
+                        diag::host_signalling_down(Duration::ZERO);
                         let _ = self.events.send(SharingEvent::Unavailable);
                     }
                 },
@@ -226,10 +312,64 @@ impl Host {
                 Ok(()) = changes.changed() => {}
                 // Waits before retrying the signalling service; only armed while it is down.
                 _ = tokio::time::sleep_until(next_attempt), if server_rx.is_none() => {}
+                _ = traffic.tick() => self.traffic.report_host(),
             }
             self.pump_all();
+            let retry_in =
+                server_rx.is_none().then(|| next_attempt.saturating_duration_since(Instant::now()));
+            self.publish_status(retry_in);
         }
         self.end();
+    }
+
+    /// `retry_in` is the wait before the next attempt to reach the service, while it is down.
+    fn publish_status(&self, retry_in: Option<Duration>) {
+        let mut viewers: Vec<ViewerLink> = self
+            .slots
+            .values()
+            .map(|slot| {
+                let admitted = slot.admitted.as_ref();
+                let queued = slot.peer.buffered_amount(Channel::Stream);
+                ViewerLink {
+                    peer: slot.peer.number(),
+                    viewer: admitted.map(|a| a.id),
+                    state: slot.peer.state(),
+                    relayed: slot.relayed,
+                    records_sent: admitted.map_or(0, |a| a.records_sent),
+                    events_sent: admitted.map_or(0, |a| a.events_sent),
+                    bytes_sent: admitted.map_or(0, |a| a.bytes_sent),
+                    queued: if queued == usize::MAX { 0 } else { queued as u64 },
+                }
+            })
+            .collect();
+        viewers.sort_by_key(|link| link.peer);
+        let service = match (&self.signalling, self.service_down) {
+            (Some(_), _) => ServiceState::Connected,
+            (None, true) => ServiceState::Unavailable,
+            (None, false) => ServiceState::Connecting,
+        };
+        let status = SharingStatus {
+            service,
+            retry_at: retry_in.filter(|_| self.service_down).map(diag::ms_from_now),
+            turn_expires_at: self
+                .credentials_expire
+                .map(|at| diag::ms_from_now(at.saturating_duration_since(Instant::now()))),
+            viewers,
+            last_departure: self.last_departure.clone(),
+        };
+        self.status.send_if_modified(|current| {
+            // The expiry is recomputed from a monotonic clock; a few milliseconds of drift is
+            // not a change.
+            let same = current.service == status.service
+                && current.viewers == status.viewers
+                && current.last_departure == status.last_departure
+                && current.retry_at.is_some() == status.retry_at.is_some()
+                && current.turn_expires_at.is_some() == status.turn_expires_at.is_some();
+            if !same {
+                *current = status;
+            }
+            !same
+        });
     }
 
     /// Connects to the signalling service and opens the room. On failure, reports the service as
@@ -241,6 +381,8 @@ impl Host {
         match signalling_client::connect(&self.config.signalling_url).await {
             Ok((sender, receiver)) => {
                 *backoff = Duration::ZERO;
+                self.service_down = false;
+                diag::host_signalling_up();
                 sender.send(ClientMessage::TurnCredentials);
                 sender.send(ClientMessage::Host { room: self.keys.room_id.clone() });
                 sender.send(ClientMessage::Host { room: self.rejoin_room.clone() });
@@ -253,6 +395,8 @@ impl Host {
                 }
                 *backoff =
                     (*backoff * 2).clamp(Duration::from_millis(500), Duration::from_secs(10));
+                self.service_down = true;
+                diag::host_signalling_down(*backoff);
                 None
             }
         }
@@ -269,7 +413,10 @@ impl Host {
             ServerMessage::RoomOpened { room } if room == self.keys.room_id => {
                 let _ = self.events.send(SharingEvent::Ready { code: self.code.clone() });
             }
-            ServerMessage::TurnCredentials { urls, username, credential, .. } => {
+            ServerMessage::TurnCredentials { urls, username, credential, ttl_seconds } => {
+                let ttl = Duration::from_secs(ttl_seconds);
+                self.credentials_expire = Some(Instant::now() + ttl);
+                diag::host_turn_credentials(ttl);
                 self.ice_servers = self.config.peer.ice_servers.clone();
                 self.ice_servers.extend(
                     urls.iter()
@@ -291,6 +438,12 @@ impl Host {
                 };
                 let (tx, mut rx) = mpsc::unbounded_channel();
                 let Ok(peer) = Peer::answer(&config, tx) else { return };
+                if let Some(expire) = self.credentials_expire {
+                    let left = expire.checked_duration_since(Instant::now());
+                    if left.is_none_or(|left| left < CREDENTIALS_MARGIN) {
+                        diag::host_turn_credentials_expiring(peer.number(), left);
+                    }
+                }
                 let forward = self.peer_tx.clone();
                 let id = connection.clone();
                 tokio::spawn(async move {
@@ -300,7 +453,7 @@ impl Host {
                         }
                     }
                 });
-                self.slots.insert(connection, Slot { peer, auth, admitted: None });
+                self.slots.insert(connection, Slot { peer, auth, admitted: None, relayed: None });
             }
             ServerMessage::Signal { connection, payload } => {
                 let Some(slot) = self.slots.get_mut(&connection) else { return };
@@ -323,7 +476,7 @@ impl Host {
                             }
                             // Not made with this session's code or a known token: drop it.
                             None => {
-                                self.slots.remove(&connection);
+                                self.drop_slot(&connection, LeaveReason::Refused);
                             }
                         }
                     }
@@ -336,7 +489,7 @@ impl Host {
                 // Only a viewer that never connected goes away with its signalling connection;
                 // an established peer connection does not need the service any more.
                 if self.slots.get(&connection).is_some_and(|slot| slot.admitted.is_none()) {
-                    self.slots.remove(&connection);
+                    self.drop_slot(&connection, LeaveReason::Left);
                 }
             }
             ServerMessage::Error { code: ErrorCode::RoomTaken } => {
@@ -370,11 +523,14 @@ impl Host {
             PeerEvent::State(datachannel::ConnectionState::Connecting) => {
                 slot.peer.flush_remote_candidates()
             }
+            PeerEvent::State(datachannel::ConnectionState::Connected) => {
+                slot.relayed = slot.peer.report_path();
+            }
             PeerEvent::State(
                 datachannel::ConnectionState::Failed
                 | datachannel::ConnectionState::Disconnected
                 | datachannel::ConnectionState::Closed,
-            ) => self.disconnect(connection),
+            ) => self.disconnect(connection, LeaveReason::Failed),
             PeerEvent::Open(Channel::Stream) => {
                 if let Some(admitted) = &mut slot.admitted {
                     admitted.stream_open = true;
@@ -383,7 +539,7 @@ impl Host {
             PeerEvent::Message(Channel::Control, bytes) => match control::decode_viewer(&bytes) {
                 Ok(message) => self.handle_viewer(connection, message),
                 // A viewer that sends anything malformed is disconnected.
-                Err(_) => self.disconnect(connection),
+                Err(_) => self.disconnect(connection, LeaveReason::Malformed),
             },
             // Viewers have nothing to say on the stream channel; anything there is ignored.
             _ => {}
@@ -407,7 +563,7 @@ impl Host {
                     self.slots.get(connection).map(|s| s.auth)
                     && (signed_with.is_none() || resume_token != signed_with)
                 {
-                    return self.disconnect(connection);
+                    return self.disconnect(connection, LeaveReason::Refused);
                 }
                 let returning = resume_token.filter(|token| self.identities.contains_key(token));
                 if resume_token.is_some_and(|token| self.removed.contains(&token)) {
@@ -444,7 +600,7 @@ impl Host {
                     .map(|(id, _)| id.clone())
                     .collect();
                 for id in stale {
-                    self.slots.remove(&id);
+                    self.drop_slot(&id, LeaveReason::Replaced);
                 }
 
                 let (cols, rows) = self.view.size();
@@ -461,6 +617,7 @@ impl Host {
                 };
                 let Some(slot) = self.slots.get_mut(connection) else { return };
                 let stream_open = slot.peer.buffered_amount(Channel::Stream) != usize::MAX;
+                diag::host_viewer_admitted(identity.id, slot.peer.number(), returning.is_some());
                 slot.admitted = Some(Admitted {
                     id: identity.id,
                     resume_token: token,
@@ -468,6 +625,10 @@ impl Host {
                     event_cursor: last_event_seq.map_or(0, |seq| seq as usize + 1),
                     last_status: None,
                     stream_open,
+                    records_sent: 0,
+                    events_sent: 0,
+                    frames_sent: 0,
+                    bytes_sent: 0,
                 });
                 let _ = slot.peer.send(Channel::Control, &control::encode(&welcome));
                 self.broadcast_participants();
@@ -479,12 +640,17 @@ impl Host {
                     admitted.record_cursor = from_output_seq;
                 }
             }
-            ViewerMessage::Leave => self.disconnect(connection),
+            ViewerMessage::Leave => self.disconnect(connection, LeaveReason::Left),
         }
     }
 
     fn refuse(&mut self, connection: &str, reason: RefusalReason) {
         if let Some(mut slot) = self.slots.remove(connection) {
+            let left = match reason {
+                RefusalReason::Removed => LeaveReason::Removed,
+                _ => LeaveReason::Refused,
+            };
+            self.record_departure(&slot, left);
             let _ = slot
                 .peer
                 .send(Channel::Control, &control::encode(&HostMessage::Refused { reason }));
@@ -496,12 +662,24 @@ impl Host {
         }
     }
 
-    fn disconnect(&mut self, connection: &str) {
-        let was_admitted =
-            self.slots.remove(connection).is_some_and(|slot| slot.admitted.is_some());
-        if was_admitted {
+    fn disconnect(&mut self, connection: &str, reason: LeaveReason) {
+        if self.drop_slot(connection, reason) {
             self.broadcast_participants();
         }
+    }
+
+    /// Drops a viewer's connection and records why; returns whether it had been admitted.
+    fn drop_slot(&mut self, connection: &str, reason: LeaveReason) -> bool {
+        let Some(slot) = self.slots.remove(connection) else { return false };
+        self.record_departure(&slot, reason);
+        slot.admitted.is_some()
+    }
+
+    fn record_departure(&mut self, slot: &Slot, reason: LeaveReason) {
+        let viewer = slot.admitted.as_ref().map(|admitted| admitted.id);
+        diag::host_viewer_left(viewer, slot.peer.number(), reason);
+        self.last_departure =
+            Some(Departure { viewer, peer: slot.peer.number(), reason, at: diag::now_ms() });
     }
 
     fn admitted_count(&self) -> usize {
@@ -593,12 +771,26 @@ impl Host {
                     .peer
                     .send(Channel::Control, &control::encode(&HostMessage::Status { status }));
             }
-            if pump(&self.view, &self.key, &mut slot.peer, admitted, latest).is_err() {
-                failed.push(connection.clone());
+            let before = (admitted.frames_sent, admitted.bytes_sent);
+            let result = pump(&self.view, &self.key, &mut slot.peer, admitted, latest);
+            self.traffic.add(admitted.frames_sent - before.0, admitted.bytes_sent - before.1);
+            let queued = slot.peer.buffered_amount(Channel::Stream);
+            if queued != usize::MAX {
+                self.traffic.queued(queued as u64);
+            }
+            if result.is_err() {
+                // A send fails too when the connection just went down and its state change is
+                // still on its way; that is not the send's fault.
+                let reason = if slot.peer.state().is_down() {
+                    LeaveReason::Failed
+                } else {
+                    LeaveReason::SendError
+                };
+                failed.push((connection.clone(), reason));
             }
         }
-        for connection in failed {
-            self.disconnect(&connection);
+        for (connection, reason) in failed {
+            self.disconnect(&connection, reason);
         }
     }
 
@@ -633,13 +825,18 @@ fn pump(
         }
         let records = log.read(admitted.record_cursor, READ_BYTES).map_err(|e| e.to_string())?;
         let Some(last) = records.last().map(Record::seq) else { break };
+        let count = records.len() as u64;
         // Live output is usually one record; catching up sends one compressed batch.
         let frame = match <[Record; 1]>::try_from(records) {
             Ok([record]) => Frame::Record(record),
             Err(records) => Frame::History(records),
         };
-        sink.send(&key.encode(&frame))?;
+        let frame = key.encode(&frame);
+        sink.send(&frame)?;
         admitted.record_cursor = last + 1;
+        admitted.records_sent += count;
+        admitted.frames_sent += 1;
+        admitted.bytes_sent += frame.len() as u64;
     }
     for event in view.timeline_from(admitted.event_cursor) {
         if sink.queued() >= HIGH_WATER {
@@ -650,6 +847,9 @@ fn pump(
         // the viewer, so it is skipped. Viewers accept gaps in event sequences.
         if frame.len() <= MAX_FRAME_BYTES {
             sink.send(&frame)?;
+            admitted.events_sent += 1;
+            admitted.frames_sent += 1;
+            admitted.bytes_sent += frame.len() as u64;
         }
         admitted.event_cursor += 1;
     }
@@ -688,6 +888,7 @@ mod tests {
     use specdeck_protocol::frames::FrameVerifier;
 
     use super::*;
+    use crate::capture::LevelFilter;
     use crate::output_log::OutputLog;
 
     /// A stream channel that queues everything until `drain` is called.
@@ -735,6 +936,10 @@ mod tests {
             event_cursor: 0,
             last_status: None,
             stream_open: true,
+            records_sent: 0,
+            events_sent: 0,
+            frames_sent: 0,
+            bytes_sent: 0,
         }
     }
 
@@ -802,5 +1007,53 @@ mod tests {
         let (seqs, batches) = delivered_seqs(&late.0, &key);
         assert_eq!(seqs, (0..1000).collect::<Vec<_>>());
         assert_eq!(batches, 1, "one batch for a late joiner's history");
+    }
+
+    /// Ten seconds of output as the host's loop sends it: a record every 50 ms, traffic summed
+    /// and reported once a second.
+    async fn ten_seconds_of_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(OutputLog::create(dir.path()).unwrap());
+        let view = SessionView::from_log(AgentId::OpenCode, log.clone());
+        let key = SessionKey::generate();
+        let (mut sink, mut state) = (FastSink::default(), admitted());
+        let mut traffic = diag::Traffic::default();
+        let mut report = diag::traffic_interval();
+        // Offset from the report ticks, so no record lands on a second boundary.
+        let start = Instant::now() + Duration::from_millis(25);
+        let mut output = tokio::time::interval_at(start, Duration::from_millis(50));
+        let end = Instant::now() + Duration::from_millis(10_010);
+        loop {
+            tokio::select! {
+                _ = output.tick() => {
+                    log.append_output(b"typed\r\n").unwrap();
+                    let before = (state.frames_sent, state.bytes_sent);
+                    pump(&view, &key, &mut sink, &mut state, log.latest()).unwrap();
+                    traffic.add(state.frames_sent - before.0, state.bytes_sent - before.1);
+                }
+                _ = report.tick() => traffic.report_host(),
+                _ = tokio::time::sleep_until(end) => break,
+            }
+        }
+        assert_eq!(state.records_sent, 200);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn verbose_traffic_is_summed_per_second() {
+        let (capture, _guard) = crate::capture::Capture::start_at(LevelFilter::DEBUG);
+        ten_seconds_of_output().await;
+        let events = capture.events();
+        assert_eq!(events.len(), 10, "only the traffic sums: {events:?}");
+        assert!(events.iter().all(|e| e.name == "host.traffic"));
+        let sum: u64 =
+            events.iter().map(|e| e.field("messages").unwrap().parse::<u64>().unwrap()).sum();
+        assert_eq!(sum, 200, "every record counted once");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn no_traffic_is_recorded_without_verbose() {
+        let (capture, _guard) = crate::capture::Capture::start_at(LevelFilter::INFO);
+        ten_seconds_of_output().await;
+        assert!(capture.events().is_empty(), "{:?}", capture.events());
     }
 }

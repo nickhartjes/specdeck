@@ -15,6 +15,7 @@ const MAC: [string, string][] = [
   ['Settings', '⌘,'],
   ['Close the window (a hosted session keeps running)', '⌘W'],
   ['Quit', '⌘Q'],
+  ['Connection status', '⇧⌘D'],
   ['Keyboard shortcuts', '⌘/'],
 ];
 
@@ -30,6 +31,7 @@ const OTHERS: [string, string][] = [
   ['Zoom in, zoom out, actual size', 'Ctrl++ Ctrl+− Ctrl+0'],
   ['Move between toolbar, terminal and side panel', 'F6 / Shift+F6'],
   ['Settings', 'Ctrl+,'],
+  ['Connection status', 'Ctrl+Shift+D'],
   ['Keyboard shortcuts', 'F1'],
 ];
 

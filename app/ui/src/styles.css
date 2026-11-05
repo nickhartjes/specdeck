@@ -413,6 +413,23 @@ button { font: inherit; color: inherit; }
 .dialog h2 { margin: 0; font-size: 15px; }
 .dialog p { margin: 0; color: var(--text-muted); }
 .dialog.shortcuts { width: min(520px, 100%); }
+/* A column in which only the details shrink and scroll, whichever parts are shown. */
+.dialog.connection-status { width: min(640px, 100%); max-height: min(88vh, 860px); display: flex; flex-direction: column; }
+.dialog.connection-status > * { flex-shrink: 0; }
+.dialog.connection-status > .status-details { flex: 1 1 auto; }
+.connection-status .verdict { color: var(--text); font-size: 14px; padding: 8px 10px; border-radius: 8px; background: var(--surface-sunken); }
+.connection-status .verdict.ok { background: var(--ok-soft); }
+.connection-status .verdict.problem { background: var(--danger-soft); }
+.connection-status .status-details { overflow: auto; min-height: 0; display: grid; gap: 6px; align-content: start; padding-right: 4px; }
+.connection-status .status-details:focus-visible { outline: 2px solid var(--accent, #3d5a99); outline-offset: 2px; }
+.connection-status h3 { margin: 8px 0 0; font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
+.connection-status dl { margin: 0; display: grid; gap: 0; }
+.connection-status dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.connection-status dd { margin: 0; text-align: right; color: var(--text); }
+.connection-status .events { margin: 0; padding: 0; list-style: none; font-family: var(--mono); font-size: 11.5px; display: grid; gap: 2px; }
+.connection-status .events li { color: var(--text-muted); overflow-wrap: anywhere; }
+.connection-status .events li.warn { color: var(--danger); }
+.connection-status .events time { color: var(--text-faint); }
 .shortcuts dl { margin: 0; display: grid; gap: 2px; }
 .shortcuts dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
 .shortcuts dt { color: var(--text); }

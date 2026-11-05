@@ -1,7 +1,7 @@
 //! What the app remembers between runs: the user's name, recent folders, last used agent,
 //! whether to show notifications, how the user follows sessions, their sharing service, how
-//! far the main window is zoomed, whether to check for updates and whether the terminal works
-//! with screen readers.
+//! far the main window is zoomed, whether to check for updates, whether the terminal works
+//! with screen readers and whether the diagnostic log is verbose.
 //! Stored as JSON in the app's config directory.
 
 use std::path::{Path, PathBuf};
@@ -35,6 +35,8 @@ pub struct Settings {
     /// Lets screen readers read the terminal; off by default, because xterm's screen reader
     /// mode can send typed text to the terminal twice.
     pub screen_reader: bool,
+    /// The diagnostic log also records traffic, summed per second.
+    pub verbose_logging: bool,
 }
 
 /// How a participant follows a session (`viewer-views` design decision 4).
@@ -66,6 +68,7 @@ impl Default for Settings {
             zoom: ZOOM_DEFAULT,
             check_updates: true,
             screen_reader: false,
+            verbose_logging: false,
         }
     }
 }
@@ -189,6 +192,19 @@ mod tests {
         settings.screen_reader = true;
         settings.save(&path).unwrap();
         assert!(Settings::load(&path).screen_reader);
+    }
+
+    #[test]
+    fn verbose_logging_is_off_until_turned_on_and_then_remembered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"username":"nick"}"#).unwrap();
+        assert!(!Settings::load(&path).verbose_logging);
+
+        let mut settings = Settings::load(&path);
+        settings.verbose_logging = true;
+        settings.save(&path).unwrap();
+        assert!(Settings::load(&path).verbose_logging);
     }
 
     #[test]

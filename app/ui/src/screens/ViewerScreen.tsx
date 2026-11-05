@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Eye, LogOut, WifiOff } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, EndReason, Participant, TimelineEvent, View, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, EndReason, Participant, TerminalSnapshot, TimelineEvent, View, ViewEvent } from '../api/types';
 import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
 import { DEVELOPER_VIEW, FirstJoinDialog, ViewMenu } from '../components/ViewMenu';
@@ -10,6 +10,7 @@ import { nextRequest } from '../model/request';
 import { formatCode } from '../model/code';
 import { AGENT_NAMES } from './HostScreen';
 import { Workspace, type WorkspaceHandle } from './Workspace';
+import { setTimelineEvents } from '../model/heartbeat';
 
 /** What to tell the viewer when their session ends, and whether they can still read it. */
 export const END_MESSAGES: Record<EndReason, { title: string; text: string; keepReading?: boolean; retry?: boolean }> = {
@@ -108,10 +109,12 @@ interface Props {
 /** Watching someone else's session, read-only. */
 export function ViewerScreen({ code, server, view, onView, screenReader = false, onLeave , update }: Props) {
   const bridge = useBridge();
+  const onTerminalState = useCallback((snapshot: TerminalSnapshot) => void bridge.reportTerminal(snapshot).catch(() => {}), [bridge]);
   const [asking, setAsking] = useState(view === null);
   const shown = view ?? DEVELOPER_VIEW;
   const workspace = useRef<WorkspaceHandle>(null);
   const [state, dispatch] = useReducer(viewerReducer, initial);
+  useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
 
   const joined = useRef(false);
   useEffect(() => {
@@ -201,6 +204,7 @@ export function ViewerScreen({ code, server, view, onView, screenReader = false,
         <Workspace
           ref={workspace}
           mode="viewer"
+          onTerminalState={onTerminalState}
           agentName={agentName}
           terminal={terminal}
           screenReader={screenReader}

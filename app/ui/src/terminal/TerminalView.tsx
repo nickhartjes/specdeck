@@ -4,6 +4,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
+import type { TerminalSnapshot } from '../api/types';
+import { TerminalReporter } from '../model/terminalState';
 import type { TerminalStep } from './stream';
 import { clampViewerFont, viewerFontSize } from './fontScale';
 import { isNewlineKey } from './keys';
@@ -52,6 +54,8 @@ interface Props {
   onSearchResults?: (result: SearchResult) => void;
   /** The terminal's colours, for answering colour queries while no window is attached. */
   onThemeColors?: (foreground: string, background: string) => void;
+  /** The terminal's state for diagnostics, when it changes; never its content. */
+  onDiagnostics?: (snapshot: TerminalSnapshot) => void;
 }
 
 /** ANSI palettes tuned for the app's light and dark surfaces. */
@@ -91,6 +95,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   // lineAfter[seq]: the absolute line the cursor was on after record `seq` was written.
   const lineAfter = useRef<number[]>([]);
   const following = useRef(true);
+  const recordsWritten = useRef(0);
+  const reportState = useRef<() => void>(() => {});
   const callbacks = useRef(props);
   callbacks.current = props;
 
@@ -154,6 +160,20 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     });
     search.current = searchAddon;
 
+    const reporter = new TerminalReporter((snapshot) => callbacks.current.onDiagnostics?.(snapshot));
+    reportState.current = () => {
+      const buffer = term.buffer.active;
+      reporter.update({
+        screen: buffer.type,
+        mouseTracking: term.modes.mouseTrackingMode,
+        scrollbackLines: term.buffer.normal.baseY,
+        scrollbackLimit: term.options.scrollback ?? 0,
+        linesFromBottom: buffer.baseY - buffer.viewportY,
+        following: following.current,
+        fontSize: term.options.fontSize ?? FONT_SIZE,
+        recordsWritten: recordsWritten.current,
+      });
+    };
     const report = () => {
       const buffer = term.buffer.active;
       const nowFollowing = buffer.viewportY >= buffer.baseY;
@@ -161,10 +181,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         following.current = nowFollowing;
         callbacks.current.onFollowChange?.(nowFollowing);
       }
+      reportState.current();
     };
     const disposables = [
       term.onScroll(report),
       term.onWriteParsed(report),
+      term.buffer.onBufferChange(report),
       searchAddon.onDidChangeResults(({ resultIndex, resultCount }) =>
         callbacks.current.onSearchResults?.({ index: resultIndex, count: resultCount }),
       ),
@@ -220,7 +242,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         } else {
           return;
         }
-        if (size !== current) term.options.fontSize = size;
+        if (size !== current) {
+          term.options.fontSize = size;
+          reportState.current();
+        }
       };
       // Scrolls the pane just enough to show the cursor's line, while the viewer follows the
       // live output; the conversation sits above the cursor in agents such as Claude Code.
@@ -256,7 +281,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     applyTheme();
     media?.addEventListener('change', applyTheme);
 
+    reportState.current();
+
     return () => {
+      reporter.dispose();
+      reportState.current = () => {};
       media?.removeEventListener('change', applyTheme);
       resizeObserver?.disconnect();
       disposables.forEach((d) => d.dispose());
@@ -284,6 +313,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
           lineAfter.current.push(lineAfter.current.at(-1) ?? 0);
         } else {
           const wasFollowing = following.current;
+          recordsWritten.current += 1;
           term.write(step.output, () => {
             const buffer = term.buffer.active;
             lineAfter.current.push(buffer.baseY + buffer.cursorY);

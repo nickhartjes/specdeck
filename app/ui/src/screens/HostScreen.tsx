@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Copy, Link2, Power, RefreshCw } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, HostEvent, Participant, SharingState, TimelineEvent, View } from '../api/types';
+import type { AgentId, AgentStatus, HostEvent, Participant, SharingState, TerminalSnapshot, TimelineEvent, View } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
@@ -12,6 +12,7 @@ import { nextRequest, requestIn } from '../model/request';
 import { Toast, useToast } from '../components/Toast';
 import { formatCode, joinLink } from '../model/code';
 import { Workspace, type WorkspaceHandle } from './Workspace';
+import { setTimelineEvents } from '../model/heartbeat';
 
 export const AGENT_NAMES: Record<AgentId, string> = {
   'claude-code': 'Claude Code',
@@ -122,6 +123,8 @@ export function HostScreen({ view, onView, screenReader = false, onEnded , updat
   const onInput = useCallback((data: string) => void bridge.hostInput(data).catch(() => {}), [bridge]);
   const onResize = useCallback((cols: number, rows: number) => void bridge.hostResize(cols, rows).catch(() => {}), [bridge]);
   const onThemeColors = useCallback((fg: string, bg: string) => void bridge.hostSetColors(fg, bg).catch(() => {}), [bridge]);
+  useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
+  const onTerminalState = useCallback((snapshot: TerminalSnapshot) => void bridge.reportTerminal(snapshot).catch(() => {}), [bridge]);
 
   const agentName = state.agent ? AGENT_NAMES[state.agent] : 'Agent';
   const terminal = state.agent === 'terminal';
@@ -212,6 +215,7 @@ export function HostScreen({ view, onView, screenReader = false, onEnded , updat
         onInput={onInput}
         onResize={onResize}
         onThemeColors={onThemeColors}
+        onTerminalState={onTerminalState}
         onRemove={(p) => bridge.hostRemoveViewer(p.id)}
         viewerLimit={state.viewerLimit}
         onViewerLimit={(limit) => {

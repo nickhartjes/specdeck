@@ -2,10 +2,11 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import { exportFileName } from '../model/diagnostics';
 import type { Bridge } from './bridge';
 import type { MenuCommand } from '../menu/menu';
-import type { AgentVersion, HostEvent, JoinLink, Profile, ServiceCheck, UpdateState, ViewEvent } from './types';
+import type { AgentVersion, DiagnosticsStatus, HostEvent, JoinLink, Profile, ServiceCheck, UpdateState, ViewEvent } from './types';
 
 function channel<T>(handler: (message: T) => void): Channel<T> {
   const ch = new Channel<T>();
@@ -35,6 +36,7 @@ export const tauriBridge: Bridge = {
   setNotifications: (enabled) => invoke<Profile>('set_notifications', { enabled }),
   setCheckUpdates: (enabled) => invoke<Profile>('set_check_updates', { enabled }),
   setScreenReader: (enabled) => invoke<Profile>('set_screen_reader', { enabled }),
+  setVerboseLogging: (enabled) => invoke<Profile>('set_verbose_logging', { enabled }),
   updateStatus: () => invoke<UpdateState>('update_status'),
   onUpdate: (handler) => {
     const stop = listen<UpdateState>('update-changed', (event) => handler(event.payload));
@@ -66,6 +68,19 @@ export const tauriBridge: Bridge = {
   readJoinLink: (link) => invoke<JoinLink>('read_join_link', { link }),
   copyText: (text) => navigator.clipboard.writeText(text),
   startScreenShown: () => invoke('start_screen_shown'),
+  reportTerminal: (snapshot) => invoke('diagnostics_report_terminal', { snapshot }),
+  diagnosticsStatus: () => invoke<DiagnosticsStatus>('diagnostics_status'),
+  reconnectViewer: () => invoke('reconnect_viewer'),
+  heartbeat: (beat) => invoke('diagnostics_heartbeat', { beat }),
+  exportDiagnostics: async () => {
+    const path = await save({
+      defaultPath: exportFileName(new Date()),
+      filters: [{ name: 'Diagnostics', extensions: ['jsonl'] }],
+    });
+    if (!path) return false;
+    await invoke('diagnostics_export', { path });
+    return true;
+  },
   onMenu: (handler) => {
     const stop = listen<MenuCommand>('menu', (event) => handler(event.payload));
     return () => void stop.then((unlisten) => unlisten());

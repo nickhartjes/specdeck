@@ -2,7 +2,7 @@
 // open /?demo=start, /?demo=host or /?demo=viewer) and for component tests. Never used by the app.
 
 import type { Bridge, TerminalSink } from './bridge';
-import type { HostEvent, Participant, Profile, TimelineEvent, ViewEvent } from './types';
+import type { DiagnosticsStatus, HostEvent, Participant, Profile, TimelineEvent, ViewEvent } from './types';
 import { formatCode } from '../model/code';
 
 const t0 = Date.UTC(2026, 9, 31, 13, 2);
@@ -50,6 +50,7 @@ export const demoProfile: Profile = {
   updatesItself: true,
   checkUpdates: true,
   screenReader: false,
+  verboseLogging: false,
 };
 
 export const demoParticipants: Participant[] = [
@@ -219,6 +220,79 @@ function resizeRecord(cols: number, rows: number): ArrayBuffer {
   return record.buffer;
 }
 
+/** The Connection status panel's view of the demo session. */
+export function demoDiagnostics(screen: string): DiagnosticsStatus {
+  const now = Date.now();
+  const at = (secondsAgo: number) => new Date(now - secondsAgo * 1000).toISOString();
+  const terminal: DiagnosticsStatus['terminal'] = {
+    screen: 'alternate',
+    mouseTracking: 'any',
+    scrollbackLines: 0,
+    scrollbackLimit: 100_000,
+    linesFromBottom: 0,
+    following: true,
+    fontSize: 13,
+    recordsWritten: 1_204,
+  };
+  if (screen === 'viewer') {
+    return {
+      session: {
+        role: 'viewer',
+        viewer: {
+          phase: 'connected',
+          attempt: 2,
+          retryAt: null,
+          lastAttempt: { attempt: 1, reason: 'peer_failed', at: now - 95_000, connectedMs: 3_600_000 },
+          signallingConnected: true,
+          peer: 2,
+          state: 'connected',
+          relayed: true,
+          recordsApplied: 1_204,
+          eventsApplied: 87,
+          bytesReceived: 2_400_000,
+        },
+      },
+      window: { timelineEvents: 87, elements: 4_210 },
+      terminal,
+      events: [
+        { ts: at(90), level: 'INFO', event: 'peer.path', peer: 2, local: 'relay', remote: 'srflx', relayed: true },
+        { ts: at(92), level: 'INFO', event: 'viewer.attempt_started', attempt: 2 },
+        { ts: at(95), level: 'WARN', event: 'viewer.attempt_ended', attempt: 1, reason: 'peer_failed', connected_ms: 3_600_000 },
+        { ts: at(95), level: 'WARN', event: 'peer.state', peer: 1, state: 'disconnected' },
+      ],
+      logFileError: null,
+      verbose: false,
+      now,
+    };
+  }
+  return {
+    session: {
+      role: 'host',
+      sharing: {
+        service: 'connected',
+        retryAt: null,
+        turnExpiresAt: now + 11 * 3_600_000,
+        viewers: [
+          { peer: 1, viewer: 1, state: 'connected', relayed: false, recordsSent: 1_204, eventsSent: 87, bytesSent: 2_400_000, queued: 0 },
+          { peer: 3, viewer: 2, state: 'connected', relayed: true, recordsSent: 1_190, eventsSent: 87, bytesSent: 2_380_000, queued: 4_096 },
+        ],
+        lastDeparture: null,
+      },
+    },
+    window: { timelineEvents: 87, elements: 4_480 },
+    terminal,
+    events: [
+      { ts: at(30), level: 'INFO', event: 'host.viewer_admitted', viewer: 2, peer: 3, returning: false },
+      { ts: at(31), level: 'INFO', event: 'peer.path', peer: 3, local: 'host', remote: 'relay', relayed: true },
+      { ts: at(600), level: 'INFO', event: 'host.turn_credentials', expires_in_s: 43_200 },
+      { ts: at(600), level: 'INFO', event: 'host.signalling_up' },
+    ],
+    logFileError: null,
+    verbose: false,
+    now,
+  };
+}
+
 export function demoBridge(screen: string): Bridge {
   const profile = { ...demoProfile, hosting: screen === 'host' };
   // Like the engine, the demo sends each resize of the host's terminal back as a record.
@@ -234,6 +308,7 @@ export function demoBridge(screen: string): Bridge {
     setNotifications: async (notifications) => ({ ...profile, notifications }),
     setCheckUpdates: async (checkUpdates) => ({ ...profile, checkUpdates }),
     setScreenReader: async (screenReader) => ({ ...profile, screenReader }),
+    setVerboseLogging: async (verboseLogging) => ({ ...profile, verboseLogging }),
     // The start screen shows an update that is ready to install.
     updateStatus: async () => (screen === 'start' ? { state: 'ready', version: '1.2.1' } : { state: 'idle' }),
     onUpdate: () => () => {},
@@ -310,6 +385,11 @@ export function demoBridge(screen: string): Bridge {
     readJoinLink: async (link) => ({ code: formatCode(link) }),
     copyText: async () => {},
     startScreenShown: async () => {},
+    reportTerminal: async () => {},
+    diagnosticsStatus: async () => demoDiagnostics(screen),
+    reconnectViewer: async () => {},
+    heartbeat: async () => {},
+    exportDiagnostics: async () => true,
     onMenu: () => () => {},
   };
 }

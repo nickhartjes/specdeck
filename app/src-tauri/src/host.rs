@@ -13,7 +13,7 @@ use specdeck_core::environment::Environment;
 use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession, SessionEvent};
-use specdeck_core::sharing::{MAX_VIEWERS, Sharing, SharingConfig, SharingEvent};
+use specdeck_core::sharing::{MAX_VIEWERS, Sharing, SharingConfig, SharingEvent, SharingStatus};
 use specdeck_protocol::control::{Participant, Role};
 use specdeck_protocol::timeline::{Entry, TimelineEvent};
 use specdeck_protocol::{AgentId, AgentStatus};
@@ -383,6 +383,11 @@ impl HostRuntime {
                 }
             }
         });
+    }
+
+    /// What sharing is doing, for the Connection status panel.
+    pub fn sharing_status(&self) -> SharingStatus {
+        self.sharing.status().borrow().clone()
     }
 
     /// The window closed: stop streaming to it, and let the session answer terminal queries.

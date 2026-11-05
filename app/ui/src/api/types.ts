@@ -89,6 +89,8 @@ export interface Profile {
   checkUpdates: boolean;
   /** Screen readers read the terminal. */
   screenReader: boolean;
+  /** The diagnostic log records traffic too. */
+  verboseLogging: boolean;
 }
 
 /** Where a new release is: being looked for, downloaded, or ready to install on restart. */
@@ -241,3 +243,71 @@ export type ViewEvent =
   | { type: 'participants'; participants: Participant[] }
   | { type: 'status'; status: AgentStatus }
   | { type: 'ended'; reason: EndReason };
+
+/** The terminal's state for diagnostics: enums and numbers only, never its content. */
+export interface TerminalSnapshot {
+  screen: 'normal' | 'alternate';
+  /** Whether the program in the terminal takes the mouse, and so the wheel. */
+  mouseTracking: 'none' | 'x10' | 'vt200' | 'drag' | 'any';
+  /** Lines scrolled off the top of the normal screen, against the most it keeps. */
+  scrollbackLines: number;
+  scrollbackLimit: number;
+  /** How far the view is scrolled up from the latest output, in lines. */
+  linesFromBottom: number;
+  following: boolean;
+  fontSize: number;
+  recordsWritten: number;
+}
+
+/** A peer connection's state. */
+export type LinkState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed';
+
+/** The host's side of sharing. Times are Unix milliseconds. */
+export interface SharingStatus {
+  service: 'connecting' | 'connected' | 'unavailable';
+  retryAt: number | null;
+  turnExpiresAt: number | null;
+  viewers: {
+    peer: number;
+    viewer: number | null;
+    state: LinkState;
+    relayed: boolean | null;
+    recordsSent: number;
+    eventsSent: number;
+    bytesSent: number;
+    queued: number;
+  }[];
+  lastDeparture: { viewer: number | null; peer: number; reason: string; at: number } | null;
+}
+
+/** A viewer's connection. Times are Unix milliseconds. */
+export interface ViewerStatus {
+  phase: 'joining' | 'connected' | 'reconnecting' | 'ended';
+  attempt: number;
+  retryAt: number | null;
+  lastAttempt: { attempt: number; reason: string; at: number; connectedMs: number } | null;
+  signallingConnected: boolean;
+  peer: number | null;
+  state: LinkState | null;
+  relayed: boolean | null;
+  recordsApplied: number;
+  eventsApplied: number;
+  bytesReceived: number;
+}
+
+/** One line of the diagnostic log. */
+export type DiagnosticEvent = { ts: string; level: string; event: string } & Record<string, string | number | boolean>;
+
+export interface DiagnosticsStatus {
+  session: { role: 'host'; sharing: SharingStatus } | { role: 'viewer'; viewer: ViewerStatus } | { role: 'none' };
+  /** How large the window's content is, as its heartbeat last said. */
+  window: { timelineEvents: number; elements: number } | null;
+  terminal: TerminalSnapshot | null;
+  /** Newest first. */
+  events: DiagnosticEvent[];
+  /** Why the log file cannot be written; null when it is. */
+  logFileError: string | null;
+  verbose: boolean;
+  /** The app's clock, Unix milliseconds, for the times above. */
+  now: number;
+}

@@ -27,6 +27,9 @@ pub mod ids {
     pub const PEOPLE: &str = "tab:people";
     pub const JUMP_TO_LIVE: &str = "jump-to-live";
     pub const SHORTCUTS: &str = "shortcuts";
+    pub const CONNECTION_STATUS: &str = "connection-status";
+    /// Handled in Rust, so it works while the window does not respond.
+    pub const EXPORT_DIAGNOSTICS: &str = "export-diagnostics";
     /// Handled in Rust: zoom the main window and remember the level.
     pub const ZOOM_IN: &str = "zoom-in";
     pub const ZOOM_OUT: &str = "zoom-out";
@@ -155,13 +158,17 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     }
     let view = view.build()?;
 
-    let mut help = SubmenuBuilder::new(app, "Help").item(&item(
-        app,
-        ids::SHORTCUTS,
-        "Keyboard Shortcuts",
-        keys("Cmd+/", Some("F1")),
-        true,
-    )?);
+    // Ctrl+Shift+letter, like the app's other commands, so no terminal key is taken.
+    let mut help = SubmenuBuilder::new(app, "Help")
+        .item(&item(app, ids::SHORTCUTS, "Keyboard Shortcuts", keys("Cmd+/", Some("F1")), true)?)
+        .item(&item(
+            app,
+            ids::CONNECTION_STATUS,
+            "Connection Status",
+            keys("Cmd+Shift+D", Some("Ctrl+Shift+D")),
+            true,
+        )?)
+        .item(&item(app, ids::EXPORT_DIAGNOSTICS, "Export Diagnostics…", None, true)?);
     if updates_in == Some("Help") {
         help = help.separator().item(&check_updates);
     }

@@ -28,6 +28,48 @@ SpecDeck 1.0 cannot open links from newer versions. Paste the link into **Join a
 
 When the host sees a banner that sharing is unavailable, SpecDeck cannot reach its sharing service. The session keeps running on the host's computer, and the invite code appears as soon as the service is back. If it does not come back, check the address in [Settings](/specdeck/guide/settings/#sharing-service).
 
+## See what the connection is doing
+
+When a connection keeps dropping or the terminal behaves oddly, open **Help › Connection Status** (**⇧⌘D** on macOS, **Ctrl+Shift+D** on Windows and Linux). It shows your own side only: as the host, your sharing and each viewer's connection as your app sees it; as a viewer, your connection to the host.
+
+The line at the top says what is going on:
+
+| It says | What it means |
+|---|---|
+| Connected directly to the host | The fastest path: your computers reach each other without a relay |
+| Connected to the host through the relay | Your network does not allow a direct path, so the connection goes through the sharing service's relay. It works, a little slower |
+| Reconnecting, attempt 3. The last attempt ended because … | The connection dropped and SpecDeck is getting it back. The reason says why the last try failed |
+| The sharing service cannot be reached. Trying again in 8 s | As the host: viewers cannot join meanwhile, but your session runs on, and viewers who are connected stay connected |
+| The log file cannot be written | SpecDeck keeps the recent events in memory only, until it quits |
+
+Below it are the details: the connection's state, how much was sent or received, and the terminal's state. The terminal part answers questions such as why the mouse wheel does not scroll: when **Mouse** says the program uses it, the wheel goes to the program, not to the scrollback.
+
+As a viewer, **Reconnect** drops the connection and connects again at once. You keep your place: nothing is replayed from the start. It is unavailable while SpecDeck is already reconnecting.
+
+### Send diagnostics with a bug report
+
+**Export Diagnostics…** saves one file, `specdeck-diagnostics-<date>-<time>.jsonl`, where you choose. You can open it in any text editor. It holds:
+
+- the SpecDeck version, your operating system, and whether you use the default sharing service or one of your own (not its address);
+- what the panel shows right now;
+- the diagnostic log of the last 7 days: when connections started and ended and why, sizes and timings, and whether they were direct or relayed.
+
+It never holds terminal output, the timeline, what the agent was asked or did, invite codes, names, file paths or network addresses. SpecDeck sends it nowhere: attach it to your bug report yourself.
+
+If the window stops responding, so the panel does not open, choose **Help › Export Diagnostics…** from the menu bar instead: it works without the window. The log then also says when the window stopped responding and for how long.
+
+### The log
+
+SpecDeck keeps this log all the time, a few lines a minute. Files older than 7 days are removed, and the oldest go first when the logs together pass 50 MB. Only your user account can read the folder:
+
+| System | Folder |
+|---|---|
+| macOS | `~/Library/Logs/nl.nickhartjes.specdeck` |
+| Windows | `%LOCALAPPDATA%\nl.nickhartjes.specdeck\logs` |
+| Linux | `~/.local/share/nl.nickhartjes.specdeck/logs` |
+
+You can delete the folder at any time. **Verbose logging** in [Settings](/specdeck/guide/settings/) also records how much each connection sends, summed per second, for problems that only show under load. Turn it off again when you are done.
+
 ## macOS: viewers on the same network cannot connect
 
 SpecDeck connects directly to teammates on the same network when it can, which needs macOS's Local Network permission. If you chose **Don't Allow** when macOS asked, turn SpecDeck on under **System Settings › Privacy & Security › Local Network**.

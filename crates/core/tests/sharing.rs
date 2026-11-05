@@ -2,15 +2,22 @@
 //! WebRTC. The agent is a fake terminal-only agent.
 #![cfg(unix)]
 
+#[path = "support/capture.rs"]
+mod capture;
+
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use specdeck_core::diag::AttemptEnd;
 use specdeck_core::environment::Environment;
+use specdeck_core::peer::LinkState;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession};
-use specdeck_core::sharing::{Sharing, SharingConfig, SharingEvent};
-use specdeck_core::viewer::{CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession};
+use specdeck_core::sharing::{ServiceState, Sharing, SharingConfig, SharingEvent};
+use specdeck_core::viewer::{
+    CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerPhase, ViewerSession,
+};
 use specdeck_protocol::AgentId;
 use specdeck_protocol::control::{PROTOCOL_VERSION, Participant, RefusalReason};
 use specdeck_protocol::frames::Record;
@@ -18,6 +25,8 @@ use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::timeline::Entry;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
+
+use capture::Capture;
 
 const WAIT: Duration = Duration::from_secs(15);
 
@@ -352,6 +361,100 @@ async fn viewer_reconnects_after_an_outage_without_losing_output() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn status_shows_each_side_of_the_connection() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.welcome.is_some()).await;
+
+    let mut host_status = hosted.sharing.status();
+    let status = tokio::time::timeout(
+        WAIT,
+        host_status
+            .wait_for(|s| s.viewers.iter().any(|v| v.viewer.is_some() && v.relayed.is_some())),
+    )
+    .await
+    .expect("no connected viewer in the host's status")
+    .unwrap()
+    .clone();
+    assert_eq!(status.service, ServiceState::Connected);
+    assert!(status.turn_expires_at.is_none(), "this service hands out no TURN credentials");
+    let link = &status.viewers[0];
+    assert_eq!(link.viewer, seen.welcome);
+    assert_eq!(link.state, LinkState::Connected);
+    assert_eq!(link.relayed, Some(false), "loopback is direct");
+
+    let status = viewer.status().borrow().clone();
+    assert_eq!(status.phase, ViewerPhase::Connected);
+    assert_eq!(status.attempt, 1);
+    assert_eq!(status.relayed, Some(false));
+
+    viewer.interrupt(Duration::from_secs(2));
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    let status = viewer.status().borrow().clone();
+    assert_eq!(status.phase, ViewerPhase::Reconnecting);
+    assert!(status.retry_at.is_some());
+    let last = status.last_attempt.expect("the interrupted attempt");
+    assert_eq!((last.attempt, last.reason), (1, AttemptEnd::Interrupted));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reconnecting_by_hand_keeps_the_place_and_ignores_a_second_request() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    hosted.session.input(b"before\r").unwrap();
+    let (viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:before")).await;
+
+    viewer.interrupt(Duration::ZERO);
+    viewer.interrupt(Duration::ZERO);
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    hosted.session.input(b"after\r").unwrap();
+    let event =
+        until(&mut events, &mut seen, |_, e| matches!(e, ViewerEvent::Welcome { .. })).await;
+    assert!(matches!(event, ViewerEvent::Welcome { reconnected: true, .. }));
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:after")).await;
+    // Only what came after its last record: nothing replayed from the start.
+    assert!(seen.records.iter().enumerate().all(|(i, seq)| *seq == i as u64), "{:?}", seen.records);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let status = viewer.status().borrow().clone();
+    assert_eq!(status.attempt, 2, "the second request was ignored");
+    assert_eq!(status.phase, ViewerPhase::Connected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_reconnect_attempt_is_recorded() {
+    let (capture, _guard) = Capture::start();
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    for _ in 0..2 {
+        until(&mut events, &mut seen, |_, e| matches!(e, ViewerEvent::Welcome { .. })).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        viewer.interrupt(Duration::from_millis(100));
+        until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    }
+    until(&mut events, &mut seen, |_, e| matches!(e, ViewerEvent::Welcome { .. })).await;
+
+    let ended = capture.named("viewer.attempt_ended");
+    let attempts: Vec<_> = ended.iter().map(|e| e.field("attempt").unwrap()).collect();
+    assert_eq!(attempts, ["1", "2"]);
+    for event in &ended {
+        assert_eq!(event.field("reason"), Some("interrupted"));
+        let connected: u64 = event.field("connected_ms").unwrap().parse().unwrap();
+        assert!(connected >= 50, "it was connected: {event:?}");
+    }
+    assert_eq!(capture.named("viewer.attempt_started").len(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn viewer_returns_after_a_new_code_was_made_during_its_outage() {
     let url = signalling().await;
     let mut hosted = host(&url, "nick").await;
@@ -396,6 +499,39 @@ async fn host_closing_the_session_ends_it_for_connected_viewers() {
     until(&mut events, &mut seen, |seen, _| seen.welcome.is_some()).await;
     hosted.sharing.close();
     assert_eq!(until(&mut events, &mut seen, |_, e| e.is_final()).await, ViewerEvent::Ended);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_viewer_leaving_is_recorded_by_its_number() {
+    let (capture, _guard) = Capture::start();
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.welcome.is_some()).await;
+    let viewer_id = seen.welcome.unwrap().to_string();
+
+    viewer.leave();
+    tokio::time::timeout(WAIT, async {
+        while let Some(event) = hosted.events.recv().await {
+            if matches!(&event, SharingEvent::Participants(people) if people.len() == 1) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the viewer did not leave");
+
+    let admitted = capture.named("host.viewer_admitted");
+    assert_eq!(admitted[0].field("viewer"), Some(viewer_id.as_str()));
+    let left = capture.named("host.viewer_left");
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(left[0].field("reason"), Some("left"));
+    assert_eq!(left[0].field("viewer"), Some(viewer_id.as_str()));
+    assert_eq!(left[0].field("peer"), admitted[0].field("peer"));
+    // By number only: the viewer's name is not in any event.
+    assert!(capture.events().iter().all(|e| !format!("{e:?}").contains("anna")));
 }
 
 #[tokio::test(flavor = "multi_thread")]
