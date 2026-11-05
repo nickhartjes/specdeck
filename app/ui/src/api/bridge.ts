@@ -2,8 +2,21 @@
 // pass a fake.
 
 import type { MenuCommand } from '../menu/menu';
+import type { Heartbeat } from '../model/heartbeat';
 import { createContext, useContext } from 'react';
-import type { AgentId, AgentVersion, HostEvent, JoinLink, Profile, ServiceCheck, UpdateState, View, ViewEvent } from './types';
+import type {
+  AgentId,
+  AgentVersion,
+  DiagnosticsStatus,
+  HostEvent,
+  JoinLink,
+  Profile,
+  ServiceCheck,
+  TerminalSnapshot,
+  UpdateState,
+  View,
+  ViewEvent,
+} from './types';
 
 /** Receives terminal data as the binary stream described in src/terminal/stream.ts. */
 export type TerminalSink = (data: ArrayBuffer) => void;
@@ -17,6 +30,7 @@ export interface Bridge {
   setNotifications(enabled: boolean): Promise<Profile>;
   setCheckUpdates(enabled: boolean): Promise<Profile>;
   setScreenReader(enabled: boolean): Promise<Profile>;
+  setVerboseLogging(enabled: boolean): Promise<Profile>;
   updateStatus(): Promise<UpdateState>;
   /** Calls `handler` whenever the update state changes; returns a function that stops listening. */
   onUpdate(handler: (state: UpdateState) => void): () => void;
@@ -48,6 +62,15 @@ export interface Bridge {
   copyText(text: string): Promise<void>;
   /** Tells the app the start screen can be used; scripts/measure-footprint times this. */
   startScreenShown(): Promise<void>;
+  /** The terminal's state, for diagnostics. */
+  reportTerminal(snapshot: TerminalSnapshot): Promise<void>;
+  diagnosticsStatus(): Promise<DiagnosticsStatus>;
+  /** Drops the viewer's connection and reconnects at once, keeping its place. */
+  reconnectViewer(): Promise<void>;
+  /** Saves the diagnostics where the user chooses; false when they cancel. */
+  exportDiagnostics(): Promise<boolean>;
+  /** The main window is alive; see model/heartbeat.ts. */
+  heartbeat(beat: Heartbeat): Promise<void>;
   /** Calls `handler` for each native menu command; returns a function that stops listening. */
   onMenu(handler: (command: MenuCommand) => void): () => void;
 }

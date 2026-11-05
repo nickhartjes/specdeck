@@ -1,9 +1,13 @@
 //! Viewing a shared session as the app sees it: the engine's viewer, with terminal records sent
 //! to the window over a binary channel and everything else as events.
 
+use std::time::Duration;
+
 use serde::Serialize;
 use specdeck_core::peer::PeerConfig;
-use specdeck_core::viewer::{CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession};
+use specdeck_core::viewer::{
+    CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession, ViewerStatus,
+};
 use specdeck_protocol::control::{PROTOCOL_VERSION, Participant};
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::timeline::TimelineEvent;
@@ -105,6 +109,19 @@ impl ViewerRuntime {
 
     pub fn leave(self) {
         self.session.leave();
+    }
+
+    /// What the connection is doing, for the Connection status panel.
+    pub fn status(&self) -> ViewerStatus {
+        self.session.status().borrow().clone()
+    }
+
+    /// Drops the connection and reconnects at once, keeping the viewer's place; refused while
+    /// not connected.
+    pub fn reconnect(&self) -> Result<(), String> {
+        crate::diagnostics::check_reconnect(false, Some(&self.status()))?;
+        self.session.interrupt(Duration::ZERO);
+        Ok(())
     }
 }
 

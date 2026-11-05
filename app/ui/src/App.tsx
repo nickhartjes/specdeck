@@ -3,10 +3,12 @@ import { errorMessage, useBridge } from './api/bridge';
 import type { JoinLink, Profile, View } from './api/types';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { JoinThroughDialog } from './components/JoinThroughDialog';
+import { ConnectionStatus } from './components/ConnectionStatus';
 import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { UpdateButton, UpdateNotice, useReadyUpdate } from './components/UpdateNotice';
 import { dispatchMenu, useMenu, type MenuCommand } from './menu/menu';
 import { formatCode } from './model/code';
+import { startHeartbeat } from './model/heartbeat';
 import { HostScreen } from './screens/HostScreen';
 import { StartScreen } from './screens/StartScreen';
 import { ViewerScreen } from './screens/ViewerScreen';
@@ -28,6 +30,7 @@ export function App() {
   // A join link through another sharing service, waiting for the user to agree.
   const [joinThrough, setJoinThrough] = useState<JoinLink | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState(false);
   // A new SpecDeck ready to install, the question before restarting during a session, and why
   // installing failed.
   const update = useReadyUpdate();
@@ -84,8 +87,11 @@ export function App() {
     }
   };
 
+  useEffect(() => startHeartbeat((beat) => void bridge.heartbeat(beat).catch(() => {})), [bridge]);
+
   useMenu((command) => {
     if (command.id === 'shortcuts') return setShortcuts(true);
+    if (command.id === 'connection-status') return setConnectionStatus(true);
     if (command.id === 'join-link') return void takeJoinLink();
     if (command.id === 'restart-to-update') return restartToUpdate();
     // Changed in the settings window.
@@ -235,6 +241,7 @@ export function App() {
         </ConfirmDialog>
       )}
       {shortcuts && <ShortcutsDialog onClose={() => setShortcuts(false)} />}
+      {connectionStatus && <ConnectionStatus onClose={() => setConnectionStatus(false)} />}
     </>
   );
 }

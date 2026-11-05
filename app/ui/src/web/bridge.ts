@@ -82,6 +82,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     updatesItself: false,
     checkUpdates: false,
     screenReader: false,
+    verboseLogging: false,
   });
 
   const readJoinLink = (link: string): JoinLink => {
@@ -105,6 +106,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     setNotifications: () => Promise.resolve(profile()),
     setCheckUpdates: () => Promise.resolve(profile()),
     setScreenReader: () => Promise.resolve(profile()),
+    setVerboseLogging: () => Promise.resolve(profile()),
     updateStatus: () => Promise.resolve({ state: 'disabled' }),
     onUpdate: () => () => {},
     restartToUpdate: notInTheWebViewer,
@@ -158,6 +160,12 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     readJoinLink: (link) => Promise.resolve(readJoinLink(link)),
     copyText: (text) => navigator.clipboard.writeText(text),
     startScreenShown: () => Promise.resolve(),
+    // The browser's developer tools show the web viewer's state.
+    reportTerminal: () => Promise.resolve(),
+    diagnosticsStatus: () => Promise.reject(new Error('Not available in the browser.')),
+    reconnectViewer: () => Promise.resolve(),
+    heartbeat: () => Promise.resolve(),
+    exportDiagnostics: () => Promise.resolve(false),
     onMenu: () => () => {},
   };
 }

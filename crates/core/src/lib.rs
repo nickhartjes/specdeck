@@ -2,6 +2,8 @@
 
 pub mod activity;
 pub mod agent;
+// The only module that may emit diagnostic events; a test in it holds that.
+pub mod diag;
 pub mod documents;
 pub mod environment;
 pub mod hooks;
@@ -23,6 +25,10 @@ pub mod viewer;
 
 #[cfg(all(test, unix))]
 mod test_support;
+
+#[cfg(test)]
+#[path = "../tests/support/capture.rs"]
+mod capture;
 
 // The OpenSSL that libdatachannel vendors uses these Windows libraries, but its build does not
 // tell the linker; without them a program that links little else fails with unresolved symbols.

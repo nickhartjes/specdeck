@@ -1,3 +1,4 @@
+mod diagnostics;
 mod host;
 mod menu;
 mod migrate;
@@ -34,6 +35,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::StateFlags;
 
+use crate::diagnostics::{Diagnostics, ExportHeader, Heartbeat, SessionStatus, TerminalSnapshot};
 use crate::host::{HostEvent, HostNotice, HostRuntime, SharingState, StartOptions, Summary};
 use crate::services::{ServiceCheck, Services};
 use crate::settings::{Settings, View, ZOOM_DEFAULT, zoom_in, zoom_out};
@@ -46,6 +48,7 @@ type ReadVersion = (Option<SystemTime>, Option<String>);
 struct AppState {
     settings_path: PathBuf,
     settings: Mutex<Settings>,
+    diagnostics: Diagnostics,
     data_dir: PathBuf,
     services: Services,
     /// The user's login-shell environment, read once in the background at start.
@@ -131,6 +134,8 @@ struct Profile {
     check_updates: bool,
     /// Screen readers read the terminal.
     screen_reader: bool,
+    /// The diagnostic log records traffic too.
+    verbose_logging: bool,
 }
 
 /// The agents to choose from, in display order: the coding agents, then Terminal.
@@ -184,6 +189,7 @@ fn profile(state: &AppState) -> Profile {
         updates_itself: state.updates.state() != UpdateState::Disabled,
         check_updates: settings.check_updates,
         screen_reader: settings.screen_reader,
+        verbose_logging: settings.verbose_logging,
     }
 }
 
@@ -300,6 +306,99 @@ async fn set_screen_reader(
         settings.screen_reader = enabled;
         state.save(&settings);
     }
+    settings_changed(&app);
+    Ok(profile(&state))
+}
+
+/// This app's own side of the session it is in.
+fn session_status(state: &AppState) -> SessionStatus {
+    if let Some(host) = state.host.lock().unwrap().as_ref() {
+        return SessionStatus::Host { sharing: host.sharing_status() };
+    }
+    match state.viewer.lock().unwrap().as_ref() {
+        Some(viewer) => SessionStatus::Viewer { viewer: viewer.status() },
+        None => SessionStatus::None,
+    }
+}
+
+/// What the Connection status panel shows.
+#[tauri::command]
+async fn diagnostics_status(state: State<'_, AppState>) -> Result<diagnostics::Status, String> {
+    Ok(state.diagnostics.status(session_status(&state)))
+}
+
+/// The terminal's state from the window: enums and numbers only.
+#[tauri::command]
+async fn diagnostics_report_terminal(
+    state: State<'_, AppState>,
+    snapshot: TerminalSnapshot,
+) -> Result<(), String> {
+    state.diagnostics.report_terminal(snapshot);
+    Ok(())
+}
+
+/// Drops the viewer's connection and reconnects at once.
+#[tauri::command]
+async fn reconnect_viewer(state: State<'_, AppState>) -> Result<(), String> {
+    if state.host.lock().unwrap().is_some() {
+        return diagnostics::check_reconnect(true, None);
+    }
+    match state.viewer.lock().unwrap().as_ref() {
+        Some(viewer) => viewer.reconnect(),
+        None => diagnostics::check_reconnect(false, None),
+    }
+}
+
+/// Saves the diagnostics to `path`, which the user chose. Nothing is uploaded.
+#[tauri::command]
+async fn diagnostics_export(state: State<'_, AppState>, path: PathBuf) -> Result<(), String> {
+    export_diagnostics(&state, &path)
+}
+
+fn export_diagnostics(state: &AppState, path: &Path) -> Result<(), String> {
+    let status = state.diagnostics.status(session_status(state));
+    let header = ExportHeader::new(status, &state.sharing_service(), &state.services.built_in);
+    state.diagnostics.export(path, &header)
+}
+
+/// Help › Export Diagnostics: entirely in Rust, with the native save dialog, so it works
+/// while the window's UI does not respond.
+fn export_diagnostics_from_menu(app: &AppHandle) {
+    let handle = app.clone();
+    app.dialog()
+        .file()
+        .set_file_name(diagnostics::export_file_name())
+        .add_filter("Diagnostics", &["jsonl"])
+        .save_file(move |path| {
+            let Some(path) = path.and_then(|path| path.into_path().ok()) else { return };
+            let (kind, text) = match export_diagnostics(&handle.state::<AppState>(), &path) {
+                Ok(()) => (MessageDialogKind::Info, "Diagnostics saved.".to_owned()),
+                Err(error) => (MessageDialogKind::Error, error),
+            };
+            handle.dialog().message(text).title("Export Diagnostics").kind(kind).show(|_| {});
+        });
+}
+
+/// The main window's heartbeat, once a second while it is visible.
+#[tauri::command]
+async fn diagnostics_heartbeat(state: State<'_, AppState>, beat: Heartbeat) -> Result<(), String> {
+    state.diagnostics.heartbeat(beat);
+    Ok(())
+}
+
+/// Turns Verbose logging on or off, at once.
+#[tauri::command]
+async fn set_verbose_logging(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<Profile, String> {
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.verbose_logging = enabled;
+        state.save(&settings);
+    }
+    state.diagnostics.set_verbose(enabled);
     settings_changed(&app);
     Ok(profile(&state))
 }
@@ -834,6 +933,7 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         menu::ids::ZOOM_OUT => return change_zoom(app, zoom_out),
         menu::ids::ZOOM_RESET => return change_zoom(app, |_| ZOOM_DEFAULT),
         menu::ids::CHECK_UPDATES => return check_for_updates(app),
+        menu::ids::EXPORT_DIAGNOSTICS => return export_diagnostics_from_menu(app),
         tray::ids::OPEN => return open_main_window(app),
         tray::ids::COPY_CODE => return copy_invite_code(app),
         tray::ids::END => return confirm_end_session(app),
@@ -1076,6 +1176,16 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // First, so everything after it is recorded.
+            let log_dir = profile_dir(app.path().app_log_dir()?);
+            let (diagnostics, subscriber) = Diagnostics::new(log_dir.clone());
+            let _ = tracing::subscriber::set_global_default(subscriber);
+            std::thread::spawn(move || {
+                loop {
+                    diagnostics::sweep(&log_dir, SystemTime::now());
+                    std::thread::sleep(diagnostics::SWEEP_EVERY);
+                }
+            });
             let config_dir = profile_dir(app.path().app_config_dir()?);
             let data_dir = profile_dir(app.path().app_cache_dir()?).join("sessions");
             remove_leftover_session_files(&data_dir);
@@ -1092,9 +1202,12 @@ pub fn run() {
                     let _ = windows.emit("update-changed", state);
                 },
             ));
+            let settings = Settings::load(&settings_path);
+            diagnostics.set_verbose(settings.verbose_logging);
             app.manage(AppState {
-                settings: Mutex::new(Settings::load(&settings_path)),
+                settings: Mutex::new(settings),
                 settings_path,
+                diagnostics,
                 data_dir,
                 services: Services::from_environment(),
                 environment,
@@ -1108,6 +1221,14 @@ pub fn run() {
             if updates.state() != UpdateState::Disabled {
                 start_update_checks(app.handle(), updates);
             }
+            // Notices a window that stopped beating: its own thread cannot say so.
+            let watched = app.handle().clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    watched.state::<AppState>().diagnostics.check_window();
+                }
+            });
             open_main_window(app.handle());
             refresh_menu(app.handle());
             // Join links: the one the app was started with, and any opened while it runs.
@@ -1136,6 +1257,7 @@ pub fn run() {
                 && window.label() == "main"
             {
                 let state = window.state::<AppState>();
+                state.diagnostics.window_closed();
                 // A hosted session keeps running without its window; viewing ends with it.
                 if let Some(host) = state.host.lock().unwrap().as_ref() {
                     host.detach();
@@ -1151,6 +1273,12 @@ pub fn run() {
             set_notifications,
             set_check_updates,
             set_screen_reader,
+            set_verbose_logging,
+            diagnostics_status,
+            diagnostics_report_terminal,
+            reconnect_viewer,
+            diagnostics_export,
+            diagnostics_heartbeat,
             agent_versions,
             open_install_page,
             update_status,
@@ -1240,6 +1368,7 @@ mod tests {
         AppState {
             settings_path: PathBuf::from("settings.json"),
             settings: Mutex::new(settings),
+            diagnostics: Diagnostics::new(dir.join("logs")).0,
             data_dir: PathBuf::from("sessions"),
             services: Services {
                 built_in: "wss://built-in.example.com/signal".into(),

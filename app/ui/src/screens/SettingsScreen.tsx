@@ -107,6 +107,24 @@ export function SettingsScreen() {
           </span>
         </div>
       </div>
+      <div className="row">
+        <span id="settings-verbose-logging">Diagnostics</span>
+        <div>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={profile.verboseLogging}
+              aria-labelledby="settings-verbose-logging"
+              aria-describedby="settings-verbose-logging-hint"
+              onChange={async (event) => setProfile(await bridge.setVerboseLogging(event.target.checked))}
+            />
+            Verbose logging
+          </label>
+          <span id="settings-verbose-logging-hint" className="field-hint">
+            Also records how much each connection sends, summed per second. Never what is sent. Logs are kept for 7 days.
+          </span>
+        </div>
+      </div>
       {profile.updatesItself && (
         <div className="row">
           <span id="settings-updates">Updates</span>

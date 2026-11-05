@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { ArrowDown } from 'lucide-react';
-import type { Participant, TimelineEvent, Steps } from '../api/types';
+import type { Participant, TimelineEvent, Steps, TerminalSnapshot } from '../api/types';
 import { FilesPanel } from '../components/FilesPanel';
 import { PeoplePanel } from '../components/PeoplePanel';
 import { SearchBar } from '../components/SearchBar';
@@ -40,6 +40,8 @@ interface Props {
   onInput?: (data: string) => void;
   onResize?: (cols: number, rows: number) => void;
   onThemeColors?: (foreground: string, background: string) => void;
+  /** The terminal's state for the Connection status panel. */
+  onTerminalState?: (snapshot: TerminalSnapshot) => void;
   onRemove?: (participant: Participant) => void;
   viewerLimit?: number;
   onViewerLimit?: (limit: number) => void;
@@ -292,6 +294,7 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(function Workspace(p
           }}
           onNewOutput={() => setNewOutput(true)}
           onSearchResults={setTerminalResult}
+          onDiagnostics={props.onTerminalState}
         />
         {searching && !props.terminalHidden && (
           <SearchBar

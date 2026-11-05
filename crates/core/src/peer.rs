@@ -12,8 +12,11 @@ use datachannel::{
     PeerConnectionHandler, RtcConfig, RtcDataChannel, RtcPeerConnection, SdpType,
     SessionDescription, TransportPolicy,
 };
+use specdeck_protocol::frames::MAX_FRAME_BYTES;
 use specdeck_protocol::signal_auth::DescriptionKind;
 use tokio::sync::mpsc::UnboundedSender;
+
+use crate::diag::{self, CandidateType, Reason};
 
 /// Queued bytes per channel below which `BufferedLow` is reported.
 pub const BUFFERED_LOW: usize = 256 * 1024;
@@ -37,6 +40,50 @@ impl Channel {
             "control" => Some(Channel::Control),
             "stream" => Some(Channel::Stream),
             _ => None,
+        }
+    }
+}
+
+/// A peer connection's state, as diagnostics report it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkState {
+    #[default]
+    New,
+    Connecting,
+    Connected,
+    Disconnected,
+    Failed,
+    Closed,
+}
+
+impl LinkState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LinkState::New => "new",
+            LinkState::Connecting => "connecting",
+            LinkState::Connected => "connected",
+            LinkState::Disconnected => "disconnected",
+            LinkState::Failed => "failed",
+            LinkState::Closed => "closed",
+        }
+    }
+
+    /// Disconnected, failed or closed.
+    pub fn is_down(self) -> bool {
+        matches!(self, LinkState::Disconnected | LinkState::Failed | LinkState::Closed)
+    }
+}
+
+impl From<&ConnectionState> for LinkState {
+    fn from(state: &ConnectionState) -> Self {
+        match state {
+            ConnectionState::New => LinkState::New,
+            ConnectionState::Connecting => LinkState::Connecting,
+            ConnectionState::Connected => LinkState::Connected,
+            ConnectionState::Disconnected => LinkState::Disconnected,
+            ConnectionState::Failed => LinkState::Failed,
+            ConnectionState::Closed => LinkState::Closed,
         }
     }
 }
@@ -97,6 +144,9 @@ pub struct Peer {
     pc: Box<RtcPeerConnection<Handler>>,
     channels: Channels,
     gathered: Arc<Mutex<Gathering>>,
+    /// Process-local number in diagnostic events.
+    number: u32,
+    state: Arc<Mutex<LinkState>>,
 }
 
 #[derive(Default)]
@@ -111,9 +161,14 @@ impl Peer {
         config: &PeerConfig,
         events: UnboundedSender<PeerEvent>,
     ) -> datachannel::Result<Self> {
-        let mut peer = Self::new(config, events.clone())?;
+        let mut peer = Self::new(config, events.clone(), true)?;
         for channel in [Channel::Control, Channel::Stream] {
-            let handler = ChannelHandler { channel, events: events.clone() };
+            let handler = ChannelHandler {
+                channel,
+                events: events.clone(),
+                number: peer.number,
+                scope: diag::Scope::current(),
+            };
             let mut dc = peer.pc.create_data_channel(channel.label(), handler)?;
             dc.set_buffered_amount_low_threshold(BUFFERED_LOW)?;
             peer.channels.lock().unwrap()[channel as usize] = Some(dc);
@@ -126,21 +181,41 @@ impl Peer {
         config: &PeerConfig,
         events: UnboundedSender<PeerEvent>,
     ) -> datachannel::Result<Self> {
-        Self::new(config, events)
+        Self::new(config, events, false)
     }
 
-    fn new(config: &PeerConfig, events: UnboundedSender<PeerEvent>) -> datachannel::Result<Self> {
+    fn new(
+        config: &PeerConfig,
+        events: UnboundedSender<PeerEvent>,
+        offer: bool,
+    ) -> datachannel::Result<Self> {
         let channels: Channels = Arc::default();
         let gathered: Arc<Mutex<Gathering>> = Arc::default();
+        let number = diag::next_peer_number();
+        diag::peer_created(number, offer, config.uses_turn());
+        let state: Arc<Mutex<LinkState>> = Arc::default();
         let handler = Handler {
             events,
             channels: channels.clone(),
             gathered: gathered.clone(),
             expects_relay: config.uses_turn(),
             saw_relay: false,
+            number,
+            scope: diag::Scope::current(),
+            state: state.clone(),
         };
         let pc = RtcPeerConnection::new(&config.rtc(), handler)?;
-        Ok(Self { pc, channels, gathered })
+        Ok(Self { pc, channels, gathered, number, state })
+    }
+
+    /// This connection's number in diagnostic events.
+    pub fn number(&self) -> u32 {
+        self.number
+    }
+
+    /// The connection's latest state, possibly newer than the events handled so far.
+    pub fn state(&self) -> LinkState {
+        *self.state.lock().unwrap()
     }
 
     /// Applies the other side's offer or answer.
@@ -189,8 +264,16 @@ impl Peer {
 
     pub fn send(&mut self, channel: Channel, bytes: &[u8]) -> Result<(), String> {
         let mut channels = self.channels.lock().unwrap();
-        let dc = channels[channel as usize].as_mut().ok_or("channel not open")?;
-        dc.send(bytes).map_err(|e| e.to_string())
+        let result = match channels[channel as usize].as_mut() {
+            Some(dc) => dc.send(bytes).map_err(|e| {
+                (Reason::from_datachannel(&e, bytes.len(), MAX_FRAME_BYTES), e.to_string())
+            }),
+            None => Err((Reason::Closed, "channel not open".into())),
+        };
+        result.map_err(|(reason, error)| {
+            diag::send_failed(self.number, channel, bytes.len(), MAX_FRAME_BYTES, reason);
+            error
+        })
     }
 
     /// Bytes queued on the channel and not yet sent; `usize::MAX` if it is not open.
@@ -202,6 +285,15 @@ impl Peer {
     pub fn selected_pair(&self) -> Option<(String, String)> {
         self.pc.selected_candidate_pair().map(|pair| (pair.local, pair.remote))
     }
+
+    /// Records the selected pair's candidate types; call once connected. Returns whether the
+    /// connection is relayed, or `None` while no pair is selected.
+    pub fn report_path(&self) -> Option<bool> {
+        let (local, remote) = self.selected_pair()?;
+        let (local, remote) = (CandidateType::parse(&local), CandidateType::parse(&remote));
+        diag::peer_path(self.number, local, remote);
+        Some(local == CandidateType::Relay || remote == CandidateType::Relay)
+    }
 }
 
 struct Handler {
@@ -210,6 +302,10 @@ struct Handler {
     gathered: Arc<Mutex<Gathering>>,
     expects_relay: bool,
     saw_relay: bool,
+    number: u32,
+    /// libdatachannel calls back on its own threads; events go to the peer's subscriber.
+    scope: diag::Scope,
+    state: Arc<Mutex<LinkState>>,
 }
 
 impl PeerConnectionHandler for Handler {
@@ -218,7 +314,12 @@ impl PeerConnectionHandler for Handler {
     fn data_channel_handler(&mut self, info: DataChannelInfo) -> ChannelHandler {
         // Unknown labels get the stream channel's handler; their messages are ignored below.
         let channel = Channel::from_label(&info.label).unwrap_or(Channel::Stream);
-        ChannelHandler { channel, events: self.events.clone() }
+        ChannelHandler {
+            channel,
+            events: self.events.clone(),
+            number: self.number,
+            scope: self.scope.clone(),
+        }
     }
 
     fn on_description(&mut self, description: SessionDescription) {
@@ -240,11 +341,14 @@ impl PeerConnectionHandler for Handler {
     }
 
     fn on_gathering_state_change(&mut self, state: GatheringState) {
-        if state != GatheringState::Complete {
+        let complete = state == GatheringState::Complete;
+        self.scope.run(|| diag::peer_gathering(self.number, &state));
+        if !complete {
             return;
         }
         self.gathered.lock().unwrap().complete = true;
         if self.expects_relay && !self.saw_relay {
+            self.scope.run(|| diag::peer_no_relay(self.number));
             let _ = self.events.send(PeerEvent::NoRelay);
         }
         // Wake the owner so it flushes the remote candidates it kept back.
@@ -252,6 +356,9 @@ impl PeerConnectionHandler for Handler {
     }
 
     fn on_connection_state_change(&mut self, state: ConnectionState) {
+        let link = LinkState::from(&state);
+        *self.state.lock().unwrap() = link;
+        self.scope.run(|| diag::peer_state(self.number, link));
         let _ = self.events.send(PeerEvent::State(state));
     }
 
@@ -260,6 +367,7 @@ impl PeerConnectionHandler for Handler {
         let _ = channel.set_buffered_amount_low_threshold(BUFFERED_LOW);
         self.channels.lock().unwrap()[kind as usize] = Some(channel);
         // An incoming channel is already open.
+        self.scope.run(|| diag::channel_open(self.number, kind));
         let _ = self.events.send(PeerEvent::Open(kind));
     }
 }
@@ -267,10 +375,13 @@ impl PeerConnectionHandler for Handler {
 pub struct ChannelHandler {
     channel: Channel,
     events: UnboundedSender<PeerEvent>,
+    number: u32,
+    scope: diag::Scope,
 }
 
 impl DataChannelHandler for ChannelHandler {
     fn on_open(&mut self) {
+        self.scope.run(|| diag::channel_open(self.number, self.channel));
         let _ = self.events.send(PeerEvent::Open(self.channel));
     }
 
@@ -283,6 +394,7 @@ impl DataChannelHandler for ChannelHandler {
     }
 
     fn on_closed(&mut self) {
+        self.scope.run(|| diag::channel_closed(self.number, self.channel));
         let _ = self.events.send(PeerEvent::State(ConnectionState::Closed));
     }
 }
@@ -357,5 +469,38 @@ mod tests {
         assert!(got.contains(&(Channel::Control, b"hello".to_vec())));
         assert!(got.contains(&(Channel::Stream, b"frame".to_vec())));
         assert!(host.buffered_amount(Channel::Stream) < BUFFERED_LOW);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_send_is_recorded_with_its_size_and_the_limit() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let (viewer_tx, mut viewer_events) = unbounded_channel();
+        let (host_tx, mut host_events) = unbounded_channel();
+        let mut viewer = Peer::offer(&loopback(), viewer_tx).unwrap();
+        let mut host = Peer::answer(&loopback(), host_tx).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            connect(&mut viewer, &mut viewer_events, &mut host, &mut host_events),
+        )
+        .await
+        .expect("channels did not open");
+
+        assert!(host.send(Channel::Stream, &vec![b'x'; 300_000]).is_err());
+        let failed = capture.named("peer.send_failed");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        let failed = &failed[0];
+        assert_eq!(failed.field("peer"), Some(host.number().to_string().as_str()));
+        assert_eq!(failed.field("channel"), Some("stream"));
+        assert_eq!(failed.field("bytes"), Some("300000"));
+        assert_eq!(failed.field("limit"), Some("262144"));
+        assert_eq!(failed.field("reason"), Some("too_large"));
+
+        // Both sides are on loopback: a direct connection between host candidates.
+        assert_eq!(host.report_path(), Some(false));
+        let path = capture.named("peer.path");
+        assert_eq!(path[0].field("local"), Some("host"));
+        assert_eq!(path[0].field("relayed"), Some("false"));
+        assert_eq!(capture.named("peer.created").len(), 2);
+        assert!(capture.named("peer.channel_open").len() >= 4);
     }
 }
