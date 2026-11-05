@@ -9,6 +9,7 @@ import { TerminalReporter } from '../model/terminalState';
 import type { TerminalStep } from './stream';
 import { clampViewerFont, viewerFontSize } from './fontScale';
 import { isNewlineKey } from './keys';
+import { remeasureOnSymbolFont } from './symbolFont';
 import { isMac } from '../menu/menu';
 
 export interface SearchResult {
@@ -122,6 +123,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     term.loadAddon(new WebLinksAddon());
     term.open(element);
     terminal.current = term;
+    const stopRemeasuring = remeasureOnSymbolFont(document.fonts, term.options);
 
     // Keys the terminal leaves to the app: F6 moves between the window's parts (handled by the
     // workspace), and in a viewer's read-only terminal Tab moves focus on, as anywhere else.
@@ -285,6 +287,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     return () => {
       reporter.dispose();
+      stopRemeasuring();
       reportState.current = () => {};
       media?.removeEventListener('change', applyTheme);
       resizeObserver?.disconnect();
