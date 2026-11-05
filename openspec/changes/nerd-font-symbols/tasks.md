@@ -23,7 +23,8 @@
   - Done 2026-11-06: host with a plain bash prompt, browser viewer joined with a fresh profile and DejaVu only: 0 font requests and the face "unloaded" while no symbol was shown. The host then printed the test line: the font loaded from the sharing service only, after the terminal had measured, and `b`, `c` and `d` sat in columns 2, 6 and 10 with a worst offset of 0.00 px (the re-measure case of design decision 5). No CSP violations.
 - [x] 3.3 In the desktop app (host and app viewer), print the same line and verify the symbols draw and keep the grid. Verify that ordinary text and box-drawing characters look as before, using a screenshot before and after (spec scenario "Ordinary text keeps the platform font"). Check on Linux here and on macOS and Windows when the release verification runs.
   - 2026-11-06, Linux (WebKitGTK), host window with starship prompt and fastfetch: icons draw; with `main`'s styles.css swapped in through Vite they were empty boxes even with FiraCode Nerd Font installed. Rows without icons were pixel-identical between main's CSS and the new CSS (control: 0 differing pixels); text after icons kept its columns. The desktop viewer window, joined to the same session, shows the same icons in the same columns as the host (prompt, fastfetch info column, identical wrapping). macOS and Windows moved to `release-and-verification` task 5.17, which checks the packaged app per platform.
-- [ ] 3.4 Note the installer size change from 1.1 against the 25 MB limit in the PR description.
+- [x] 3.4 Note the installer size change from 1.1 against the 25 MB limit in the PR description.
+  - Done in PR #35: +1,202,596 bytes.
 
 ## Workflow follow-up
 
