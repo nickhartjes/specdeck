@@ -38,5 +38,5 @@
 
 ## 7. Integration
 
-- [ ] 7.1 Host a real Claude Code session with a viewer joined, and go through a question, a plan rejection and approval, an allowed and a denied permission prompt, and a helper. Verify the viewer sees each outcome live and after a fresh join (replay), in both Overview and Developer views.
+- [x] 7.1 Moved to `release-and-verification` 5.14: Host a real Claude Code session with a viewer joined, and go through a question, a plan rejection and approval, an allowed and a denied permission prompt, and a helper. Verify the viewer sees each outcome live and after a fresh join (replay), in both Overview and Developer views.
 - [x] 7.2 Run `just check` and verify it passes.

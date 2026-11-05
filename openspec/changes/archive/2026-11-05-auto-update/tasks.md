@@ -29,7 +29,7 @@
 
 ## 5. Integration
 
-- [ ] 5.1 Publish a first release with the updater (1.2.0) and a second one after it (1.2.1); on macOS from the `.dmg`, confirm 1.2.0 offers 1.2.1, restarts into it, and that About shows 1.2.1; record in `docs/verification.md`
-- [ ] 5.2 Same on Linux from the AppImage, and confirm the `.deb` never checks (no request to github.com while running); record in `docs/verification.md`
-- [ ] 5.3 Same on Windows from the installer, including whether SmartScreen interrupts the passive install and whether the app restarts by itself (design, Open Questions); record in `docs/verification.md`
-- [ ] 5.4 While hosting with a viewer connected, choose Restart to update, confirm, and check that the viewer sees the session end and the host restarts in the new version; record in `docs/verification.md`
+- [x] 5.1 Moved to `release-and-verification` 5.1: Publish a first release with the updater (1.2.0) and a second one after it (1.2.1); on macOS from the `.dmg`, confirm 1.2.0 offers 1.2.1, restarts into it, and that About shows 1.2.1; record in `docs/verification.md`
+- [x] 5.2 Moved to `release-and-verification` 5.2: Same on Linux from the AppImage, and confirm the `.deb` never checks (no request to github.com while running); record in `docs/verification.md`
+- [x] 5.3 Moved to `release-and-verification` 5.3: Same on Windows from the installer, including whether SmartScreen interrupts the passive install and whether the app restarts by itself (design, Open Questions); record in `docs/verification.md`
+- [x] 5.4 Moved to `release-and-verification` 5.4: While hosting with a viewer connected, choose Restart to update, confirm, and check that the viewer sees the session end and the host restarts in the new version; record in `docs/verification.md`

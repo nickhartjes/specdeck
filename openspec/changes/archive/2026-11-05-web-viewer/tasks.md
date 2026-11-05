@@ -161,7 +161,7 @@
 
 ## 8. Check it end to end
 
-- [ ] 8.1 In `just local-dev`, open `http://127.0.0.1:18081/` in Chrome, Firefox and Safari, and join a Claude Code session hosted by the app. In each browser, check:
+- [x] 8.1 Moved to `release-and-verification` 5.15: In `just local-dev`, open `http://127.0.0.1:18081/` in Chrome, Firefox and Safari, and join a Claude Code session hosted by the app. In each browser, check:
   - the terminal and the timeline;
   - a late join after some output;
   - Overview and Developer views;

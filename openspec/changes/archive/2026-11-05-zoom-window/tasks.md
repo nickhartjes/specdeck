@@ -19,6 +19,6 @@
 ## 4. Terminal behaviour and platforms
 
 - [x] 4.1 Verify, with a hosted session and a viewer on loopback, that the host zooming in resizes the agent's terminal (fewer columns, and the viewer sees the re-wrap), and that the viewer zooming in past the pane keeps the host's columns and scrolls horizontally. If xterm measures cells at the old size after a zoom, refit the host's terminal or refresh the viewer's on zoom, and repeat the check.
-- [ ] 4.2 Verify on Windows and Linux (WebView2, WebKitGTK) that Ctrl+`=`, Ctrl+`-` and Ctrl+`0` zoom even while the host's terminal has focus, that Ctrl+Shift+`-` still reaches the terminal, and that the accelerators parse. Use `Equal` if `=` does not. Record the result in the PR.
+- [x] 4.2 Moved to `release-and-verification` 5.16: Verify on Windows and Linux (WebView2, WebKitGTK) that Ctrl+`=`, Ctrl+`-` and Ctrl+`0` zoom even while the host's terminal has focus, that Ctrl+Shift+`-` still reaches the terminal, and that the accelerators parse. Use `Equal` if `=` does not. Record the result in the PR.
 - [x] 4.3 Raise the minimum macOS version to 11, because `set_zoom` crashes on older versions instead of failing: `bundle.macOS.minimumSystemVersion` in `tauri.conf.json`, `depends_on macos: :big_sur` in `scripts/render-cask.sh`, and the macOS rows in `README.md` and `docs/site/src/content/docs/install.md`. Verify the rendered cask contains the `depends_on` line and `just check` passes.
 - [x] 4.4 Run `just check` and verify it passes.

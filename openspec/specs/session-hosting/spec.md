@@ -110,6 +110,14 @@ Only the host SHALL be able to send input to the session. Input from any other p
 - **WHEN** the host types a line longer than the terminal is wide, at any speed and with corrections by Backspace, then presses Enter
 - **THEN** the session receives each typed character once, in the order typed, and no part of the line is sent again
 
+#### Scenario: Shift+Enter starts a new line
+- **WHEN** the host types part of a prompt in Claude Code, Codex, pi, omp, OpenCode or Grok and presses Shift+Enter
+- **THEN** the agent starts a new line in its prompt and does not send the prompt, and pressing Enter afterwards sends both lines as one prompt
+
+#### Scenario: Enter still sends
+- **WHEN** the host presses Enter, without Shift, in the terminal
+- **THEN** the session receives the same input as before this change, and the agent sends the prompt
+
 ### Requirement: Host owns terminal size
 The session's terminal size SHALL be set by the host only. Viewer window sizes SHALL NOT change it.
 
@@ -154,6 +162,7 @@ The app SHALL remember up to five folders the user most recently hosted in, newe
 #### Scenario: Remove a folder from the list
 - **WHEN** the host removes a folder from the recent folders
 - **THEN** it is no longer listed, and nothing on disk changes
+
 ### Requirement: Terminal session
 Besides the coding agents, the host SHALL be able to start a plain terminal session, which runs the host's own shell in the selected folder: the host's login shell on macOS and Linux, and PowerShell on Windows. Terminal SHALL always be offered, since it needs nothing installed beyond the operating system.
 

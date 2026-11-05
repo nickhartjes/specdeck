@@ -16,11 +16,11 @@
 
 Each starts from 1.3.0 with settings changed from their defaults (name, sharing service, zoom, a recent folder) and the window moved.
 
-- [ ] 3.1 macOS: upgrade through Restart to update, and separately with `brew upgrade --cask` over the 1.3.0 cask; verify settings, recent folders and window position are kept, one `SpecDeck.app` exists, `specdeck://` links open it, and the permission prompts appear once
+- [x] 3.1 Moved to `release-and-verification` 5.9: macOS: upgrade through Restart to update, and separately with `brew upgrade --cask` over the 1.3.0 cask; verify settings, recent folders and window position are kept, one `SpecDeck.app` exists, `specdeck://` links open it, and the permission prompts appear once
   - 2026-11-03: `v1.4.0-rc.1` `.dmg` over 1.3.0 (Homebrew install in `~/Applications`) on Apple silicon: the new config folder is an identical copy of the old one (settings, window states, `profiles/`), the old one untouched; one `SpecDeck.app`; `specdeck://` opens it (LaunchServices default handler, a test join link reached the running app, one instance). No Local Network prompt while hosting alone; System Settings lists SpecDeck under Local Network, switched on. Open: Restart to update and `brew upgrade --cask` from 1.3.0, both only possible with the final 1.4.0
-- [ ] 3.2 Windows: upgrade through Restart to update and with the installer; verify settings are kept, Installed apps lists one SpecDeck, and `specdeck://` links open it
-- [ ] 3.3 Linux: upgrade the AppImage through Restart to update and the `.deb` with `apt install ./SpecDeck-amd64.deb`; verify settings are kept and `xdg-mime query default x-scheme-handler/specdeck` names a `.desktop` file that exists and starts the renamed app
-- [ ] 3.4 Fresh install on a machine without the old folder: verify default settings and that no `com.entrnce.specdeck` folder is created
+- [x] 3.2 Moved to `release-and-verification` 5.10: Windows: upgrade through Restart to update and with the installer; verify settings are kept, Installed apps lists one SpecDeck, and `specdeck://` links open it
+- [x] 3.3 Moved to `release-and-verification` 5.11: Linux: upgrade the AppImage through Restart to update and the `.deb` with `apt install ./SpecDeck-amd64.deb`; verify settings are kept and `xdg-mime query default x-scheme-handler/specdeck` names a `.desktop` file that exists and starts the renamed app
+- [x] 3.4 Moved to `release-and-verification` 5.12: Fresh install on a machine without the old folder: verify default settings and that no `com.entrnce.specdeck` folder is created
 
 ## Workflow follow-up
 

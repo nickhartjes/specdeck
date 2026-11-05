@@ -37,7 +37,7 @@ A viewer SHALL join a session by entering its invite code. Case and dashes in th
 - **THEN** further attempts are temporarily refused, and the app says to wait
 
 ### Requirement: Join link
-The host SHALL be able to copy a join link that contains the invite code. Opening the link on a machine with the app installed SHALL open the app and join the session.
+The host SHALL be able to copy a join link holding the invite code and the host's sharing service; copying only the code SHALL NOT include the service. When that service serves the web viewer, the link SHALL be a web address that opens in any browser, offers the app or the browser, and is accepted by the app; otherwise it SHALL open the app directly. Either way, a viewer with the app SHALL be able to join from it. A link without a service SHALL join through the viewer's own service.
 
 #### Scenario: Viewer opens a join link
 - **WHEN** a viewer with the app installed opens a join link from a chat message
@@ -46,6 +46,30 @@ The host SHALL be able to copy a join link that contains the invite code. Openin
 #### Scenario: Join link while in another session
 - **WHEN** a viewer who is already viewing a session opens a join link for a different session
 - **THEN** the app asks whether to leave the current session before joining
+
+#### Scenario: Link carries the host's service
+- **WHEN** a host using `specdeck.example.com` copies the join link
+- **THEN** the link contains the invite code and the service `specdeck.example.com`
+
+#### Scenario: Link without a service
+- **WHEN** a viewer opens a join link that has no sharing service, such as one copied from an earlier version
+- **THEN** the app joins through the viewer's own sharing service
+
+#### Scenario: Viewer without the app
+- **WHEN** a viewer without the app opens a join link from a service that serves the web viewer
+- **THEN** the browser shows the web viewer with the code filled in, and the viewer can watch after entering a name
+
+#### Scenario: Viewer with the app opens the link in a browser
+- **WHEN** a viewer with the app installed opens the web join link and chooses to open it in the app
+- **THEN** the app opens and joins the session
+
+#### Scenario: Web link pasted into the app
+- **WHEN** a viewer pastes a web join link into the app's join field
+- **THEN** the app joins the session on the service the link names, asking first when that is not the viewer's own service, as for other join links
+
+#### Scenario: Service without the web viewer
+- **WHEN** the host's sharing service does not serve the web viewer
+- **THEN** the copied join link opens the app directly, as before
 
 ### Requirement: Invite code lifetime
 The invite code SHALL expire when the host closes the session. The host SHALL be able to revoke it while the session is open and get a new one; revoking SHALL NOT disconnect viewers who already joined.
@@ -134,3 +158,63 @@ A viewer SHALL only be admitted when the host's and the viewer's apps speak the 
 #### Scenario: Host on an older app
 - **WHEN** a viewer whose app speaks a newer session protocol than the host's tries to join
 - **THEN** the viewer is not admitted and is told that the host needs to update their app
+
+### Requirement: Sharing service setting
+The user SHALL be able to set the sharing service in Settings, as a domain or a full URL. An empty setting SHALL mean the service built into the app. A changed setting SHALL apply to sessions started or joined afterwards, and SHALL NOT be changeable while the user hosts or views a session.
+
+#### Scenario: Own server entered as a domain
+- **WHEN** the user enters `specdeck.example.com` as the sharing service and then hosts a session
+- **THEN** the session is shared through the service at `specdeck.example.com`
+
+#### Scenario: Setting cleared
+- **WHEN** the user clears the sharing service setting
+- **THEN** sessions started or joined afterwards use the built-in service
+
+#### Scenario: During a session
+- **WHEN** the user opens Settings while hosting or viewing a session
+- **THEN** the sharing service cannot be changed, and Settings says it applies to the next session
+
+### Requirement: Sharing service check
+When the user saves a sharing service, the app SHALL check whether it can be reached and show the result. The setting SHALL be saved whether or not the check succeeds. A service reached without encryption SHALL be marked as not encrypted.
+
+#### Scenario: Service reachable
+- **WHEN** the user saves a sharing service that answers
+- **THEN** Settings shows that the service can be reached
+
+#### Scenario: Service unreachable
+- **WHEN** the user saves a sharing service that does not answer
+- **THEN** Settings shows that it cannot be reached, and the setting is saved
+
+#### Scenario: Unencrypted service
+- **WHEN** the user enters a `ws://` address
+- **THEN** Settings marks the service as not encrypted
+
+### Requirement: Sharing service override
+An environment variable naming the sharing service, set when the app starts, SHALL take precedence over the setting and the built-in service.
+
+#### Scenario: Environment variable set
+- **WHEN** the app is started with the environment variable set and the user has a sharing service setting
+- **THEN** sessions use the service from the environment variable
+
+### Requirement: Join link through another sharing service
+When a viewer opens a join link whose sharing service differs from the one the viewer would use, the app SHALL ask before joining through it, naming the service. Joining SHALL use that service for this session only, unless the viewer chooses to use it from now on.
+
+#### Scenario: Viewer accepts once
+- **WHEN** a viewer opens a join link for `specdeck.example.com` while using another service, and joins without choosing to keep it
+- **THEN** the viewer joins through `specdeck.example.com`, and their sharing service setting is unchanged
+
+#### Scenario: Viewer keeps the service
+- **WHEN** the viewer joins and chooses to use the service from now on
+- **THEN** the viewer joins through it, and it becomes their sharing service setting
+
+#### Scenario: Viewer declines
+- **WHEN** the viewer cancels the question
+- **THEN** the app does not connect to that service and does not join
+
+#### Scenario: Same service
+- **WHEN** a viewer opens a join link whose sharing service is the one they use
+- **THEN** the app joins without asking
+
+#### Scenario: Reconnect
+- **WHEN** a viewer who joined through another service loses the connection and reconnects
+- **THEN** the reconnect uses the service they joined through
