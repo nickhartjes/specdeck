@@ -132,13 +132,14 @@
     - Building from the main checkout sent more than 15 GB of context (33 GB of worktrees on disk).
     - It now excludes `.claude/` and uses `**/target/`, `**/node_modules/` and `**/dist/`.
     - Measured from the main checkout with the new file: 4.4 MB.
-- [ ] 5.3 CI: build the wasm package and `dist-web`, run the `wasm-bindgen-test`, check the service with the feature, and build the Docker image. Verify on the PR that the new steps run and pass. Add `just check-web` for the web build.
+- [x] 5.3 CI: build the wasm package and `dist-web`, run the `wasm-bindgen-test`, check the service with the feature, and build the Docker image. Verify on the PR that the new steps run and pass. Add `just check-web` for the web build.
   - Written:
     - `just check-web` runs `web-wasm`, `web-test`, clippy for `wasm32`, `build:web`, and clippy for the signalling crate with `web-viewer`;
     - `ci.yml` runs it on Linux only, because its recipes use bash and the result is the same on every platform;
     - a new `image` job builds the image and checks UID 10001, `/health`, `/web-viewer.json`, `/join` and the CSP header.
 
     `just check-web` passes locally; tick this when the PR's run passes. It is not part of `just check`, which also runs on Windows.
+  - 2026-11-05, PR #27 (run 41983262413): the Ubuntu job's "Web viewer" step and the `image` job, which builds the image and serves the page, both passed. Every other check passed too: macOS, Windows, nix and the docs build.
 
 ## 6. The host's link (`app/src-tauri`, `app/ui`)
 
