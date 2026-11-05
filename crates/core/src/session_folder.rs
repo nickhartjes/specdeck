@@ -54,13 +54,13 @@ impl SessionFolder {
                 .or_else(|| self.resolved.as_deref().and_then(|folder| below(&full, folder)))
                 .or_else(|| below(resolved.as_deref()?, self.resolved.as_deref()?));
             if let Some(inside) = inside {
-                return inside.to_string_lossy().into_owned();
+                return native(inside);
             }
         }
         if let Some((home, resolved_home)) = &self.home {
             let in_home = below(&full, home).or_else(|| below(&full, resolved_home.as_deref()?));
             if let Some(rest) = in_home {
-                return Path::new("~").join(rest).to_string_lossy().into_owned();
+                return native(&Path::new("~").join(rest));
             }
         }
         path.to_owned()
@@ -78,6 +78,12 @@ fn below<'a>(path: &'a Path, folder: &Path) -> Option<&'a Path> {
     let plain = !inside.as_os_str().is_empty()
         && inside.components().all(|c| matches!(c, Component::Normal(_)));
     plain.then_some(inside)
+}
+
+/// `path` with this platform's separator throughout, so a path an agent on Windows wrote as
+/// `src/a.rs` is shown as `src\a.rs`, like the rest of the host's paths.
+fn native(path: &Path) -> String {
+    path.components().collect::<PathBuf>().to_string_lossy().into_owned()
 }
 
 /// `path` with symlinks resolved, through its nearest existing parent for a path that does not

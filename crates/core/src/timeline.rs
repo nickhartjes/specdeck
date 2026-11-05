@@ -604,6 +604,22 @@ fn report(mut text: String) -> ToolOutcome {
 mod tests {
     use super::*;
 
+    /// A home folder that is absolute on this platform (`/home/…` is not, on Windows).
+    const HOME: &str = if cfg!(windows) { r"C:\Users\someone" } else { "/home/someone" };
+
+    /// `rest` (written with `/`) in the home folder, as the agent reports it.
+    fn in_home(rest: &str) -> String {
+        format!("{HOME}/{rest}")
+    }
+
+    /// `rest` (written with `/`) as viewers see it in the home folder.
+    fn from_home(rest: &str) -> String {
+        rest.split('/')
+            .fold(std::path::PathBuf::from("~"), |path, name| path.join(name))
+            .to_string_lossy()
+            .into_owned()
+    }
+
     #[test]
     fn stamps_terminal_position_and_time() {
         assert_eq!(stamp(Entry::SessionStarted, None, 5).output_seq, -1);
@@ -899,8 +915,7 @@ mod tests {
 
     #[test]
     fn file_tool_inputs_carry_no_file_contents() {
-        let mut builder =
-            TimelineBuilder::new(SessionFolder::new("/work", Some("/home/someone".into())));
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", Some(HOME.into())));
         let mut sent = |tool: &str, input: Value| {
             let extra = serde_json::json!({ "tool_input": input });
             Value::Object(tool_input(builder.handle(call("PreToolUse", tool, "t", extra)).unwrap()))
@@ -908,12 +923,12 @@ mod tests {
         let write = serde_json::json!({ "file_path": "/work/a.rs", "content": "secret" });
         assert_eq!(sent("Write", write), serde_json::json!({ "file_path": "a.rs" }));
         let edit = serde_json::json!({
-            "file_path": "/home/someone/notes.md", "old_string": "a", "new_string": "b",
+            "file_path": in_home("notes.md"), "old_string": "a", "new_string": "b",
             "replace_all": true
         });
         assert_eq!(
             sent("Edit", edit),
-            serde_json::json!({ "file_path": "~/notes.md", "replace_all": true })
+            serde_json::json!({ "file_path": from_home("notes.md"), "replace_all": true })
         );
         let multi = serde_json::json!({
             "file_path": "/work/b.rs", "edits": [{ "old_string": "a", "new_string": "b" }]
@@ -933,9 +948,8 @@ mod tests {
 
     #[test]
     fn a_shell_command_is_sent_as_typed() {
-        let mut builder =
-            TimelineBuilder::new(SessionFolder::new("/work", Some("/home/someone".into())));
-        let command = serde_json::json!({ "command": "cat /home/someone/.ssh/config" });
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", Some(HOME.into())));
+        let command = serde_json::json!({ "command": format!("cat {}", in_home(".ssh/config")) });
         let extra = serde_json::json!({ "tool_input": command.clone() });
         let input = tool_input(builder.handle(call("PreToolUse", "Bash", "b", extra)).unwrap());
         assert_eq!(Value::Object(input), command);
@@ -961,10 +975,9 @@ mod tests {
 
     #[test]
     fn a_file_outside_the_session_folder_has_no_diff() {
-        let mut builder =
-            TimelineBuilder::new(SessionFolder::new("/work", Some("/home/someone".into())));
-        let outside = wrote(&mut builder, "/home/someone/.claude/memory.md", Value::Null);
-        assert_eq!(changed_file(outside), ("~/.claude/memory.md".into(), Vec::new()));
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", Some(HOME.into())));
+        let outside = wrote(&mut builder, &in_home(".claude/memory.md"), Value::Null);
+        assert_eq!(changed_file(outside), (from_home(".claude/memory.md"), Vec::new()));
 
         let (path, hunks) = changed_file(wrote(&mut builder, "/work/new.rs", Value::Null));
         assert_eq!(path, "new.rs");
@@ -973,15 +986,14 @@ mod tests {
 
     #[test]
     fn a_read_outside_the_session_folder_is_shown_from_home() {
-        let mut builder =
-            TimelineBuilder::new(SessionFolder::new("/work", Some("/home/someone".into())));
-        let read = serde_json::json!({ "tool_input": { "file_path": "/home/someone/.env" } });
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", Some(HOME.into())));
+        let read = serde_json::json!({ "tool_input": { "file_path": in_home(".env") } });
         let entries = builder.handle(call("PostToolUse", "Read", "r", read)).unwrap();
         let path = entries.into_iter().find_map(|entry| match entry {
             Entry::FileRead { path, .. } => Some(path),
             _ => None,
         });
-        assert_eq!(path.as_deref(), Some("~/.env"));
+        assert_eq!(path, Some(from_home(".env")));
     }
 
     #[test]
