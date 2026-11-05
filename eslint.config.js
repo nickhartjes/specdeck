@@ -4,11 +4,11 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', 'target/**', 'app/src-tauri/gen/**', 'docs/site/.astro/**', 'crates/web/pkg/**', '**/dist-web/**'] },
+  { ignores: ['**/dist/**', '**/node_modules/**', 'target/**', 'app/src-tauri/gen/**', 'docs/site/.astro/**', 'crates/web/pkg/**', '**/dist-web/**', 'docs/video/.venv/**', 'docs/video/*/.hyperframes/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['scripts/**/*.{js,mjs}'],
+    files: ['scripts/**/*.{js,mjs}', 'docs/video/**/*.mjs'],
     languageOptions: { globals: { ...globals.node } },
   },
   {

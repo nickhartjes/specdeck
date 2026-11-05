@@ -32,6 +32,8 @@ When the host sees a banner that sharing is unavailable, SpecDeck cannot reach i
 
 When a connection keeps dropping or the terminal behaves oddly, open **Help › Connection Status** (**⇧⌘D** on macOS, **Ctrl+Shift+D** on Windows and Linux). It shows your own side only: as the host, your sharing and each viewer's connection as your app sees it; as a viewer, your connection to the host.
 
+<video class="video" controls preload="none" poster="/specdeck/video/diagnostics.jpg" src="/specdeck/video/diagnostics.mp4" aria-label="Diagnostics: the Connection status panel, Export Diagnostics and Verbose logging (1.5 minutes, narrated, with captions)"></video>
+
 The line at the top says what is going on:
 
 | It says | What it means |

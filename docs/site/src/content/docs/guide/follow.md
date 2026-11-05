@@ -3,6 +3,8 @@ title: Follow a session
 description: Choose what you see, scroll back, search and copy.
 ---
 
+<video class="video" controls preload="none" poster="/specdeck/video/following.jpg" src="/specdeck/video/following.mp4" aria-label="Following a session: Overview and Developer, the agent's steps and the host's decisions, View, search, Files and the status bar (1.5 minutes, narrated, with captions)"></video>
+
 ## Choose what you see
 
 Select **View** at the top of the session to change how you follow it. Your choice is remembered, and nobody else's view changes.

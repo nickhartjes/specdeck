@@ -63,6 +63,32 @@ docs:
 docs-build:
     cd docs/site && pnpm install --frozen-lockfile && pnpm build
 
+# Make the how-to videos, or the ones named (docs/video/<name>/renders/); needs Chrome, Python 3 and ffmpeg
+video *names="getting-started following diagnostics":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd docs/video
+    pnpm install
+    [ -x .venv/bin/python ] || python3 -m venv .venv
+    .venv/bin/pip install --quiet -r requirements.txt
+    for name in {{names}}; do
+        (
+            cd "$name"
+            node capture.mjs
+            ../.venv/bin/python ../lib/speak.py .
+            node build.mjs
+            pnpm exec hyperframes render --output "renders/specdeck-$name.mp4"
+            # For the docs site: a smaller copy, and its title card as the poster, with the caption
+            # under the player's controls painted over in the background's colour.
+            mkdir -p ../../site/public/video
+            ffmpeg -v error -y -i "renders/specdeck-$name.mp4" -c:v libx264 -crf 28 -preset slow -tune stillimage \
+                -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 96k "../../site/public/video/$name.mp4"
+            ffmpeg -v error -y -ss 2.6 -i "renders/specdeck-$name.mp4" -frames:v 1 \
+                -vf "scale=1280:-1,format=rgb24,drawbox=x=0:y=620:w=1280:h=100:color=0x0e1527:t=fill" -q:v 4 \
+                "../../site/public/video/$name.jpg"
+        )
+    done
+
 # Deploy signalling and coturn to Colima's local Kubernetes (deploy/k8s/local); needs `colima start --kubernetes`
 local-up:
     #!/usr/bin/env bash

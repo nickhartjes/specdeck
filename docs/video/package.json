@@ -1,0 +1,9 @@
+{
+  "name": "@specdeck/video",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "hyperframes": "0.8.214",
+    "playwright": "^1.64.0"
+  }
+}

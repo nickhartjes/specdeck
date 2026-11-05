@@ -1,0 +1,9 @@
+/* How-to videos (public/video, made by `just video`). */
+.video {
+  display: block;
+  width: 100%;
+  margin-block: 1.5rem;
+  border-radius: 0.5rem;
+  box-shadow: var(--sl-shadow-md);
+  background: #0d1526;
+}
