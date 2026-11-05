@@ -1,0 +1,12 @@
+[
+  { "id": "intro", "text": "SpecDeck lets one person, the host, run a coding agent on their own computer, while teammates follow along from anywhere." },
+  { "id": "agent", "text": "To host a session, pick your agent, such as Claude Code, or a plain terminal." },
+  { "id": "folder", "text": "Then pick the project folder it should start in." },
+  { "id": "hosting", "text": "The agent starts in your terminal, and you use it as you normally would." },
+  { "id": "invite", "text": "Share the invite code at the top. Copy takes the code, and the link button copies a link that opens SpecDeck and joins." },
+  { "id": "join", "text": "A teammate pastes the code under Join a session, and selects Join." },
+  { "id": "viewer", "text": "They see your terminal live and, for Claude Code, a timeline of every prompt, tool call and file change." },
+  { "id": "readonly", "text": "Viewers are read-only. Only you type, and the agent runs on your own login." },
+  { "id": "people", "text": "People shows who is watching, and lets you remove someone. End session stops it for everyone." },
+  { "id": "outro", "text": "No app? Teammates can also watch in a browser. Hosting needs the app." }
+]

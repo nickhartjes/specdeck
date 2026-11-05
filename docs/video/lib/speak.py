@@ -1,7 +1,8 @@
-"""Speaks each line of SCRIPT.json with Kokoro and records its length.
+"""Speaks each line of a video's SCRIPT.json with Kokoro and records its length.
 
-Writes assets/voice/<id>.wav and assets/voice/durations.json. Downloads the Kokoro model to
-~/.cache/kokoro the first time. Usage: speak.py [voice] [id ...]; the voice defaults to af_heart.
+Writes <video>/assets/voice/<id>.wav and durations.json. Downloads the Kokoro model to
+~/.cache/kokoro the first time. Usage: speak.py <video folder> [voice] [id ...]; the voice
+defaults to af_heart.
 """
 import json
 import pathlib
@@ -16,11 +17,11 @@ from kokoro_onnx import EspeakConfig, Kokoro
 MODEL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 CACHE = pathlib.Path.home() / ".cache"
 
-project = pathlib.Path(__file__).parent
+project = pathlib.Path(sys.argv[1])
 out = project / "assets" / "voice"
 out.mkdir(parents=True, exist_ok=True)
-voice = sys.argv[1] if len(sys.argv) > 1 else "af_heart"
-only = set(sys.argv[2:])
+voice = sys.argv[2] if len(sys.argv) > 2 else "af_heart"
+only = set(sys.argv[3:])
 
 
 def model_file(name: str) -> str:

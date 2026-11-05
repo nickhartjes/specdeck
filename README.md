@@ -54,7 +54,7 @@ just capacity  # measure how 20 viewers affect the host's terminal (run alone)
 just fmt       # format the Rust code
 just package   # build installers for this platform (target/release/bundle)
 just docs      # documentation site with live reload
-just video     # the diagnostics how-to video (docs/video/diagnostics/renders)
+just video     # the how-to videos (docs/video/<name>/renders)
 just check-web # web viewer: WebAssembly core and tests, the page (app/ui/dist-web), the service with it
 ```
 
