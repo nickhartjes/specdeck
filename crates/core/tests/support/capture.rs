@@ -4,10 +4,11 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
+use tracing::Dispatch;
 use tracing::field::{Field, Visit};
-use tracing::subscriber::DefaultGuard;
+use tracing::subscriber::{DefaultGuard, NoSubscriber};
 pub use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 
@@ -35,6 +36,12 @@ impl Capture {
 
     /// Starts capturing events at `level` and above, as the app's log does.
     pub fn start_at(level: LevelFilter) -> (Self, DefaultGuard) {
+        // With a single live subscriber, tracing caches whether an event is wanted from the
+        // subscriber of the thread that reaches it first. A thread without a capture then turns
+        // the event off for every capture until the next one starts. A second subscriber that
+        // stays registered keeps tracing asking each capture.
+        static KEEP: OnceLock<Dispatch> = OnceLock::new();
+        KEEP.get_or_init(|| Dispatch::new(NoSubscriber::default()));
         let capture = Self::default();
         let subscriber = tracing_subscriber::registry().with(level).with(capture.clone());
         let guard = tracing::subscriber::set_default(subscriber);
