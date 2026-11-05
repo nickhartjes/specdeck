@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
@@ -85,6 +85,16 @@ function panel(steps: 'summary' | 'details') {
 async function open(name: RegExp) {
   const summary = screen.getByText(name).closest('summary')!;
   await userEvent.click(summary);
+  // The body is rendered once the step has opened.
+  await waitFor(() => expect(summary.nextElementSibling).not.toBeNull());
+  return summary.parentElement!;
+}
+
+/** Opens the call a step stands for. */
+async function openCall(step: HTMLElement) {
+  const summary = step.querySelector<HTMLElement>('details.tool > summary')!;
+  await userEvent.click(summary);
+  await waitFor(() => expect(summary.nextElementSibling).not.toBeNull());
   return summary.parentElement!;
 }
 
@@ -143,13 +153,13 @@ describe('host interactions', () => {
 
   it('shows a to-do list as a checklist and a helper report formatted', async () => {
     panel('summary');
-    const todos = within(await open(/to-do list/)).getByRole('list', { name: 'To-do list' });
+    const todos = within(await openCall(await open(/to-do list/))).getByRole('list', { name: 'To-do list' });
     expect(within(todos).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
       'Count files (Done)',
       'Report back (In progress)',
       'Clean up (To do)',
     ]);
-    const helper = await open(/Asked a helper/);
+    const helper = await openCall(await open(/Asked a helper/));
     expect(within(helper).getByText('Files:').tagName).toBe('STRONG');
     expect(helper).toHaveTextContent('The report was cut to its first 200 KB.');
   });

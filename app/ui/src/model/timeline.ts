@@ -69,6 +69,8 @@ export interface Turn {
   response: string | null;
   /** Tokens the agent used for this prompt so far, once usage is known. */
   tokens: number | null;
+  /** Counts the events that changed this turn, so the panel renders only turns that changed. */
+  revision: number;
 }
 
 
@@ -94,6 +96,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
   const turns: Turn[] = [];
   const byPrompt = new Map<string, Turn>();
   const tools = new Map<string, ToolItem>();
+  const toolTurns = new Map<string, Turn>();
   const texts = new Map<string, TextItem>();
   const files = new Map<string, TouchedFile>();
   let unavailable: string | null = null;
@@ -105,11 +108,12 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
     let turn = byPrompt.get(promptId);
     if (!turn) {
       // Events for a prompt that came before this viewer's history; show them under a blank prompt.
-      turn = { promptId, prompt: '', at, outputSeq, items: [], response: null, tokens: null };
+      turn = { promptId, prompt: '', at, outputSeq, items: [], response: null, tokens: null, revision: 0 };
       startTotals.set(turn, sessionTotal);
       byPrompt.set(promptId, turn);
       turns.push(turn);
     }
+    turn.revision++;
     return turn;
   };
   const touched = (path: string): TouchedFile => {
@@ -134,12 +138,13 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
         // Live text arrives in pieces per message.
         const existing = texts.get(event.messageId);
         const text = withNote(event.text, event.truncated);
+        const turn = turnFor(event.promptId, event.at, event.outputSeq);
         if (existing) {
           existing.text += text;
         } else {
           const item: TextItem = { kind: 'text', id: event.messageId, text, outputSeq: event.outputSeq };
           texts.set(event.messageId, item);
-          turnFor(event.promptId, event.at, event.outputSeq).items.push(item);
+          turn.items.push(item);
         }
         break;
       }
@@ -158,13 +163,16 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
           at: event.at,
           ...(event.truncated && { truncated: true }),
         };
+        const turn = turnFor(event.promptId, event.at, event.outputSeq);
         tools.set(event.toolUseId, item);
-        turnFor(event.promptId, event.at, event.outputSeq).items.push(item);
+        toolTurns.set(event.toolUseId, turn);
+        turn.items.push(item);
         break;
       }
       case 'tool-result': {
         const item = tools.get(event.toolUseId);
         if (item) {
+          toolTurns.get(event.toolUseId)!.revision++;
           item.status = event.status;
           if (event.error) item.error = event.error;
           // A call can get a second result that adds an outcome, such as a helper's report.
@@ -184,7 +192,11 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
           outputSeq: event.outputSeq,
           ...(event.truncated && { truncated: true }),
         };
-        tools.get(event.toolUseId)?.changes.push(change);
+        const item = tools.get(event.toolUseId);
+        if (item) {
+          item.changes.push(change);
+          toolTurns.get(event.toolUseId)!.revision++;
+        }
         const file = touched(event.path);
         file.readOnly = false;
         file.changes.push(change);
@@ -203,11 +215,15 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
         const total = totalTokens(event.tokens);
         sessionTotal = total;
         const turn = turns.at(-1);
-        if (turn) turn.tokens = total - (startTotals.get(turn) ?? total);
+        if (turn) {
+          turn.tokens = total - (startTotals.get(turn) ?? total);
+          turn.revision++;
+        }
         break;
       }
       case 'attention': {
         const turn = turns.at(-1);
+        if (turn) turn.revision++;
         turn?.items.push({ kind: 'notice', id: `notice-${event.at}-${turn.items.length}`, text: withNote(event.message, event.truncated), outputSeq: event.outputSeq });
         break;
       }
