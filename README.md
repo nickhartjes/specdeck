@@ -8,7 +8,7 @@ SpecDeck lets one person (the **host**) run a coding agent (Claude Code, OpenCod
 
 SpecDeck is a native app built on Tauri 2 with a Rust session engine.
 
-Documentation, for using the app and for running your own sharing service: **[nickhartjes.github.io/specdeck](https://nickhartjes.github.io/specdeck/)** (source in [`docs/site`](docs/site)). What the app does is specified in [`openspec/specs`](openspec/specs); the design decisions are in the archived change [`native-shared-session-mvp`](openspec/changes/archive/2026-10-31-native-shared-session-mvp/design.md), and the work left before 1.0 is in [`openspec/changes/release-and-verification`](openspec/changes/release-and-verification).
+Documentation, for using the app and for running your own sharing service: **[nickhartjes.github.io/specdeck](https://nickhartjes.github.io/specdeck/)** (source in [`docs/site`](docs/site)). What the app does is specified in [`openspec/specs`](openspec/specs); the design decisions are in the [archived changes](openspec/changes/archive), starting with [`native-shared-session-mvp`](openspec/changes/archive/2026-10-31-native-shared-session-mvp/design.md), and the checks still to do on real machines are in [`openspec/changes/release-and-verification`](openspec/changes/release-and-verification).
 
 ## Install
 
@@ -21,6 +21,8 @@ Documentation, for using the app and for running your own sharing service: **[ni
 With Nix, add it to a system or home configuration through the flake's `packages.<system>.specdeck` or `overlays.default`. The Nix package uses the public sharing service, `wss://specdeck.hartj.es/signal`, like the release builds; override it with `specdeck.override { signallingUrl = "wss://…/signal"; }`, or set `SPECDECK_SIGNALLING_URL` when starting the app.
 
 **Can't install?** Viewers can watch in a browser instead: the sharing service serves a web viewer at its own address (for the built-in service, `https://specdeck.hartj.es/`), and hosts' join links open there. Hosting needs the app.
+
+**Something not working?** **Help › Connection Status** (⇧⌘D on macOS, Ctrl+Shift+D on Windows and Linux) shows what the connection is doing, and **Help › Export Diagnostics…** saves a file to attach to a bug report. The file holds connection events and timings, never terminal output, names or addresses. See [Troubleshooting](https://nickhartjes.github.io/specdeck/guide/troubleshooting/).
 
 Releases built before the signing certificates are in place are unsigned, so the system warns on first launch. On macOS, allow SpecDeck once under System Settings > Privacy & Security (Open Anyway), or run `xattr -dr com.apple.quarantine /Applications/SpecDeck.app`; the Homebrew cask says the same when it installs an unsigned release. On Windows, choose More info > Run anyway in the SmartScreen prompt.
 

@@ -9,5 +9,5 @@
 ## 2. Check with the agents
 
 - [x] 2.1 In `just dev` on macOS, host a session with each of Claude Code, Codex, pi, omp, OpenCode and Grok. Type `alpha`, press Shift+Enter, type `beta`, then Enter. Verify that `beta` lands on a new line in the prompt and that Enter sends both lines as one prompt. In a Terminal session, verify that Shift+Enter still runs the command. Record the results in the PR.
-- [ ] 2.2 Do the same check on Windows with at least Claude Code and one other agent. If Shift+Enter sends the prompt there, stop and revise the design before merging. Record the result in the PR.
+- [x] 2.2 Moved to `release-and-verification` 5.13: Do the same check on Windows with at least Claude Code and one other agent. If Shift+Enter sends the prompt there, stop and revise the design before merging. Record the result in the PR.
 - [x] 2.3 Run `just check` and verify it passes.
