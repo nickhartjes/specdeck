@@ -14,7 +14,7 @@ use specdeck_protocol::AgentStatus;
 use specdeck_protocol::control::{
     self, HostMessage, PROTOCOL_VERSION, Participant, RefusalReason, Role, ViewerMessage,
 };
-use specdeck_protocol::frames::{Frame, Record, SessionKey};
+use specdeck_protocol::frames::{Frame, MAX_FRAME_BYTES, Record, SessionKey};
 use specdeck_protocol::invite::{InviteCode, InviteKeys};
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
 use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage, SignalPayload};
@@ -32,7 +32,8 @@ pub const MAX_VIEWERS: u8 = 20;
 const HIGH_WATER: usize = 1024 * 1024;
 
 /// Records read per step; a step behind by more than one record goes as one compressed batch.
-const READ_BYTES: usize = 256 * 1024;
+/// Well under `MAX_FRAME_BYTES`, so even incompressible output fits in one frame.
+const READ_BYTES: usize = 192 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct SharingConfig {
@@ -644,8 +645,12 @@ fn pump(
         if sink.queued() >= HIGH_WATER {
             break;
         }
-        let frame = Frame::Event { seq: admitted.event_cursor as u64, event };
-        sink.send(&key.encode(&frame))?;
+        let frame = key.encode(&Frame::Event { seq: admitted.event_cursor as u64, event });
+        // Events are fitted when they happen; one still too large would be refused and drop
+        // the viewer, so it is skipped. Viewers accept gaps in event sequences.
+        if frame.len() <= MAX_FRAME_BYTES {
+            sink.send(&frame)?;
+        }
         admitted.event_cursor += 1;
     }
     Ok(())

@@ -4,16 +4,20 @@
 //!
 //! The viewer has no way to send input: the only messages it can send are `Hello`, `Resend` and
 //! `Leave`.
+//!
+//! What messages mean is decided by [`ViewerState`], which the web viewer shares; this module is
+//! the connection around it.
 
 use std::time::Duration;
 
 use datachannel::ConnectionState;
-use specdeck_protocol::control::{self, HostMessage, Participant, RefusalReason, ViewerMessage};
-use specdeck_protocol::frames::{Frame, FrameVerifier, Record};
+use specdeck_protocol::control::{self, Participant, RefusalReason, ViewerMessage};
+use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
 use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage, SignalPayload};
 use specdeck_protocol::timeline::TimelineEvent;
+use specdeck_protocol::viewer_state::{ControlUpdate, StreamUpdate, ViewerState};
 use specdeck_protocol::{AgentId, AgentStatus};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::Instant;
@@ -105,19 +109,8 @@ impl ViewerSession {
     pub fn join(code: InviteCode, config: ViewerConfig) -> (Self, UnboundedReceiver<ViewerEvent>) {
         let (control, control_rx) = mpsc::unbounded_channel();
         let (events, event_rx) = mpsc::unbounded_channel();
-        let viewer = Viewer {
-            config,
-            code,
-            events,
-            resume_token: None,
-            rejoin_room: None,
-            verifier: None,
-            next_record: 0,
-            next_event: 0,
-            resend_requested: None,
-            admitted_once: false,
-            joined_at: Instant::now(),
-        };
+        let viewer =
+            Viewer { config, state: ViewerState::new(code), events, joined_at: Instant::now() };
         tokio::spawn(viewer.run(control_rx));
         (Self { control }, event_rx)
     }
@@ -141,18 +134,8 @@ impl Drop for ViewerSession {
 
 struct Viewer {
     config: ViewerConfig,
-    /// The invite code this viewer joined with.
-    code: InviteCode,
+    state: ViewerState,
     events: UnboundedSender<ViewerEvent>,
-    resume_token: Option<[u8; 32]>,
-    /// Where an admitted viewer reconnects; from `Welcome`.
-    rejoin_room: Option<String>,
-    verifier: Option<FrameVerifier>,
-    next_record: u64,
-    next_event: u64,
-    /// Where a `Resend` was asked from, until records arrive from there.
-    resend_requested: Option<u64>,
-    admitted_once: bool,
     joined_at: Instant,
 }
 
@@ -171,7 +154,7 @@ impl Viewer {
         const FIRST_RETRY: Duration = Duration::from_millis(250);
         let mut retry = FIRST_RETRY;
         loop {
-            let admitted_before = self.admitted_once;
+            let admitted_before = self.state.admitted_once();
             let wait = match self.attempt(&mut control).await {
                 Outcome::Final(event) => {
                     let _ = self.events.send(event);
@@ -181,7 +164,7 @@ impl Viewer {
                 Outcome::Interrupted(outage) => outage,
                 // Joining keeps failing, for example because no relay address can be had.
                 Outcome::Retry
-                    if !self.admitted_once
+                    if !self.state.admitted_once()
                         && self.joined_at.elapsed() >= self.config.connect_timeout =>
                 {
                     let _ = self.events.send(ViewerEvent::CannotConnect);
@@ -189,7 +172,7 @@ impl Viewer {
                 }
                 Outcome::Retry => {
                     // Back off only while attempts keep failing.
-                    if self.admitted_once && !admitted_before {
+                    if self.state.admitted_once() && !admitted_before {
                         retry = FIRST_RETRY;
                     }
                     let wait = retry;
@@ -218,7 +201,7 @@ impl Viewer {
             signalling_client::connect(&self.config.signalling_url).await
         else {
             // Before the first admission the service being down is final; later, keep trying.
-            return if self.admitted_once {
+            return if self.state.admitted_once() {
                 Outcome::Retry
             } else {
                 Outcome::Final(ViewerEvent::ServiceUnavailable)
@@ -226,13 +209,7 @@ impl Viewer {
         };
         // A new viewer joins with the code; an admitted one returns through the rejoin room,
         // authenticating with its resume token, which keeps working after the code changed.
-        let (room, auth_key) = match (&self.rejoin_room, self.resume_token) {
-            (Some(room), Some(token)) => (room.clone(), token),
-            _ => {
-                let keys = self.code.keys();
-                (keys.room_id, keys.auth_key)
-            }
-        };
+        let (room, auth_key) = self.state.room_and_key();
         signalling.send(ClientMessage::TurnCredentials);
 
         let mut ice_servers = self.config.peer.ice_servers.clone();
@@ -242,7 +219,7 @@ impl Viewer {
         let mut joined_sent = false;
         let mut connected = false;
         // Joining has one deadline across attempts; each reconnection attempt has its own.
-        let deadline = if self.admitted_once {
+        let deadline = if self.state.admitted_once() {
             Instant::now() + self.config.connect_timeout
         } else {
             self.joined_at + self.config.connect_timeout
@@ -260,7 +237,7 @@ impl Viewer {
                     }
                 },
                 _ = tokio::time::sleep_until(deadline), if !connected => {
-                    return if self.admitted_once { Outcome::Retry } else { Outcome::Final(ViewerEvent::CannotConnect) };
+                    return if self.state.admitted_once() { Outcome::Retry } else { Outcome::Final(ViewerEvent::CannotConnect) };
                 }
                 message = server.recv() => match message {
                     None if !connected => return Outcome::Retry,
@@ -279,7 +256,7 @@ impl Viewer {
                             signalling.send(ClientMessage::Join { room: room.clone() });
                         }
                         // After the host closed the session its room is gone.
-                        ErrorCode::RoomNotFound if self.admitted_once => return Outcome::Final(ViewerEvent::Ended),
+                        ErrorCode::RoomNotFound if self.state.admitted_once() => return Outcome::Final(ViewerEvent::Ended),
                         ErrorCode::RoomNotFound => return Outcome::Final(ViewerEvent::InvalidCode),
                         ErrorCode::RateLimited => return Outcome::Final(ViewerEvent::RateLimited),
                         _ => {}
@@ -331,13 +308,7 @@ impl Viewer {
                         }
                         PeerEvent::Open(Channel::Control) => {
                             connected = true;
-                            let hello = ViewerMessage::Hello {
-                                protocol_version: self.config.protocol_version,
-                                username: self.config.username.clone(),
-                                last_output_seq: self.next_record.checked_sub(1),
-                                last_event_seq: self.next_event.checked_sub(1),
-                                resume_token: self.resume_token,
-                            };
+                            let hello = self.state.hello(self.config.protocol_version, &self.config.username);
                             if current.send(Channel::Control, &control::encode(&hello)).is_err() {
                                 return Outcome::Retry;
                             }
@@ -360,169 +331,53 @@ impl Viewer {
     }
 
     fn handle_control(&mut self, bytes: &[u8]) -> Option<Outcome> {
-        let Ok(message) = control::decode_host(bytes) else { return Some(Outcome::Retry) };
-        match message {
-            HostMessage::Welcome {
+        let event = match self.state.on_control(bytes) {
+            ControlUpdate::Welcome {
                 viewer_id,
-                session_public_key,
-                rejoin_room,
-                cols,
-                rows,
-                resume_token,
                 agent,
                 timeline_supported,
-                ..
-            } => {
-                let Ok(verifier) = FrameVerifier::new(&session_public_key) else {
-                    return Some(Outcome::Retry);
-                };
-                self.verifier = Some(verifier);
-                self.resume_token = Some(resume_token);
-                self.rejoin_room = Some(rejoin_room);
-                let reconnected = self.admitted_once;
-                self.admitted_once = true;
-                let _ = self.events.send(ViewerEvent::Welcome {
-                    viewer_id,
-                    agent,
-                    timeline_supported,
-                    cols,
-                    rows,
-                    reconnected,
-                });
-            }
-            HostMessage::Refused { reason } => {
+                cols,
+                rows,
+                reconnected,
+            } => ViewerEvent::Welcome {
+                viewer_id,
+                agent,
+                timeline_supported,
+                cols,
+                rows,
+                reconnected,
+            },
+            ControlUpdate::Participants(participants) => ViewerEvent::Participants(participants),
+            ControlUpdate::Status(status) => ViewerEvent::Status(status),
+            ControlUpdate::Refused(reason) => {
                 return Some(Outcome::Final(ViewerEvent::Refused(reason)));
             }
-            HostMessage::Participants { participants } => {
-                let _ = self.events.send(ViewerEvent::Participants(participants));
-            }
-            HostMessage::Status { status } => {
-                let _ = self.events.send(ViewerEvent::Status(status));
-            }
-            HostMessage::SessionEnded => return Some(Outcome::Final(ViewerEvent::Ended)),
-        }
+            ControlUpdate::Ended => return Some(Outcome::Final(ViewerEvent::Ended)),
+            ControlUpdate::Retry => return Some(Outcome::Retry),
+        };
+        let _ = self.events.send(event);
         None
     }
 
     /// Applies a stream frame; returns a `Resend` request when records are missing or a frame
     /// failed verification.
     fn handle_frame(&mut self, bytes: &[u8]) -> Option<ViewerMessage> {
-        let verifier = self.verifier.as_ref()?;
-        let records = match verifier.decode(bytes) {
-            Ok(Frame::Record(record)) => vec![record],
-            Ok(Frame::History(records)) => records,
-            Ok(Frame::Event { seq, event }) => {
-                // Events arrive in order on one connection; after a reconnect the host continues
-                // from the last one this viewer had.
-                if seq >= self.next_event {
-                    self.next_event = seq + 1;
-                    let _ = self.events.send(ViewerEvent::Timeline { seq, event });
-                }
-                return None;
-            }
-            Err(_) => return self.request_resend(),
+        let (update, request) = self.state.on_stream(bytes);
+        let event = match update {
+            StreamUpdate::None => None,
+            StreamUpdate::Records(records) => Some(ViewerEvent::Records(records)),
+            StreamUpdate::Timeline { seq, event } => Some(ViewerEvent::Timeline { seq, event }),
         };
-        let fresh: Vec<Record> =
-            records.into_iter().filter(|r| r.seq() >= self.next_record).collect();
-        match fresh.first().map(Record::seq) {
-            None => None,
-            Some(first) if first == self.next_record => {
-                self.next_record = fresh.last().map_or(first, Record::seq) + 1;
-                self.resend_requested = None;
-                let _ = self.events.send(ViewerEvent::Records(fresh));
-                None
-            }
-            // A gap: drop this and ask for everything from the missing record on.
-            Some(_) => self.request_resend(),
+        if let Some(event) = event {
+            let _ = self.events.send(event);
         }
-    }
-
-    /// Asks for records from the next expected one, once until they arrive.
-    fn request_resend(&mut self) -> Option<ViewerMessage> {
-        if self.resend_requested == Some(self.next_record) {
-            return None;
-        }
-        self.resend_requested = Some(self.next_record);
-        Some(ViewerMessage::Resend { from_output_seq: self.next_record })
+        request
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use specdeck_protocol::control::PROTOCOL_VERSION;
-    use specdeck_protocol::frames::SessionKey;
-
     use super::*;
-
-    fn viewer(key: &SessionKey) -> (Viewer, UnboundedReceiver<ViewerEvent>) {
-        let (events, rx) = mpsc::unbounded_channel();
-        let viewer = Viewer {
-            config: ViewerConfig {
-                signalling_url: String::new(),
-                username: "v".into(),
-                peer: PeerConfig::default(),
-                connect_timeout: CONNECT_TIMEOUT,
-                protocol_version: PROTOCOL_VERSION,
-            },
-            code: InviteCode::generate(),
-            events,
-            resume_token: None,
-            rejoin_room: None,
-            verifier: Some(FrameVerifier::new(&key.public_key()).unwrap()),
-            next_record: 0,
-            next_event: 0,
-            resend_requested: None,
-            admitted_once: true,
-            joined_at: Instant::now(),
-        };
-        (viewer, rx)
-    }
-
-    fn output(seq: u64) -> Record {
-        Record::Output { seq, bytes: vec![b'a' + seq as u8] }
-    }
-
-    #[test]
-    fn applies_records_in_order_and_asks_once_for_a_gap() {
-        let key = SessionKey::generate();
-        let (mut viewer, mut events) = viewer(&key);
-        assert_eq!(viewer.handle_frame(&key.encode(&Frame::Record(output(0)))), None);
-        // Record 1 got lost: 2 is dropped and 1 asked for, once.
-        assert_eq!(
-            viewer.handle_frame(&key.encode(&Frame::Record(output(2)))),
-            Some(ViewerMessage::Resend { from_output_seq: 1 })
-        );
-        assert_eq!(viewer.handle_frame(&key.encode(&Frame::Record(output(3)))), None);
-        // The resend arrives as a batch, including a duplicate of 0.
-        let batch = Frame::History(vec![output(0), output(1), output(2), output(3)]);
-        assert_eq!(viewer.handle_frame(&key.encode(&batch)), None);
-
-        let mut applied = Vec::new();
-        while let Ok(ViewerEvent::Records(records)) = events.try_recv() {
-            applied.extend(records.iter().map(Record::seq));
-        }
-        assert_eq!(applied, [0, 1, 2, 3]);
-        assert_eq!(viewer.next_record, 4);
-    }
-
-    #[test]
-    fn tampered_frame_is_dropped_and_asked_for_again() {
-        let key = SessionKey::generate();
-        let (mut viewer, mut events) = viewer(&key);
-        let mut bytes = key.encode(&Frame::Record(output(0)));
-        bytes[10] ^= 1;
-        assert_eq!(viewer.handle_frame(&bytes), Some(ViewerMessage::Resend { from_output_seq: 0 }));
-        assert!(events.try_recv().is_err());
-    }
-
-    #[test]
-    fn frames_from_another_key_are_not_applied() {
-        let key = SessionKey::generate();
-        let (mut viewer, mut events) = viewer(&key);
-        let other = SessionKey::generate();
-        viewer.handle_frame(&other.encode(&Frame::Record(output(0))));
-        assert!(events.try_recv().is_err());
-    }
 
     #[test]
     fn final_events() {

@@ -482,7 +482,12 @@ impl TimelineBuilder {
 
 /// Stamps entries with the terminal position and time they happened.
 pub fn stamp(entry: Entry, output_seq: Option<u64>, at: u64) -> TimelineEvent {
-    TimelineEvent { output_seq: output_seq.map_or(-1, |seq| seq as i64), at, entry }
+    TimelineEvent {
+        output_seq: output_seq.map_or(-1, |seq| seq as i64),
+        at,
+        entry,
+        truncated: false,
+    }
 }
 
 /// A hunk that adds every line of a new file.

@@ -5,7 +5,7 @@ description: What the signalling service and the TURN relay do, and what they ca
 
 SpecDeck sends a session straight from the host to each viewer. The **sharing service** only helps them find each other. It is two programs:
 
-- The **signalling service** (`specdeck-signalling`) matches viewers to hosts by invite code and passes on the messages that set up the connection. It also hands out short-lived credentials for the relay. Apps reach it over a WebSocket, `wss://<domain>/signal`.
+- The **signalling service** (`specdeck-signalling`) matches viewers to hosts by invite code and passes on the messages that set up the connection. It also hands out short-lived credentials for the relay. Apps reach it over a WebSocket, `wss://<domain>/signal`. It also serves the [web viewer](/specdeck/guide/join/#watch-in-a-browser) at `https://<domain>/`, built into the same program, so people who cannot install the app can watch.
 - The **TURN relay** ([coturn](https://github.com/coturn/coturn)) forwards the session's traffic when host and viewer cannot reach each other directly, for example behind strict company firewalls. It uses UDP only.
 
 ```
@@ -30,6 +30,18 @@ They do see:
 - that a session exists, and how many people join it.
 
 That is why SpecDeck asks before it joins through a service other than your own (see [Through another sharing service](/specdeck/guide/join/#through-another-sharing-service)).
+
+## The web viewer's code
+
+The web viewer is different from the app in one way: a browser loads its code from the sharing service on every visit, and that code is what decrypts the session. Whoever runs the service could change the code and read the sessions of everyone who watches in a browser from then on. The app is installed once, and checks every update against SpecDeck's signature.
+
+So watching in a browser means trusting the people who run the sharing service, as well as the host:
+
+- **On your own service**, that is your team. The page comes only from your server: its security policy lets the browser load and connect to nothing else, and each page joins only sessions on its own service.
+- **Building the image yourself** from the repository, as the guides below do, lets you read the exact code your viewers run.
+- **Viewers who use the app** do not depend on the page at all.
+
+The page needs nothing extra to deploy: it is built into the signalling image.
 
 ## Why run your own
 

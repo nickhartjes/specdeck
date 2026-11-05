@@ -34,6 +34,16 @@ export const END_MESSAGES: Record<EndReason, { title: string; text: string; keep
   },
   'update-app': { title: 'Update SpecDeck to join', text: 'The host uses a newer version of SpecDeck than you.', retry: false },
   'host-update': { title: 'The host needs to update', text: 'The host uses an older version of SpecDeck. Ask them to update, then try again.', retry: true },
+  'service-outdated': {
+    title: 'This web viewer needs to be updated',
+    text: 'The host uses a newer SpecDeck than this sharing service’s web viewer. Ask whoever runs the service to update it, or watch in the SpecDeck app.',
+    retry: false,
+  },
+  'webrtc-off': {
+    title: 'This browser blocks the connection',
+    text: 'Its settings turn off WebRTC, which watching a session needs. Allow WebRTC, use another browser, or watch in the SpecDeck app.',
+    retry: false,
+  },
 };
 
 interface State {

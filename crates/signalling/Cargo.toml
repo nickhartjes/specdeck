@@ -18,6 +18,13 @@ sha1 = "0.11"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The web viewer's page, embedded in the binary (web-viewer design decision 5).
+rust-embed = { version = "8.13", optional = true, features = ["debug-embed", "interpolate-folder-path"] }
+
+[features]
+# Serve the web viewer. Needs the page built first: just web-wasm, then pnpm --dir app/ui build:web.
+web-viewer = ["dep:rust-embed"]
 
 [dev-dependencies]
 tokio-tungstenite = "0.30"
+tower = { version = "0.5", features = ["util"] }

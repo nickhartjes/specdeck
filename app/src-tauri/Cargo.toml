@@ -32,6 +32,10 @@ tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"
 specdeck-protocol.workspace = true
 # Only for the error type of the service check; the connection itself is specdeck-core's.
 tokio-tungstenite = { version = "0.30", default-features = false }
+# Asks the sharing service whether it serves the web viewer. The updater already brings this
+# reqwest, with the same TLS.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 tempfile = "3"

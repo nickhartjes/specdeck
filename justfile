@@ -22,6 +22,27 @@ check:
     pnpm test
     node --test 'scripts/*.test.mjs'
 
+# Build the web viewer's WebAssembly package (crates/web/pkg) with the wasm-bindgen CLI from mise.toml
+web-wasm:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The CLI must be exactly the version the crate pins, or the generated bindings do not match.
+    want=$(sed -n 's/^wasm-bindgen = "=\(.*\)"$/\1/p' crates/web/Cargo.toml)
+    have=$(wasm-bindgen --version | cut -d' ' -f2)
+    [ "$want" = "$have" ] || { echo "wasm-bindgen CLI is $have, crates/web needs $want: run mise install" >&2; exit 1; }
+    cargo build -p specdeck-web --target wasm32-unknown-unknown --release --locked
+    wasm-bindgen --target web --out-dir crates/web/pkg target/wasm32-unknown-unknown/release/specdeck_web.wasm
+
+# Run the web viewer's WebAssembly tests in Node
+web-test:
+    cargo test -p specdeck-web --target wasm32-unknown-unknown --locked
+
+# Build and check the web viewer: its WebAssembly core and tests, the page, and the service with the page built in
+check-web: web-wasm web-test
+    cargo clippy -p specdeck-web --target wasm32-unknown-unknown --all-targets -- -D warnings
+    pnpm --dir app/ui build:web
+    cargo clippy -p specdeck-signalling --all-targets --features web-viewer -- -D warnings
+
 # Measure 20 viewers' effect on the host's terminal, alone so other work does not skew it
 capacity:
     cargo test -p specdeck-core --test sharing twenty_viewers_under_continuous_output -- --ignored --nocapture
@@ -47,7 +68,11 @@ local-up:
     #!/usr/bin/env bash
     set -euo pipefail
     test -f deploy/k8s/base/turn-secret.env || (umask 077 && echo "TURN_SECRET=$(openssl rand -hex 32)" > deploy/k8s/base/turn-secret.env)
-    docker build -f docker/signalling.Dockerfile -t specdeck-signalling:local .
+    # The image's npm steps use your npm config when there is one, for networks that only allow a
+    # company registry; it is a build secret, never stored in the image.
+    npmrc=(); [ -f "$HOME/.npmrc" ] && npmrc=(--secret "id=npmrc,src=$HOME/.npmrc")
+    # Written so an empty list also works in macOS's bash 3.2 under `set -u`.
+    docker build ${npmrc[@]+"${npmrc[@]}"} -f docker/signalling.Dockerfile -t specdeck-signalling:local .
     scripts/local-kubectl.sh apply -k deploy/k8s/local
     # The image tag does not change between builds: restart to pick up the new image.
     scripts/local-kubectl.sh -n specdeck1-local rollout restart deployment/specdeck-signalling

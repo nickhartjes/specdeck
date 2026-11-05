@@ -13,6 +13,122 @@ pub struct TimelineEvent {
     pub at: u64,
     #[serde(flatten)]
     pub entry: Entry,
+    /// Cut by [`fit`] to fit in one message; participants say it is shown in part. Older apps
+    /// ignore the field and show what was sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+
+/// Most bytes of JSON an event may take: a frame (`MAX_FRAME_BYTES`) also holds its header and
+/// signature, with room to spare.
+pub const MAX_EVENT_JSON_BYTES: usize = 240 * 1024;
+
+/// The event as it is sent: unchanged when its JSON fits in `budget` bytes, otherwise with its
+/// large parts cut until it does, and marked `truncated` (`web-viewer` design decision 8).
+pub fn fit(mut event: TimelineEvent, budget: usize) -> TimelineEvent {
+    if json_len(&event) <= budget {
+        return event;
+    }
+    event.truncated = true;
+    // Each round allows the entry's large parts less, since escaping can make JSON longer than
+    // the text in it.
+    let mut allowed = budget;
+    loop {
+        shrink(&mut event.entry, allowed);
+        if allowed == 0 || json_len(&event) <= budget {
+            return event;
+        }
+        allowed /= 2;
+    }
+}
+
+fn json_len(event: &TimelineEvent) -> usize {
+    serde_json::to_vec(event).map_or(usize::MAX, |json| json.len())
+}
+
+/// Cuts the parts of `entry` that can grow large to about `allowed` bytes in all.
+fn shrink(entry: &mut Entry, allowed: usize) {
+    match entry {
+        Entry::FileChange { hunks, .. } => keep_lines(hunks, allowed),
+        Entry::Document { text, .. } => *text = None,
+        Entry::Prompt { text, .. }
+        | Entry::Message { text, .. }
+        | Entry::Response { text, .. }
+        | Entry::Attention { message: text }
+        | Entry::TimelineUnavailable { reason: text }
+        | Entry::UsageUnavailable { reason: text } => cut(text, allowed),
+        Entry::ToolCall { input, .. } => {
+            if allowed == 0 {
+                input.clear();
+            } else {
+                let strings = input.values().map(count_strings).sum::<usize>().max(1);
+                input.values_mut().for_each(|value| cut_strings(value, allowed / strings));
+            }
+        }
+        Entry::ToolResult { error, outcome, .. } => {
+            if let Some(error) = error {
+                cut(error, allowed / 2);
+            }
+            if let Some(ToolOutcome::Report { text, truncated }) = outcome {
+                *truncated |= text.len() > allowed / 2;
+                cut(text, allowed / 2);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Keeps whole lines from the start, about `allowed` bytes of them, and corrects the last kept
+/// hunk's line counts.
+fn keep_lines(hunks: &mut Vec<DiffHunk>, allowed: usize) {
+    // Each line also costs its quotes and comma in JSON.
+    let mut left = allowed;
+    let mut kept_hunks = 0;
+    for hunk in hunks.iter_mut() {
+        let fits = hunk
+            .lines
+            .iter()
+            .take_while(|line| {
+                let cost = line.len() + 3;
+                let fits = cost <= left;
+                left = left.saturating_sub(cost);
+                fits
+            })
+            .count();
+        if fits < hunk.lines.len() {
+            hunk.lines.truncate(fits);
+            hunk.old_lines = hunk.lines.iter().filter(|l| !l.starts_with('+')).count() as u32;
+            hunk.new_lines = hunk.lines.iter().filter(|l| !l.starts_with('-')).count() as u32;
+            kept_hunks += usize::from(fits > 0);
+            break;
+        }
+        kept_hunks += 1;
+    }
+    hunks.truncate(kept_hunks);
+}
+
+fn cut(text: &mut String, allowed: usize) {
+    if text.len() > allowed {
+        text.truncate(text.floor_char_boundary(allowed));
+    }
+}
+
+fn count_strings(value: &Value) -> usize {
+    match value {
+        Value::String(_) => 1,
+        Value::Array(items) => items.iter().map(count_strings).sum(),
+        Value::Object(fields) => fields.values().map(count_strings).sum(),
+        _ => 0,
+    }
+}
+
+fn cut_strings(value: &mut Value, allowed: usize) {
+    match value {
+        Value::String(text) => cut(text, allowed),
+        Value::Array(items) => items.iter_mut().for_each(|item| cut_strings(item, allowed)),
+        Value::Object(fields) => fields.values_mut().for_each(|field| cut_strings(field, allowed)),
+        _ => {}
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -292,6 +408,7 @@ mod tests {
                 outcome: None,
                 permission: None,
             },
+            truncated: false,
         };
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(
@@ -456,5 +573,161 @@ mod tests {
             r#final: true,
         };
         assert_eq!(serde_json::to_value(&entry).unwrap()["final"], true);
+    }
+
+    fn event(entry: Entry) -> TimelineEvent {
+        TimelineEvent { output_seq: 0, at: 1, entry, truncated: false }
+    }
+
+    /// A created file of about 1.15 MB, as in `web-viewer` task 1.1.
+    fn created_file() -> Entry {
+        let lines: Vec<String> = (0..20_000)
+            .map(|i| format!("+const VALUE_{i}: &str = \"some generated line of code\";"))
+            .collect();
+        Entry::FileChange {
+            prompt_id: "p".into(),
+            tool_use_id: "t".into(),
+            path: "big.rs".into(),
+            change: FileChangeKind::Created,
+            hunks: vec![DiffHunk {
+                old_start: 0,
+                old_lines: 0,
+                new_start: 1,
+                new_lines: 20_000,
+                lines,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_large_created_file_keeps_whole_lines_from_the_start() {
+        let fitted = fit(event(created_file()), MAX_EVENT_JSON_BYTES);
+        assert!(fitted.truncated);
+        assert!(serde_json::to_vec(&fitted).unwrap().len() <= MAX_EVENT_JSON_BYTES);
+        let Entry::FileChange { hunks, .. } = &fitted.entry else { panic!("not a file change") };
+        let [hunk] = hunks.as_slice() else { panic!("one hunk") };
+        assert!(hunk.lines.len() > 1_000, "keeps as much as fits: {}", hunk.lines.len());
+        assert_eq!(hunk.lines[0], "+const VALUE_0: &str = \"some generated line of code\";");
+        assert_eq!(hunk.new_lines as usize, hunk.lines.len());
+        assert_eq!(hunk.old_lines, 0);
+    }
+
+    #[test]
+    fn an_edit_keeps_its_line_counts_right_when_cut() {
+        let lines: Vec<String> = (0..30_000)
+            .map(|i| format!("{}line {i} of an edited file", [' ', '-', '+'][i % 3]))
+            .collect();
+        let entry = Entry::FileChange {
+            prompt_id: "p".into(),
+            tool_use_id: "t".into(),
+            path: "a.txt".into(),
+            change: FileChangeKind::Edited,
+            hunks: vec![
+                DiffHunk {
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec![" kept".into()],
+                },
+                DiffHunk {
+                    old_start: 10,
+                    old_lines: 20_000,
+                    new_start: 10,
+                    new_lines: 20_000,
+                    lines,
+                },
+            ],
+        };
+        let fitted = fit(event(entry), MAX_EVENT_JSON_BYTES);
+        let Entry::FileChange { hunks, .. } = &fitted.entry else { panic!("not a file change") };
+        assert_eq!(hunks.len(), 2);
+        let last = &hunks[1];
+        let count = |skip: char| last.lines.iter().filter(|l| !l.starts_with(skip)).count() as u32;
+        assert_eq!(last.old_lines, count('+'));
+        assert_eq!(last.new_lines, count('-'));
+    }
+
+    #[test]
+    fn every_large_entry_ends_under_the_budget() {
+        let big = "\"quoted\" text\n".repeat(30_000);
+        let entries = [
+            Entry::Document {
+                prompt_id: "p".into(),
+                tool_use_id: "t".into(),
+                path: "a.md".into(),
+                text: Some(big.clone()),
+            },
+            Entry::Prompt { prompt_id: "p".into(), text: big.clone() },
+            Entry::Message {
+                prompt_id: "p".into(),
+                message_id: "m".into(),
+                text: big.clone(),
+                r#final: true,
+            },
+            Entry::Response { prompt_id: "p".into(), text: big.clone() },
+            Entry::ToolResult {
+                prompt_id: "p".into(),
+                tool_use_id: "t".into(),
+                status: ToolStatus::Succeeded,
+                error: Some(big.clone()),
+                outcome: Some(ToolOutcome::Report { text: big.clone(), truncated: false }),
+                permission: None,
+            },
+            Entry::ToolCall {
+                prompt_id: "p".into(),
+                tool_use_id: "t".into(),
+                tool_name: "Bash".into(),
+                input: serde_json::json!({ "command": big, "nested": [{ "a": big }], "n": 3 })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            },
+        ];
+        for entry in entries {
+            let fitted = fit(event(entry), MAX_EVENT_JSON_BYTES);
+            assert!(fitted.truncated);
+            let len = serde_json::to_vec(&fitted).unwrap().len();
+            assert!(len <= MAX_EVENT_JSON_BYTES, "{} bytes: {:?}", len, fitted.entry);
+        }
+    }
+
+    #[test]
+    fn a_cut_report_says_so_in_its_outcome() {
+        let entry = Entry::ToolResult {
+            prompt_id: "p".into(),
+            tool_use_id: "t".into(),
+            status: ToolStatus::Succeeded,
+            error: None,
+            outcome: Some(ToolOutcome::Report { text: "x".repeat(400_000), truncated: false }),
+            permission: None,
+        };
+        let Entry::ToolResult { outcome: Some(ToolOutcome::Report { truncated, .. }), .. } =
+            fit(event(entry), MAX_EVENT_JSON_BYTES).entry
+        else {
+            panic!("not a report")
+        };
+        assert!(truncated);
+    }
+
+    #[test]
+    fn events_that_fit_are_unchanged_and_say_nothing_about_it() {
+        let small = event(Entry::Prompt { prompt_id: "p".into(), text: "hello".into() });
+        assert_eq!(fit(small.clone(), MAX_EVENT_JSON_BYTES), small);
+        assert!(serde_json::to_value(&small).unwrap().get("truncated").is_none());
+    }
+
+    #[test]
+    fn the_mark_is_ignored_where_it_is_not_known() {
+        // Older apps' `TimelineEvent` has no `truncated`: with `flatten`, fields it does not know
+        // go on to the entry, which must ignore them.
+        let json = serde_json::json!({
+            "outputSeq": 0, "at": 1, "kind": "prompt", "promptId": "p", "text": "hi", "truncated": true
+        });
+        assert_eq!(
+            serde_json::from_value::<Entry>(json.clone()).unwrap(),
+            Entry::Prompt { prompt_id: "p".into(), text: "hi".into() }
+        );
+        assert!(serde_json::from_value::<TimelineEvent>(json).unwrap().truncated);
     }
 }

@@ -1,0 +1,163 @@
+// The web viewer's bridge (`web-viewer` design decision 4): watching only, through the sharing
+// service that served the page. The viewer's name and view stay in this browser's storage; host,
+// folder, agent and update calls are not part of the web viewer and fail.
+
+import type { Bridge } from '../api/bridge';
+import type { JoinLink, Profile, View } from '../api/types';
+import { Connection, type Platform, type ViewerCore } from './connection';
+
+/** Keys in the browser's storage. */
+export const STORAGE_KEYS = { username: 'specdeck.username', view: 'specdeck.view' } as const;
+
+export interface WebBridgeOptions {
+  /** This page's sharing service, `wss://…/signal`; the only one it joins through. */
+  service: string;
+  /** The shared Rust core for a code; throws for what is not a code. */
+  core: (code: string) => ViewerCore;
+  /** Reads a join link of either form; undefined when it is not one. */
+  parseJoinLink: (link: string) => { code: string; service?: string } | undefined;
+  /** `localStorage`, or null where the browser keeps nothing. */
+  storage: Storage | null;
+  platform?: Platform;
+}
+
+/** The host name of a `wss://host/…/signal` URL. */
+export function serviceName(service: string): string {
+  return service.replace(/^wss?:\/\//, '').replace(/\/.*$/, '');
+}
+
+function read(storage: Storage | null, key: string): string | null {
+  try {
+    return storage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function write(storage: Storage | null, key: string, value: string) {
+  try {
+    storage?.setItem(key, value);
+  } catch {
+    // Private windows and blocked storage: the page works, and asks again next time.
+  }
+}
+
+function readView(storage: Storage | null): View | null {
+  const text = read(storage, STORAGE_KEYS.view);
+  if (!text) return null;
+  try {
+    const view = JSON.parse(text) as Partial<View>;
+    return typeof view.terminal === 'boolean' && (view.steps === 'summary' || view.steps === 'details')
+      ? { terminal: view.terminal, steps: view.steps }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+const notInTheWebViewer = () => Promise.reject(new Error('The web viewer can only watch sessions.'));
+
+export function webBridge(options: WebBridgeOptions): Bridge {
+  const { storage, service } = options;
+  let connection: Connection | null = null;
+  // Kept here as well, so a browser that stores nothing still remembers them until reload.
+  let username = read(storage, STORAGE_KEYS.username);
+  let view = readView(storage);
+
+  const profile = (): Profile => ({
+    username,
+    recentFolders: [],
+    lastAgent: null,
+    agents: [],
+    hosting: false,
+    notifications: false,
+    view,
+    translucent: false,
+    platform: 'web',
+    sharingService: null,
+    effectiveService: service,
+    builtInService: service,
+    serviceOverridden: true,
+    inSession: connection !== null,
+    updatesItself: false,
+    checkUpdates: false,
+    screenReader: false,
+  });
+
+  const readJoinLink = (link: string): JoinLink => {
+    const parsed = options.parseJoinLink(link);
+    if (!parsed) return { error: 'That link is not a SpecDeck invite. Ask the host for a new one.' };
+    if (parsed.service && parsed.service !== service) {
+      return { code: parsed.code, server: parsed.service, serverName: serviceName(parsed.service) };
+    }
+    return { code: parsed.code };
+  };
+
+  return {
+    getProfile: () => Promise.resolve(profile()),
+    agentVersions: () => Promise.resolve([]),
+    openInstallPage: notInTheWebViewer,
+    setUsername: (name) => {
+      username = name.trim();
+      write(storage, STORAGE_KEYS.username, username);
+      return Promise.resolve(profile());
+    },
+    setNotifications: () => Promise.resolve(profile()),
+    setCheckUpdates: () => Promise.resolve(profile()),
+    setScreenReader: () => Promise.resolve(profile()),
+    updateStatus: () => Promise.resolve({ state: 'disabled' }),
+    onUpdate: () => () => {},
+    restartToUpdate: notInTheWebViewer,
+    setView: (next) => {
+      view = next;
+      write(storage, STORAGE_KEYS.view, JSON.stringify(next));
+      return Promise.resolve(profile());
+    },
+    setSharingService: notInTheWebViewer,
+    checkSharingService: notInTheWebViewer,
+    removeRecentFolder: notInTheWebViewer,
+    chooseFolder: notInTheWebViewer,
+    startHosting: notInTheWebViewer,
+    hostAttach: notInTheWebViewer,
+    hostInput: notInTheWebViewer,
+    hostResize: notInTheWebViewer,
+    hostSetColors: notInTheWebViewer,
+    hostNewCode: notInTheWebViewer,
+    hostRemoveViewer: notInTheWebViewer,
+    hostSetViewerLimit: notInTheWebViewer,
+    hostClose: notInTheWebViewer,
+    joinSession: async (code, server, terminal, events) => {
+      // Each page joins only through its own service (spec: Only the page's own service).
+      if (server && server !== service) throw new Error(`This invite is for ${serviceName(server)}. Open it there.`);
+      if (!username) throw new Error('Set your name first.');
+      let core: ViewerCore;
+      try {
+        core = options.core(code);
+      } catch {
+        throw new Error('That is not an invite code. It looks like 7K2M-9QXH-4TPA.');
+      }
+      connection?.leave();
+      connection = new Connection({
+        url: service,
+        username,
+        core,
+        platform: options.platform,
+        onRecords: (bytes) => terminal(bytes.slice().buffer),
+        onEvent: (event) => {
+          if (event.type === 'ended') connection = null;
+          events(event);
+        },
+      });
+    },
+    leaveSession: () => {
+      connection?.leave();
+      connection = null;
+      return Promise.resolve();
+    },
+    takeJoinLink: () => Promise.resolve(null),
+    readJoinLink: (link) => Promise.resolve(readJoinLink(link)),
+    copyText: (text) => navigator.clipboard.writeText(text),
+    startScreenShown: () => Promise.resolve(),
+    onMenu: () => () => {},
+  };
+}

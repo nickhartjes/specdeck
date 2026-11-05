@@ -1,7 +1,14 @@
-target/
-node_modules/
-app/ui/node_modules/
-app/ui/dist/
-app/src-tauri/gen/
+# Patterns here match from the repository root only, so build output that can appear deeper is
+# written with **/.
 .git/
+# Claude Code worktrees: each is a whole checkout with its own build output, many GB in all.
+.claude/
 .local-dev/
+**/target/
+**/node_modules/
+**/dist/
+app/src-tauri/gen/
+# The web viewer's builds; the image builds its own (docker/signalling.Dockerfile).
+crates/web/pkg/
+app/ui/dist-web/
+docs/site/.astro/

@@ -4,7 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', 'target/**', 'app/src-tauri/gen/**', 'docs/site/.astro/**'] },
+  { ignores: ['**/dist/**', '**/node_modules/**', 'target/**', 'app/src-tauri/gen/**', 'docs/site/.astro/**', 'crates/web/pkg/**', '**/dist-web/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

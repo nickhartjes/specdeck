@@ -5,6 +5,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import type { TerminalStep } from './stream';
+import { clampViewerFont, viewerFontSize } from './fontScale';
 import { isNewlineKey } from './keys';
 import { isMac } from '../menu/menu';
 
@@ -64,9 +65,6 @@ const PALETTE_DARK = {
 };
 
 const FONT_SIZE = 13;
-/** The range a viewer's text is scaled in to fit the host's terminal in its pane. */
-const MIN_VIEWER_FONT = 6;
-const MAX_VIEWER_FONT = 48;
 /** Room kept for the scrollbar beside a viewer's scaled terminal. */
 const SCROLLBAR_ROOM = 12;
 
@@ -216,13 +214,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         let size: number;
         if (key !== chosenFor) {
           chosenFor = key;
-          size = (current * width) / drawn;
+          size = viewerFontSize(current, width, drawn);
         } else if (drawn > width) {
-          size = current - 0.25;
+          size = clampViewerFont(current - 0.25);
         } else {
           return;
         }
-        size = Math.min(MAX_VIEWER_FONT, Math.max(MIN_VIEWER_FONT, Math.floor(size * 4) / 4));
         if (size !== current) term.options.fontSize = size;
       };
       // Scrolls the pane just enough to show the cursor's line, while the viewer follows the

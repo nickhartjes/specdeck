@@ -33,8 +33,21 @@ const OTHERS: [string, string][] = [
   ['Keyboard shortcuts', 'F1'],
 ];
 
-/** The app's keyboard shortcuts for this platform. */
-export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
+/**
+ * The web viewer's: the browser keeps Ctrl+1–3 for its tabs and does its own zooming
+ * (`web-viewer` design decision 4).
+ */
+const WEB: [string, string][] = [
+  ['Find in the terminal and timeline', isMac ? '⌘F' : 'Ctrl+F'],
+  ['Next or previous match', isMac ? 'Return / ⇧Return' : 'Enter / Shift+Enter'],
+  ['Timeline, Files, People', isMac ? '⌥1 ⌥2 ⌥3' : 'Alt+1 Alt+2 Alt+3'],
+  ['Move between toolbar, terminal and side panel', isMac ? 'F6 / ⇧F6' : 'F6 / Shift+F6'],
+  ['Zoom in, zoom out, actual size', 'Your browser’s zoom'],
+  ['Keyboard shortcuts', '?'],
+];
+
+/** The app's keyboard shortcuts for this platform, or the web viewer's. */
+export function ShortcutsDialog({ onClose, web = false }: { onClose: () => void; web?: boolean }) {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     close.current?.focus();
@@ -47,7 +60,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
       <div className="dialog shortcuts" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
         <h2 id="shortcuts-title">Keyboard shortcuts</h2>
         <dl>
-          {(isMac ? MAC : OTHERS).map(([what, keys]) => (
+          {(web ? WEB : isMac ? MAC : OTHERS).map(([what, keys]) => (
             <div key={what}>
               <dt>{what}</dt>
               <dd>
@@ -56,7 +69,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
             </div>
           ))}
         </dl>
-        {!isMac && <p>In your own terminal, Ctrl+C without a selection interrupts the agent, as in any terminal.</p>}
+        {!isMac && !web && <p>In your own terminal, Ctrl+C without a selection interrupts the agent, as in any terminal.</p>}
         <div className="actions">
           <button ref={close} className="btn primary" onClick={onClose}>
             Done

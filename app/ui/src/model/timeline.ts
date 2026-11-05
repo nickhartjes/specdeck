@@ -13,6 +13,16 @@ export interface FileChange {
   toolUseId: string;
   at: number;
   outputSeq: number;
+  /** Cut by the host to fit in one message: only the start of the diff is here. */
+  truncated?: boolean;
+}
+
+/** Said wherever the host cut an entry to fit in one message. */
+export const SHOWN_IN_PART = 'Shown in part: too large to send in full.';
+
+/** `text`, with the note when it was cut. */
+function withNote(text: string, truncated: boolean | undefined): string {
+  return truncated ? `${text}\n\n${SHOWN_IN_PART}` : text;
 }
 
 export interface TextItem {
@@ -37,6 +47,8 @@ export interface ToolItem {
   outputSeq: number;
   /** When the call started, in milliseconds since the epoch. */
   at: number;
+  /** The host cut the call's input to fit in one message. */
+  truncated?: boolean;
 }
 
 /** The agent waited for the host here, for example to allow a tool. */
@@ -113,7 +125,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
     switch (event.kind) {
       case 'prompt': {
         const turn = turnFor(event.promptId, event.at, event.outputSeq);
-        turn.prompt = event.text;
+        turn.prompt = withNote(event.text, event.truncated);
         turn.at = event.at;
         turn.outputSeq = event.outputSeq;
         break;
@@ -121,17 +133,18 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
       case 'message': {
         // Live text arrives in pieces per message.
         const existing = texts.get(event.messageId);
+        const text = withNote(event.text, event.truncated);
         if (existing) {
-          existing.text += event.text;
+          existing.text += text;
         } else {
-          const item: TextItem = { kind: 'text', id: event.messageId, text: event.text, outputSeq: event.outputSeq };
+          const item: TextItem = { kind: 'text', id: event.messageId, text, outputSeq: event.outputSeq };
           texts.set(event.messageId, item);
           turnFor(event.promptId, event.at, event.outputSeq).items.push(item);
         }
         break;
       }
       case 'response':
-        turnFor(event.promptId, event.at, event.outputSeq).response = event.text;
+        turnFor(event.promptId, event.at, event.outputSeq).response = withNote(event.text, event.truncated);
         break;
       case 'tool-call': {
         const item: ToolItem = {
@@ -143,6 +156,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
           changes: [],
           outputSeq: event.outputSeq,
           at: event.at,
+          ...(event.truncated && { truncated: true }),
         };
         tools.set(event.toolUseId, item);
         turnFor(event.promptId, event.at, event.outputSeq).items.push(item);
@@ -168,6 +182,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
           toolUseId: event.toolUseId,
           at: event.at,
           outputSeq: event.outputSeq,
+          ...(event.truncated && { truncated: true }),
         };
         tools.get(event.toolUseId)?.changes.push(change);
         const file = touched(event.path);
@@ -193,7 +208,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
       }
       case 'attention': {
         const turn = turns.at(-1);
-        turn?.items.push({ kind: 'notice', id: `notice-${event.at}-${turn.items.length}`, text: event.message, outputSeq: event.outputSeq });
+        turn?.items.push({ kind: 'notice', id: `notice-${event.at}-${turn.items.length}`, text: withNote(event.message, event.truncated), outputSeq: event.outputSeq });
         break;
       }
       case 'usage-unavailable':

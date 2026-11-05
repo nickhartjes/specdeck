@@ -31,6 +31,8 @@ interface State {
   code: string | null;
   /** The sharing service, which join links name. */
   service: string;
+  /** The service serves the web viewer, so join links open in a browser. */
+  webViewer: boolean;
   participants: Participant[];
   status: AgentStatus;
   viewerLimit: number;
@@ -47,6 +49,7 @@ const initial: State = {
   sharing: 'connecting',
   code: null,
   service: '',
+  webViewer: false,
   participants: [],
   status: 'starting',
   viewerLimit: 20,
@@ -61,6 +64,8 @@ export function hostReducer(state: State, event: HostEvent | { type: 'limit'; li
       return { ...state, ...event, timeline: event.timeline, request: requestIn(event.timeline, event.status) };
     case 'sharing':
       return { ...state, sharing: event.state, code: event.code ?? (event.state === 'connecting' ? null : state.code) };
+    case 'web-viewer':
+      return { ...state, webViewer: event.available };
     case 'participants':
       return { ...state, participants: event.participants };
     case 'status':
@@ -167,7 +172,7 @@ export function HostScreen({ view, onView, screenReader = false, onEnded , updat
           sharing={state.sharing}
           code={state.code}
           onCopyCode={() => state.code && copy(formatCode(state.code), 'Invite code copied')}
-          onCopyLink={() => state.code && copy(joinLink(state.code, state.service), 'Join link copied')}
+          onCopyLink={() => state.code && copy(joinLink(state.code, state.service, state.webViewer), 'Join link copied')}
           onNewCode={() => bridge.hostNewCode()}
         />
         <button className="btn danger" onClick={() => setConfirmEnd(true)}>

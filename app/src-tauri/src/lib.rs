@@ -4,7 +4,6 @@ mod migrate;
 mod notify;
 mod services;
 mod settings;
-mod terminal;
 mod tray;
 mod updates;
 mod viewer;
@@ -1299,6 +1298,22 @@ mod tests {
         assert_eq!(old, JoinLink { code: Some("7K2M-9QXH-4TPA".into()), ..JoinLink::default() });
 
         assert!(read_link("https://example.com/7K2M-9QXH-4TPA", own).error.is_some());
+    }
+
+    #[test]
+    fn web_join_links_are_read_like_app_links() {
+        // The link a host copies when its service serves the web viewer (web-viewer decision 6).
+        let own = "wss://own.example.com/signal";
+        let same = read_link("https://own.example.com/join#7K2M-9QXH-4TPA", own);
+        assert_eq!(same, JoinLink { code: Some("7K2M-9QXH-4TPA".into()), ..JoinLink::default() });
+
+        // Another service's: the app asks before joining through it, as for other links.
+        let other = read_link("https://other.example.com/join#7k2m9qxh4tpa", own);
+        assert_eq!(other.code.as_deref(), Some("7K2M-9QXH-4TPA"));
+        assert_eq!(other.server.as_deref(), Some("wss://other.example.com/signal"));
+        assert_eq!(other.server_name.as_deref(), Some("other.example.com"));
+
+        assert!(read_link("https://own.example.com/join?code=7K2M-9QXH-4TPA", own).error.is_some());
     }
 
     #[test]

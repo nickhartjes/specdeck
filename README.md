@@ -20,6 +20,8 @@ Documentation, for using the app and for running your own sharing service: **[ni
 
 With Nix, add it to a system or home configuration through the flake's `packages.<system>.specdeck` or `overlays.default`. The Nix package uses the public sharing service, `wss://specdeck.hartj.es/signal`, like the release builds; override it with `specdeck.override { signallingUrl = "wss://…/signal"; }`, or set `SPECDECK_SIGNALLING_URL` when starting the app.
 
+**Can't install?** Viewers can watch in a browser instead: the sharing service serves a web viewer at its own address (for the built-in service, `https://specdeck.hartj.es/`), and hosts' join links open there. Hosting needs the app.
+
 Releases built before the signing certificates are in place are unsigned, so the system warns on first launch. On macOS, allow SpecDeck once under System Settings > Privacy & Security (Open Anyway), or run `xattr -dr com.apple.quarantine /Applications/SpecDeck.app`; the Homebrew cask says the same when it installs an unsigned release. On Windows, choose More info > Run anyway in the SmartScreen prompt.
 
 ## Repository layout
@@ -28,9 +30,10 @@ Releases built before the signing certificates are in place are unsigned, so the
 |---|---|
 | [`crates/protocol`](crates/protocol) | Wire protocol shared by hosts and viewers: messages, frames, signing, invite codes (no I/O) |
 | [`crates/core`](crates/core) | Session engine: runs the agent in a pty, output log, timeline, WebRTC connections |
-| [`crates/signalling`](crates/signalling) | Matchmaking service and TURN credentials |
+| [`crates/signalling`](crates/signalling) | Matchmaking service and TURN credentials; serves the web viewer when built with `web-viewer` |
+| [`crates/web`](crates/web) | The viewer logic of `crates/protocol` as WebAssembly, for the web viewer |
 | [`app/src-tauri`](app/src-tauri) | Tauri shell: windows, menus, tray, commands |
-| [`app/ui`](app/ui) | Web UI (React, TypeScript, Vite) |
+| [`app/ui`](app/ui) | Web UI (React, TypeScript, Vite), for the app and the web viewer (`web.html`, `src/web`) |
 | [`openspec`](openspec) | Specs and change proposals |
 | [`deploy/compose`](deploy/compose) | Docker Compose setup for signalling, coturn and Caddy on one server |
 | [`deploy/k8s`](deploy/k8s) | Kubernetes manifests for signalling and coturn (`base`, `local`) ([README](deploy/k8s/README.md)) |
@@ -40,7 +43,7 @@ Releases built before the signing certificates are in place are unsigned, so the
 
 ## Development
 
-Tools are pinned in [`mise.toml`](mise.toml): Rust, Node, pnpm, just and cmake (needed to build libdatachannel). With [mise](https://mise.jdx.dev) installed, run `mise install`. On Linux, Tauri also needs the WebKitGTK development packages (see the CI workflow for the list).
+Tools are pinned in [`mise.toml`](mise.toml): Rust (with the `wasm32-unknown-unknown` target), Node, pnpm, just, cmake (needed to build libdatachannel) and the `wasm-bindgen` CLI. With [mise](https://mise.jdx.dev) installed, run `mise install`. On Linux, Tauri also needs the WebKitGTK development packages (see the CI workflow for the list).
 
 ```sh
 just install   # install JavaScript dependencies
@@ -50,7 +53,10 @@ just capacity  # measure how 20 viewers affect the host's terminal (run alone)
 just fmt       # format the Rust code
 just package   # build installers for this platform (target/release/bundle)
 just docs      # documentation site with live reload
+just check-web # web viewer: WebAssembly core and tests, the page (app/ui/dist-web), the service with it
 ```
+
+To run the web viewer against a local service, run `just web-wasm` and `pnpm --dir app/ui build:web`, then `cargo run -p specdeck-signalling --features web-viewer` and open `http://127.0.0.1:8080/`.
 
 Run `just` to list all recipes. To try sharing on your own machine (Colima with Kubernetes, `colima start --kubernetes`):
 

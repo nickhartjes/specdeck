@@ -257,6 +257,7 @@ export function demoBridge(screen: string): Bridge {
         sharing: 'ready',
         code: '7K2M9QXH4TPA',
         service: 'wss://specdeck.hartj.es/signal',
+        webViewer: false,
         participants: demoParticipants,
         status: 'working',
         viewerLimit: 20,

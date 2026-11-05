@@ -3,7 +3,11 @@ title: Install
 description: Install SpecDeck on macOS, Windows or Linux.
 ---
 
-Everyone in a session needs SpecDeck: the host and every viewer. Download it from the [latest release](https://github.com/nickhartjes/specdeck/releases/latest), or use a package manager.
+The host needs SpecDeck, and so does every viewer who wants the app. Download it from the [latest release](https://github.com/nickhartjes/specdeck/releases/latest), or use a package manager.
+
+:::tip[Can't install? Watch in your browser]
+Viewers who cannot install apps, for example on a company laptop, can [watch in a browser](/specdeck/guide/join/#watch-in-a-browser) instead: open the host's link, or the sharing service's address, in current Chrome, Edge, Firefox or Safari. Hosting needs the app.
+:::
 
 | Platform | How |
 |---|---|

@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::{ChildKiller, MasterPty, PtySize};
-use specdeck_protocol::timeline::{Entry, TimelineEvent};
+use specdeck_protocol::timeline::{Entry, MAX_EVENT_JSON_BYTES, TimelineEvent, fit};
 use specdeck_protocol::{AgentId, AgentStatus};
 use tempfile::NamedTempFile;
 use tokio::sync::{mpsc, watch};
@@ -587,7 +587,8 @@ impl Pump {
 
     fn emit_entry(&self, entry: Entry) {
         let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-        let event = stamp(entry, self.log.latest(), at);
+        // Cut to fit in one message, so every viewer can receive it (web-viewer decision 8).
+        let event = fit(stamp(entry, self.log.latest(), at), MAX_EVENT_JSON_BYTES);
         self.timeline.write().unwrap().push(event.clone());
         self.view.changed();
         let _ = self.events.send(SessionEvent::Timeline(event));
