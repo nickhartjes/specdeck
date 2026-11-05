@@ -63,6 +63,20 @@ docs:
 docs-build:
     cd docs/site && pnpm install --frozen-lockfile && pnpm build
 
+# Make the diagnostics how-to video (docs/video/diagnostics/renders/); needs Chrome, Python 3 and ffmpeg
+video:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd docs/video
+    pnpm install
+    [ -x .venv/bin/python ] || python3 -m venv .venv
+    .venv/bin/pip install --quiet -r requirements.txt
+    cd diagnostics
+    node capture.mjs
+    ../.venv/bin/python speak.py
+    node build.mjs
+    pnpm exec hyperframes render --output renders/specdeck-diagnostics.mp4
+
 # Deploy signalling and coturn to Colima's local Kubernetes (deploy/k8s/local); needs `colima start --kubernetes`
 local-up:
     #!/usr/bin/env bash

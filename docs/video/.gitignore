@@ -1,0 +1,6 @@
+.venv/
+# Made by the scripts in each video's folder
+*/assets/
+*/index.html
+*/renders/
+*/.hyperframes/

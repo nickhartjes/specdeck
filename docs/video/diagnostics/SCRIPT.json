@@ -1,0 +1,13 @@
+[
+  { "id": "intro", "text": "When a shared SpecDeck session misbehaves, two tools tell you why: the Connection status panel, and a diagnostics file you can attach to a bug report." },
+  { "id": "open", "text": "Open the panel from the Help menu, Connection Status, or press Shift Command D." },
+  { "id": "verdict", "text": "The top line sums it up in plain words. Here, two viewers are connected, one of them through the relay." },
+  { "id": "viewers", "text": "Each viewer gets its own rows: whether it connects directly or through the relay, how much was sent, and how much is still waiting to send." },
+  { "id": "terminal", "text": "The terminal and window sections describe the state of your screen. Never what is on it." },
+  { "id": "export", "text": "To report a problem, click Export Diagnostics, and choose where to save the file." },
+  { "id": "privacy", "text": "The file holds the last seven days of connection events and timings. No terminal output, no timeline, no invite codes, names, paths or addresses. Nothing is sent anywhere; you attach it yourself." },
+  { "id": "viewer", "text": "Viewers have the same panel. It shows the connection path, and why the previous attempt ended." },
+  { "id": "reconnect", "text": "If the connection seems stuck, Reconnect drops it and connects again at once, keeping your place." },
+  { "id": "verbose", "text": "For a problem that is hard to catch, turn on Verbose logging in Settings. It also records how much each connection sends per second, but never what is sent." },
+  { "id": "outro", "text": "Then reproduce the problem, export the diagnostics, and attach the file to your bug report." }
+]

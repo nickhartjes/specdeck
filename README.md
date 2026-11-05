@@ -38,6 +38,7 @@ Releases built before the signing certificates are in place are unsigned, so the
 | [`deploy/compose`](deploy/compose) | Docker Compose setup for signalling, coturn and Caddy on one server |
 | [`deploy/k8s`](deploy/k8s) | Kubernetes manifests for signalling and coturn (`base`, `local`) ([README](deploy/k8s/README.md)) |
 | [`docs/site`](docs/site) | Documentation site (Astro Starlight), published to GitHub Pages by [`docs.yml`](.github/workflows/docs.yml) |
+| [`docs/video`](docs/video) | How-to videos, made from the UI's demo mode with HyperFrames and a local voice ([README](docs/video/README.md)) |
 | [`docker`](docker) | Signalling service image |
 | [`scripts`](scripts) | Helper scripts used by the `just` recipes and CI |
 
@@ -53,6 +54,7 @@ just capacity  # measure how 20 viewers affect the host's terminal (run alone)
 just fmt       # format the Rust code
 just package   # build installers for this platform (target/release/bundle)
 just docs      # documentation site with live reload
+just video     # the diagnostics how-to video (docs/video/diagnostics/renders)
 just check-web # web viewer: WebAssembly core and tests, the page (app/ui/dist-web), the service with it
 ```
 

@@ -390,6 +390,10 @@ export function demoBridge(screen: string): Bridge {
     reconnectViewer: async () => {},
     heartbeat: async () => {},
     exportDiagnostics: async () => true,
-    onMenu: () => () => {},
+    // The demo has no native menu; window.demoMenu({ id: 'connection-status' }) stands in for it.
+    onMenu: (handler) => {
+      (window as { demoMenu?: typeof handler }).demoMenu = handler;
+      return () => {};
+    },
   };
 }
