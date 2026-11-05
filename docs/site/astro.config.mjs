@@ -11,6 +11,7 @@ export default defineConfig({
       description: 'Run a coding agent with your team watching along.',
       logo: { src: './src/assets/logo.svg' },
       favicon: '/favicon.svg',
+      customCss: ['./src/styles/custom.css'],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/nickhartjes/specdeck' }],
       editLink: { baseUrl: 'https://github.com/nickhartjes/specdeck/edit/main/docs/site/' },
       lastUpdated: true,

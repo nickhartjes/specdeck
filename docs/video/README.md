@@ -17,8 +17,10 @@ just video getting-started    # one
 ```
 
 This needs Google Chrome, Python 3 and ffmpeg, and the app's own `pnpm install`. Each video ends
-up in `<video>/renders/specdeck-<video>.mp4`. The first run downloads the Kokoro model (about
-340 MB) to `~/.cache/kokoro`.
+up in `<video>/renders/specdeck-<video>.mp4`, and a smaller copy with a poster in
+`docs/site/public/video/`, which the documentation pages play and the main README links to;
+commit those after a change. The first run downloads the Kokoro model (about 340 MB) to
+`~/.cache/kokoro`.
 
 Each video's folder has:
 

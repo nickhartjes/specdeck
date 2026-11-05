@@ -7,6 +7,8 @@ SpecDeck lets one person (the **host**) run a coding agent, or just a terminal, 
 
 Viewers are read-only. Only the host types into the agent, and the agent runs on the host's own login.
 
+<video class="video" controls preload="none" poster="/specdeck/video/getting-started.jpg" src="/specdeck/video/getting-started.mp4" aria-label="Getting started with SpecDeck: hosting a session, sharing the invite code and a teammate joining (1 minute, narrated, with captions)"></video>
+
 ## What you need
 
 **Everyone** needs [SpecDeck](/specdeck/install/) for macOS, Windows or Linux, and an internet connection. SpecDeck connects through your team's sharing service, so no VPN is needed. It uses UDP; on networks that block UDP entirely (some company networks), joining does not work and SpecDeck says so.

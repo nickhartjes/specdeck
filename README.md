@@ -10,6 +10,14 @@ SpecDeck is a native app built on Tauri 2 with a Rust session engine.
 
 Documentation, for using the app and for running your own sharing service: **[nickhartjes.github.io/specdeck](https://nickhartjes.github.io/specdeck/)** (source in [`docs/site`](docs/site)). What the app does is specified in [`openspec/specs`](openspec/specs); the design decisions are in the archived change [`native-shared-session-mvp`](openspec/changes/archive/2026-10-31-native-shared-session-mvp/design.md), and the work left before 1.0 is in [`openspec/changes/release-and-verification`](openspec/changes/release-and-verification).
 
+## Videos
+
+Short narrated walkthroughs, with captions; select one to watch it in the documentation.
+
+| [![Getting started](docs/site/public/video/getting-started.jpg)](https://nickhartjes.github.io/specdeck/guide/first-steps/) | [![Following a session](docs/site/public/video/following.jpg)](https://nickhartjes.github.io/specdeck/guide/follow/) | [![Diagnostics](docs/site/public/video/diagnostics.jpg)](https://nickhartjes.github.io/specdeck/guide/troubleshooting/#see-what-the-connection-is-doing) |
+|---|---|---|
+| **Getting started** (1 min): host a session, share the code, a teammate joins | **Following a session** (1½ min): Overview or Developer, steps, search and files | **Diagnostics** (1½ min): Connection Status and a file for bug reports |
+
 ## Install
 
 | Platform | How |
