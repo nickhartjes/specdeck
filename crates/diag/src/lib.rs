@@ -2,6 +2,9 @@
 //! written as JSON lines to daily files in the app's log folder and kept in memory for the
 //! Connection status panel. `specdeck-core` emits the events; nothing here records content.
 //!
+//! The app and each session process (`session-processes` design decision 7) keep their own log
+//! files in the same folder, told apart by their file prefix.
+//!
 //! The log never stops a session: when the folder cannot be written, events stay in memory only
 //! and the panel says so.
 
@@ -27,8 +30,13 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Registry, reload};
 
-/// Log files are `specdeck.log.<yyyy-mm-dd>`, one per day (UTC).
-const FILE_PREFIX: &str = "specdeck.log";
+/// The app's log files are `specdeck.log.<yyyy-mm-dd>`, one per day (UTC).
+pub const APP_LOG: &str = "specdeck.log";
+
+/// The file prefix of session `id`'s log: `specdeck-session-<id>.log.<yyyy-mm-dd>`.
+pub fn session_log(id: u32) -> String {
+    format!("specdeck-session-{id}.log")
+}
 /// Events the panel shows.
 const RECENT: usize = 500;
 /// Files older than this are removed.
@@ -57,14 +65,20 @@ pub struct Diagnostics {
 /// Which events are recorded: state changes, or with Verbose also traffic.
 fn targets(verbose: bool) -> Targets {
     let level = if verbose { Level::DEBUG } else { Level::INFO };
-    Targets::new().with_target("specdeck_core", level).with_target("specdeck_app_lib", level)
+    // This crate records the window's own events (`ui.*`, `terminal.state`) under its name.
+    Targets::new()
+        .with_target("specdeck_core", level)
+        .with_target("specdeck_diag", level)
+        .with_target("specdeck_app_lib", level)
+        .with_target("specdeck_session", level)
 }
 
 impl Diagnostics {
-    /// Sets up the log in `dir` and returns the subscriber to install. Without a usable folder
-    /// the log is kept in memory only.
-    pub fn new(dir: PathBuf) -> (Self, impl tracing::Subscriber + Send + Sync) {
-        let (writer, guard, file_error) = match open_folder(&dir) {
+    /// Sets up the log in `dir`, in daily files named `<prefix>.<date>` ([`APP_LOG`] or
+    /// [`session_log`]), and returns the subscriber to install. Without a usable folder the log
+    /// is kept in memory only.
+    pub fn new(dir: PathBuf, prefix: &str) -> (Self, impl tracing::Subscriber + Send + Sync) {
+        let (writer, guard, file_error) = match open_folder(&dir, prefix) {
             Ok(appender) => {
                 let (writer, guard) = tracing_appender::non_blocking(appender);
                 (Some(writer), Some(guard), None)
@@ -193,7 +207,7 @@ impl Diagnostics {
 }
 
 /// Creates the folder, readable by this user only, and opens today's file.
-fn open_folder(dir: &Path) -> Result<RollingFileAppender, String> {
+fn open_folder(dir: &Path, prefix: &str) -> Result<RollingFileAppender, String> {
     // The kind of error only: its text would hold the folder's path.
     let kind = |error: std::io::Error| format!("{:?}", error.kind());
     std::fs::create_dir_all(dir).map_err(kind)?;
@@ -204,7 +218,7 @@ fn open_folder(dir: &Path) -> Result<RollingFileAppender, String> {
     }
     RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
-        .filename_prefix(FILE_PREFIX)
+        .filename_prefix(prefix)
         .build(dir)
         .map_err(|_| "CannotOpenFile".to_owned())
 }
@@ -518,7 +532,7 @@ fn log_files(dir: &Path) -> Vec<LogFile> {
         .flatten()
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
-            let rest = name.strip_prefix(FILE_PREFIX)?;
+            let rest = name.strip_prefix(APP_LOG)?;
             let metadata = entry.metadata().ok().filter(|m| m.is_file())?;
             let date = rest.strip_prefix('.').and_then(parse_date).or_else(|| {
                 metadata.modified().ok().map(|time| OffsetDateTime::from(time).date())
@@ -569,7 +583,7 @@ mod tests {
     use super::*;
 
     fn day(date: Date) -> String {
-        format!("{FILE_PREFIX}.{date}")
+        format!("{APP_LOG}.{date}")
     }
 
     fn noon(date: Date) -> SystemTime {
@@ -586,10 +600,29 @@ mod tests {
     }
 
     #[test]
+    fn a_session_process_logs_to_its_own_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), &session_log(7));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "specdeck_session", "session.attached");
+            tracing::info!(target: "specdeck_core::diag", "signalling.connected");
+        });
+        drop(diagnostics); // flushes the file
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names.len(), 1);
+        assert!(names[0].starts_with("specdeck-session-7.log."), "{names:?}");
+        let text = std::fs::read_to_string(dir.path().join(&names[0])).unwrap();
+        assert!(text.contains("session.attached") && text.contains("signalling.connected"));
+    }
+
+    #[test]
     fn events_reach_the_panel_and_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let logs = dir.path().join("logs");
-        let (diagnostics, subscriber) = Diagnostics::new(logs.clone());
+        let (diagnostics, subscriber) = Diagnostics::new(logs.clone(), APP_LOG);
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!(target: "specdeck_core::diag", peer = 3u64, reason = "too_large", "peer.send_failed");
             tracing::debug!(target: "specdeck_core::diag", messages = 1u64, "host.traffic");
@@ -625,7 +658,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let blocker = dir.path().join("file");
         std::fs::write(&blocker, "").unwrap();
-        let (diagnostics, subscriber) = Diagnostics::new(blocker.join("logs"));
+        let (diagnostics, subscriber) = Diagnostics::new(blocker.join("logs"), APP_LOG);
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(target: "specdeck_core::diag", "signalling.connected");
         });
@@ -638,7 +671,7 @@ mod tests {
     #[test]
     fn the_panel_keeps_the_latest_events() {
         let dir = tempfile::tempdir().unwrap();
-        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned());
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
         tracing::subscriber::with_default(subscriber, || {
             for i in 0..(RECENT as u64 + 10) {
                 tracing::info!(target: "specdeck_core::diag", i, "viewer.resend");
@@ -703,7 +736,7 @@ mod tests {
         let logs = dir.path().join("logs");
         std::fs::create_dir(&logs).unwrap();
         std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let (_diagnostics, _subscriber) = Diagnostics::new(logs.clone());
+        let (_diagnostics, _subscriber) = Diagnostics::new(logs.clone(), APP_LOG);
         let mode = std::fs::metadata(&logs).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
     }
@@ -724,7 +757,7 @@ mod tests {
     #[test]
     fn the_terminal_state_is_kept_and_recorded_when_it_changes() {
         let dir = tempfile::tempdir().unwrap();
-        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned());
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
         tracing::subscriber::with_default(subscriber, || {
             diagnostics.report_terminal("main", snapshot());
             diagnostics.report_terminal("main", snapshot());
@@ -757,7 +790,7 @@ mod tests {
     #[test]
     fn the_status_is_this_apps_own_side() {
         let dir = tempfile::tempdir().unwrap();
-        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned());
+        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
         let host =
             diagnostics.status("main", SessionStatus::Host { sharing: SharingStatus::default() });
         let host = serde_json::to_value(host).unwrap();
@@ -789,7 +822,7 @@ mod tests {
     fn an_export_holds_the_state_and_a_week_of_log() {
         let dir = tempfile::tempdir().unwrap();
         let logs = dir.path().join("logs");
-        let (diagnostics, _subscriber) = Diagnostics::new(logs.clone());
+        let (diagnostics, _subscriber) = Diagnostics::new(logs.clone(), APP_LOG);
         let today = OffsetDateTime::now_utc().date();
         for (days_ago, line) in [(9, "too old"), (2, "older"), (1, "newer")] {
             let date = today - time::Duration::days(days_ago);
@@ -838,7 +871,7 @@ mod tests {
     #[test]
     fn an_export_includes_the_sessions_of_other_windows() {
         let dir = tempfile::tempdir().unwrap();
-        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned());
+        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
         let host = SessionStatus::Host { sharing: SharingStatus::default() };
         let header = ExportHeader::new(diagnostics.status("main", SessionStatus::None), "a", "a")
             .with_other_sessions(vec![host]);
@@ -850,7 +883,7 @@ mod tests {
     #[test]
     fn the_built_in_service_exports_as_default() {
         let dir = tempfile::tempdir().unwrap();
-        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned());
+        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
         let built_in = "wss://built-in.example.com/signal";
         let header =
             ExportHeader::new(diagnostics.status("main", SessionStatus::None), built_in, built_in);
@@ -860,7 +893,7 @@ mod tests {
     #[test]
     fn an_export_that_cannot_be_written_says_so_without_the_path() {
         let dir = tempfile::tempdir().unwrap();
-        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().join("logs"));
+        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().join("logs"), APP_LOG);
         let header = ExportHeader::new(diagnostics.status("main", SessionStatus::None), "a", "a");
         let path = dir.path().join("missing-folder").join("export.jsonl");
         let error = diagnostics.export(&path, &header).unwrap_err();
@@ -936,7 +969,7 @@ mod tests {
     #[test]
     fn the_status_shows_the_windows_size() {
         let dir = tempfile::tempdir().unwrap();
-        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned());
+        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
         diagnostics.heartbeat(
             "main",
             Heartbeat { visible: true, timeline_events: 12, elements: Some(3_400) },
@@ -950,7 +983,7 @@ mod tests {
     #[test]
     fn each_window_is_watched_on_its_own() {
         let dir = tempfile::tempdir().unwrap();
-        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned());
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
         let beat =
             |events| Heartbeat { visible: true, timeline_events: events, elements: Some(10) };
         tracing::subscriber::with_default(subscriber, || {

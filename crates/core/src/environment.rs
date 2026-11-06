@@ -18,10 +18,34 @@ const MARKER: &str = "__SPECDECK_ENV__";
 /// How long the login shell may take before falling back to the app's environment.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Environment variables for starting an agent.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// Environment variables for starting an agent. Serializable, so the app can pass the
+/// environment it detected to a session process (`session-processes` design decision 2): as a
+/// list of pairs, since JSON map keys must be strings and these are not always UTF-8.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Environment {
+    #[serde(with = "pairs")]
     vars: BTreeMap<OsString, OsString>,
+}
+
+mod pairs {
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        vars: &BTreeMap<OsString, OsString>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(vars)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<OsString, OsString>, D::Error> {
+        let pairs = Vec::<(OsString, OsString)>::deserialize(deserializer)?;
+        Ok(pairs.into_iter().collect())
+    }
 }
 
 impl Environment {
@@ -130,6 +154,18 @@ fn parse_env_output(output: &[u8]) -> Option<Environment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn survives_a_trip_through_json() {
+        let mut env: Environment =
+            [("PATH", "/usr/bin:/bin"), ("LANG", "nl_NL.UTF-8")].into_iter().collect();
+        env.set("EMPTY", "");
+        // A value that is not UTF-8, as a Unix environment may hold.
+        #[cfg(unix)]
+        env.set("RAW", <OsString as std::os::unix::ffi::OsStringExt>::from_vec(vec![0x66, 0xff]));
+        let json = serde_json::to_string(&env).unwrap();
+        assert_eq!(serde_json::from_str::<Environment>(&json).unwrap(), env);
+    }
 
     #[test]
     fn parses_env_after_marker_and_skips_startup_noise() {

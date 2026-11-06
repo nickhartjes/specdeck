@@ -4748,6 +4748,7 @@ dependencies = [
  "serde",
  "serde_json",
  "specdeck-core",
+ "specdeck-diag",
  "specdeck-protocol",
  "specdeck-server",
  "tauri",
@@ -4761,12 +4762,9 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tempfile",
- "time",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
  "window-vibrancy",
 ]
 
@@ -4795,6 +4793,32 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "which",
+]
+
+[[package]]
+name = "specdeck-diag"
+version = "1.6.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "specdeck-core",
+ "tempfile",
+ "time",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "specdeck-local"
+version = "1.6.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -1,4 +1,5 @@
-mod diagnostics;
+// The diagnostic log, shared with the session processes.
+pub(crate) use specdeck_diag as diagnostics;
 mod host;
 mod menu;
 mod migrate;
@@ -1567,7 +1568,7 @@ pub fn run() {
         .setup(|app| {
             // First, so everything after it is recorded.
             let log_dir = profile_dir(app.path().app_log_dir()?);
-            let (diagnostics, subscriber) = Diagnostics::new(log_dir.clone());
+            let (diagnostics, subscriber) = Diagnostics::new(log_dir.clone(), diagnostics::APP_LOG);
             let _ = tracing::subscriber::set_global_default(subscriber);
             std::thread::spawn(move || {
                 loop {
@@ -1781,7 +1782,7 @@ mod tests {
         AppState {
             settings_path: PathBuf::from("settings.json"),
             settings: Mutex::new(settings),
-            diagnostics: Diagnostics::new(dir.join("logs")).0,
+            diagnostics: Diagnostics::new(dir.join("logs"), diagnostics::APP_LOG).0,
             data_dir: PathBuf::from("sessions"),
             services: Services {
                 built_in: "wss://built-in.example.com/signal".into(),
