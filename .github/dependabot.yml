@@ -1,0 +1,38 @@
+# Dependabot only opens security updates here; Renovate (renovate.json) does the version updates.
+# `open-pull-requests-limit: 0` turns version updates off without affecting security updates.
+# The groups match Renovate's, so a fix lands in the same pull request shape either way.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      # The RustCrypto crates share their trait crates, so they only build when updated together.
+      RustCrypto:
+        applies-to: security-updates
+        patterns: [digest, hkdf, hmac, sha1, sha2, ed25519-dalek]
+
+  - package-ecosystem: npm
+    directories: [/, /docs/site, /docs/video]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      # The workflows' actions in one pull request, as Renovate does.
+      github-actions:
+        applies-to: security-updates
+        patterns: ["*"]
