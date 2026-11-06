@@ -182,6 +182,10 @@ async fn handle(connection: Connection, shared: Arc<Shared>) {
     let number = shared.connection.fetch_add(1, Ordering::SeqCst) + 1;
     *shared.app.lock().unwrap() = Some(outgoing.clone());
     tracing::info!(session = shared.options.id, protocol = peer.0, "session.app_attached");
+    // What the tray shows now, then what happened while no app was attached.
+    if let Some(summary) = shared.runtime().and_then(|runtime| runtime.summary()) {
+        shared.send(&Event::Notice { notice: HostNotice::Summary(summary) });
+    }
     for notice in std::mem::take(&mut *shared.held.lock().unwrap()) {
         shared.send(&Event::Notice { notice });
     }
@@ -269,6 +273,10 @@ async fn run(
                     events.send(frame).is_ok()
                 }),
             );
+            Ok(())
+        }
+        Command::Detach => {
+            runtime.detach();
             Ok(())
         }
         Command::Input { data } => runtime.input(&data),

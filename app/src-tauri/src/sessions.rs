@@ -82,6 +82,18 @@ impl<H, V> Sessions<H, V> {
         Ok(())
     }
 
+    /// Adds hosted session `id` without a window: one found running when the app started
+    /// (`session-processes` design decision 4). New numbers continue above it.
+    pub fn insert_windowless(
+        &mut self,
+        id: SessionId,
+        session: Session<H, V>,
+        name: Option<String>,
+    ) {
+        self.sessions.insert(id, Entry { session, name });
+        self.next = self.next.max(id + 1);
+    }
+
     /// Shows the hosted session `id` in `window`, which shows nothing yet: a reopened window.
     pub fn attach(&mut self, window: &str, id: SessionId) {
         if self.sessions.contains_key(&id) && !self.windows.contains_key(window) {
@@ -287,6 +299,16 @@ mod tests {
         sessions.insert("main", 2, host("api"), None).unwrap();
         sessions.attach("main", 1);
         assert_eq!(sessions.host_of("main").as_deref(), Some(&"api"));
+    }
+
+    #[test]
+    fn a_session_found_at_start_waits_for_a_window_and_keeps_its_number() {
+        let mut sessions = Test::default();
+        sessions.insert_windowless(7, host("shop"), Some("shop".into()));
+        assert_eq!(sessions.windowless_host(), Some(7));
+        assert_eq!(sessions.next_id(), 8, "new sessions never reuse a running one's number");
+        sessions.attach("main", 7);
+        assert_eq!(sessions.host_of("main").as_deref(), Some(&"shop"));
     }
 
     #[test]

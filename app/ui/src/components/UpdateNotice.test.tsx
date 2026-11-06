@@ -65,15 +65,12 @@ describe('update notice', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('disk full');
   });
 
-  it('asks the host before ending the session for everyone', async () => {
+  it('restarts a host without asking: the hosted session keeps running', async () => {
     const { bridge } = app('host');
     await userEvent.click(await screen.findByRole('button', { name: /Update ready/ }));
-    const question = screen.getByRole('alertdialog', { name: 'End the session for everyone and restart?' });
-    expect(question).toHaveTextContent('SpecDeck 1.2.1');
+    await waitFor(() => expect(bridge.restartToUpdate).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(await violations()).toEqual([]);
-    expect(bridge.restartToUpdate).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole('button', { name: 'End Session and Restart' }));
-    expect(bridge.restartToUpdate).toHaveBeenCalledOnce();
   });
 
   it('lets a viewer cancel, staying in the session with the update still offered', async () => {

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use specdeck_core::sharing::SharingStatus;
+
 use specdeck_core::viewer::{ViewerPhase, ViewerStatus};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime};
@@ -333,8 +333,13 @@ impl MouseTracking {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum SessionStatus {
-    Host { sharing: SharingStatus },
-    Viewer { viewer: ViewerStatus },
+    /// A hosted session's `SharingStatus`, as its session process sent it.
+    Host {
+        sharing: Value,
+    },
+    Viewer {
+        viewer: ViewerStatus,
+    },
     None,
 }
 
@@ -741,6 +746,11 @@ mod tests {
         assert_eq!(mode & 0o777, 0o700);
     }
 
+    /// A host's sharing status as a session process sends it.
+    fn host_sharing() -> Value {
+        serde_json::to_value(specdeck_core::sharing::SharingStatus::default()).unwrap()
+    }
+
     fn snapshot() -> TerminalSnapshot {
         TerminalSnapshot {
             screen: Screen::Normal,
@@ -791,8 +801,7 @@ mod tests {
     fn the_status_is_this_apps_own_side() {
         let dir = tempfile::tempdir().unwrap();
         let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
-        let host =
-            diagnostics.status("main", SessionStatus::Host { sharing: SharingStatus::default() });
+        let host = diagnostics.status("main", SessionStatus::Host { sharing: host_sharing() });
         let host = serde_json::to_value(host).unwrap();
         assert_eq!(host["session"]["role"], "host");
         assert_eq!(host["session"]["sharing"]["service"], "connecting");
@@ -872,7 +881,7 @@ mod tests {
     fn an_export_includes_the_sessions_of_other_windows() {
         let dir = tempfile::tempdir().unwrap();
         let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
-        let host = SessionStatus::Host { sharing: SharingStatus::default() };
+        let host = SessionStatus::Host { sharing: host_sharing() };
         let header = ExportHeader::new(diagnostics.status("main", SessionStatus::None), "a", "a")
             .with_other_sessions(vec![host]);
         let header = serde_json::to_value(header).unwrap();

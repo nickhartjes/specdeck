@@ -4743,12 +4743,14 @@ dependencies = [
 name = "specdeck-app"
 version = "1.6.0"
 dependencies = [
+ "libc",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
  "specdeck-core",
  "specdeck-diag",
+ "specdeck-local",
  "specdeck-protocol",
  "specdeck-server",
  "specdeck-session",

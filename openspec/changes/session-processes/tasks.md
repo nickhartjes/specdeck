@@ -26,7 +26,7 @@
 - [ ] 4.2 Route every host command, `host_attach` (forwarding `HostEvent` JSON and terminal frames to the UI's channels unchanged), and notices to the tray and notifications through the client. Verify `pnpm test` passes unchanged, and that in `just dev` the timeline, viewer count, notifications and Copy Invite Code work for a hosted Claude Code session.
 - [ ] 4.3 At start, read the run folder, reopen a window attached to each live session of this or the previous release, list older ones in the tray with only End session, and remove stale entries (design decision 4). Keep the live sessions' files in `remove_leftover_session_files`. Verify with unit tests of the run-folder reading and cleanup choices, and in `just dev` that killing the app (`kill -9`) and starting it again reopens both of two hosted sessions with their scrollback while a viewer stays connected.
 - [ ] 4.4 Quit: ask once as today, send `end` to every session (also older ones), wait for them and exit. Restart to update: ask only about watched sessions, detach, install and restart; a failed install leaves sessions alone. Update `restartQuestion` in `app/ui/src/model/restart.ts` so hosted sessions are no longer part of the question. Verify with the updated unit tests (`quit_question` and `restart.test.ts`), and in `just dev` that Quit ends a hosted session for its viewer.
-- [ ] 4.5 Delete a version's copy in `session-runtime` at app start when no live session uses it. Verify with a unit test of the choice.
+- [x] 4.5 Delete a version's copy in `session-runtime` at app start when no live session uses it. Verify with a unit test of the choice.
 
 ## 5. Diagnostics in the app
 

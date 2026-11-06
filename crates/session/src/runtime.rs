@@ -335,6 +335,11 @@ impl HostRuntime {
         })
     }
 
+    /// What the tray shows now, for an app that connects later.
+    pub fn summary(&self) -> Option<Summary> {
+        self.ui.lock().unwrap().last_summary.clone()
+    }
+
     /// Whether the sharing service serves the web viewer, so join links open in a browser
     /// (`web-viewer` design decision 6). The app checks it, which keeps an HTTP client out of the
     /// session process.

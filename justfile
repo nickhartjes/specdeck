@@ -8,8 +8,10 @@ default:
 install:
     pnpm install
 
-# Start the desktop app in development mode
+# Start the desktop app in development mode. Hosted sessions run as their own process, which the
+# app finds next to its executable (`session-processes`).
 dev:
+    cargo build -p specdeck-session
     pnpm tauri dev
 
 # Check formatting, lint, type-check and test everything
@@ -130,6 +132,7 @@ local-dev: local-up
     stop() { trap - EXIT INT TERM; for pgid in $(jobs -p); do kill -TERM -- -"$pgid" 2>/dev/null || true; done; }
     trap stop EXIT
     trap 'exit 130' INT TERM
+    cargo build -p specdeck-session
     scripts/local-kubectl.sh -n specdeck1-local port-forward svc/specdeck-server 18081:8080 >/dev/null </dev/null &
     until curl -sf http://127.0.0.1:18081/health >/dev/null; do sleep 0.25; done
     export SPECDECK_SIGNALLING_URL=ws://127.0.0.1:18081/signal

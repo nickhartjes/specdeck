@@ -57,6 +57,9 @@ pub struct Entry {
     pub folder: String,
     pub agent: AgentId,
     pub summary: Summary,
+    /// False for a session an older SpecDeck started, which this one can only end
+    /// (`session-processes` design decision 3).
+    pub controllable: bool,
 }
 
 /// The first line of the menu: what the agent is doing.
@@ -121,6 +124,14 @@ fn session_lines<R: Runtime>(
     let mut lines = Vec::new();
     if with_folder {
         lines.push(info("folder", format!("Hosting {}", entry.folder))?);
+    }
+    if !entry.controllable {
+        lines.extend([
+            info("older", "Started by an older SpecDeck".into())?,
+            separator()?,
+            action(Action::End, "End Session…".into(), true)?,
+        ]);
+        return Ok(lines);
     }
     lines.extend([
         info("state", state_line(entry.agent, &entry.summary))?,
@@ -251,6 +262,7 @@ mod tests {
             folder: folder.into(),
             agent: AgentId::ClaudeCode,
             summary: summary(AgentStatus::Working, 2, SharingState::Ready),
+            controllable: true,
         };
         assert_eq!(tooltip(&[entry(1, "shop")]), "SpecDeck: hosting shop · 2 viewers");
         assert_eq!(tooltip(&[entry(1, "shop"), entry(2, "api")]), "SpecDeck: hosting 2 sessions");

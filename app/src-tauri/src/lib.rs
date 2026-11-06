@@ -2,6 +2,7 @@
 pub(crate) use specdeck_diag as diagnostics;
 // The hosted session, shared with the session process (`session-processes`).
 use specdeck_session::runtime as host;
+mod client;
 mod menu;
 mod migrate;
 mod notify;
@@ -22,6 +23,7 @@ use serde::Serialize;
 use specdeck_core::agent;
 use specdeck_core::environment::{Environment, PROBE_TIMEOUT};
 use specdeck_core::peer::PeerConfig;
+
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::service;
 use specdeck_protocol::{AgentId, AgentStatus};
@@ -38,8 +40,9 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::StateFlags;
 
+use crate::client::{Paths, SessionClient};
 use crate::diagnostics::{Diagnostics, ExportHeader, Heartbeat, SessionStatus, TerminalSnapshot};
-use crate::host::{HostEvent, HostNotice, HostRuntime, SharingState, StartOptions, Summary};
+use crate::host::{HostNotice, SharingState, Summary};
 use crate::services::{ServiceCheck, Services};
 use crate::sessions::{MAIN_WINDOW, Session, SessionId, Sessions, is_session_window};
 use crate::settings::{Settings, View, ZOOM_DEFAULT, zoom_in, zoom_out};
@@ -53,12 +56,13 @@ struct AppState {
     settings_path: PathBuf,
     settings: Mutex<Settings>,
     diagnostics: Diagnostics,
-    data_dir: PathBuf,
+    /// Where session processes keep their files (`session-processes`).
+    paths: Paths,
     services: Services,
     /// The user's login-shell environment, read once in the background at start.
     environment: Arc<OnceLock<Environment>>,
     /// Every hosted and watched session, and the window that shows each.
-    sessions: Mutex<Sessions<HostRuntime, ViewerRuntime>>,
+    sessions: Mutex<Sessions<SessionClient, ViewerRuntime>>,
     /// The hosted sessions as the tray shows them, in the order they started.
     tray: Mutex<BTreeMap<SessionId, tray::Entry>>,
     /// Which session each notification was about, for a click on it.
@@ -94,7 +98,7 @@ impl AppState {
     }
 
     /// The hosted session `window` shows, or an error to return.
-    fn host_of(&self, window: &str) -> Result<Arc<HostRuntime>, String> {
+    fn host_of(&self, window: &str) -> Result<Arc<SessionClient>, String> {
         self.sessions.lock().unwrap().host_of(window).ok_or_else(|| "No session is running.".into())
     }
 
@@ -340,18 +344,23 @@ async fn set_screen_reader(
     Ok(profile(&state, window.label()))
 }
 
-/// This app's own side of a session.
-fn status_of(session: &Session<HostRuntime, ViewerRuntime>) -> SessionStatus {
+/// This app's own side of a session; a hosted session's comes from its process.
+async fn status_of(session: &Session<SessionClient, ViewerRuntime>) -> SessionStatus {
     match session {
-        Session::Host(host) => SessionStatus::Host { sharing: host.sharing_status() },
+        Session::Host(host) => SessionStatus::Host {
+            sharing: host.sharing_status().await.unwrap_or(serde_json::Value::Null),
+        },
         Session::Viewer(viewer) => SessionStatus::Viewer { viewer: viewer.status() },
     }
 }
 
 /// This app's own side of the session `window` shows.
-fn session_status(state: &AppState, window: &str) -> SessionStatus {
+async fn session_status(state: &AppState, window: &str) -> SessionStatus {
     let session = state.sessions.lock().unwrap().of_window(window);
-    session.map_or(SessionStatus::None, |(_, session)| status_of(&session))
+    match session {
+        Some((_, session)) => status_of(&session).await,
+        None => SessionStatus::None,
+    }
 }
 
 /// What the Connection status panel of `window` shows.
@@ -360,7 +369,8 @@ async fn diagnostics_status(
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<diagnostics::Status, String> {
-    Ok(state.diagnostics.status(window.label(), session_status(&state, window.label())))
+    let session = session_status(&state, window.label()).await;
+    Ok(state.diagnostics.status(window.label(), session))
 }
 
 /// The terminal's state from the window: enums and numbers only.
@@ -392,11 +402,11 @@ async fn diagnostics_export(
     state: State<'_, AppState>,
     path: PathBuf,
 ) -> Result<(), String> {
-    export_diagnostics(&state, window.label(), &path)
+    export_diagnostics(&state, window.label(), &path).await
 }
 
 /// Exports the diagnostics as `window` sees them, with the sessions of the other windows.
-fn export_diagnostics(state: &AppState, window: &str, path: &Path) -> Result<(), String> {
+async fn export_diagnostics(state: &AppState, window: &str, path: &Path) -> Result<(), String> {
     let others: Vec<_> = {
         let sessions = state.sessions.lock().unwrap();
         let own = sessions.of_window(window).map(|(id, _)| id);
@@ -404,9 +414,13 @@ fn export_diagnostics(state: &AppState, window: &str, path: &Path) -> Result<(),
         let viewers = sessions.viewers().into_iter().map(|(id, v)| (id, Session::Viewer(v)));
         hosts.chain(viewers).filter(|(id, _)| Some(*id) != own).map(|(_, s)| s).collect()
     };
-    let status = state.diagnostics.status(window, session_status(state, window));
+    let mut other_statuses = Vec::new();
+    for session in &others {
+        other_statuses.push(status_of(session).await);
+    }
+    let status = state.diagnostics.status(window, session_status(state, window).await);
     let header = ExportHeader::new(status, &state.sharing_service(), &state.services.built_in)
-        .with_other_sessions(others.iter().map(status_of).collect());
+        .with_other_sessions(other_statuses);
     state.diagnostics.export(path, &header)
 }
 
@@ -422,12 +436,15 @@ fn export_diagnostics_from_menu(app: &AppHandle) {
         .add_filter("Diagnostics", &["jsonl"])
         .save_file(move |path| {
             let Some(path) = path.and_then(|path| path.into_path().ok()) else { return };
-            let state = handle.state::<AppState>();
-            let (kind, text) = match export_diagnostics(&state, &window, &path) {
-                Ok(()) => (MessageDialogKind::Info, "Diagnostics saved.".to_owned()),
-                Err(error) => (MessageDialogKind::Error, error),
-            };
-            handle.dialog().message(text).title("Export Diagnostics").kind(kind).show(|_| {});
+            // Asks the session processes for their state, off the dialog's thread.
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<AppState>();
+                let (kind, text) = match export_diagnostics(&state, &window, &path).await {
+                    Ok(()) => (MessageDialogKind::Info, "Diagnostics saved.".to_owned()),
+                    Err(error) => (MessageDialogKind::Error, error),
+                };
+                handle.dialog().message(text).title("Export Diagnostics").kind(kind).show(|_| {});
+            });
         });
 }
 
@@ -456,6 +473,10 @@ async fn set_verbose_logging(
         state.save(&settings);
     }
     state.diagnostics.set_verbose(enabled);
+    // Session processes keep their own logs, under the same setting.
+    for (_, host) in state.sessions.lock().unwrap().hosts() {
+        host.set_verbose(enabled);
+    }
     settings_changed(&app);
     Ok(profile(&state, window.label()))
 }
@@ -493,8 +514,9 @@ async fn update_status(state: State<'_, AppState>) -> Result<UpdateState, String
 const SESSION_END_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Installs the ready update and starts the new version (auto-update design decision 7). Every
-/// hosted session ends for everyone and every watched one is left first; the window has already
-/// asked. On Windows the installer exits the app and starts the new version itself.
+/// watched session is left first; the window has already asked. Hosted sessions keep running in
+/// their own processes and the new version reopens their windows (`session-processes`). On
+/// Windows the installer exits the app and starts the new version itself.
 #[tauri::command]
 async fn restart_to_update(app: AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -502,7 +524,7 @@ async fn restart_to_update(app: AppHandle) -> Result<(), String> {
         return Err("No update is ready.".into());
     };
     let installed = updates::install_after_session(
-        || end_or_leave_all(&app),
+        || leave_all_watched(&app),
         SESSION_END_GRACE,
         || update.install(&bytes).map_err(|error| error.to_string()),
     )
@@ -514,20 +536,29 @@ async fn restart_to_update(app: AppHandle) -> Result<(), String> {
     app.restart();
 }
 
-/// Ends every hosted session and leaves every watched one; whether there was any.
-fn end_or_leave_all(app: &AppHandle) -> bool {
-    let state = app.state::<AppState>();
-    let (hosts, viewers) = {
-        let sessions = state.sessions.lock().unwrap();
-        (sessions.hosts(), sessions.viewers())
-    };
-    for (id, _) in &hosts {
-        end_session(app, *id);
-    }
+/// Leaves every watched session; whether there was any.
+fn leave_all_watched(app: &AppHandle) -> bool {
+    let viewers = app.state::<AppState>().sessions.lock().unwrap().viewers();
     for (id, _) in &viewers {
         leave(app, *id);
     }
-    !hosts.is_empty() || !viewers.is_empty()
+    !viewers.is_empty()
+}
+
+/// Ends every hosted session and waits until each has told its viewers, then leaves every
+/// watched one: before quitting, so no session process is left without its app.
+async fn end_all(app: &AppHandle) {
+    let hosts = app.state::<AppState>().sessions.lock().unwrap().hosts();
+    let mut ending = Vec::new();
+    for (id, host) in hosts {
+        app.state::<AppState>().sessions.lock().unwrap().remove(id);
+        update_tray(app, id, None);
+        ending.push(tauri::async_runtime::spawn(async move { host.end(SESSION_END_WAIT).await }));
+    }
+    for end in ending {
+        let _ = end.await;
+    }
+    leave_all_watched(app);
 }
 
 #[tauri::command]
@@ -652,16 +683,19 @@ async fn start_hosting(
     if !state.sessions.lock().unwrap().is_free(window.label()) {
         return Err("This window already shows a session. Open a new window for another.".into());
     }
-    let username = state.settings.lock().unwrap().username.clone().ok_or("Set your name first.")?;
-    let options = StartOptions {
+    let (username, verbose) = {
+        let settings = state.settings.lock().unwrap();
+        (settings.username.clone().ok_or("Set your name first.")?, settings.verbose_logging)
+    };
+    let launch = client::Launch {
         agent,
         folder: folder.clone(),
         cols,
         rows,
         username,
-        data_dir: state.data_dir.clone(),
         signalling_url: state.sharing_service(),
-        peer: PeerConfig::default(),
+        environment: state.environment(),
+        verbose,
     };
     let id = state.sessions.lock().unwrap().next_id();
     let name = folder_name(&folder);
@@ -672,9 +706,55 @@ async fn start_hosting(
         code: None,
         sharing: SharingState::Connecting,
     };
-    update_tray(&app, id, Some(tray::Entry { id, folder: name.clone(), agent, summary: starting }));
+    update_tray(&app, id, Some(tray_entry(id, name.clone(), agent, starting, true)));
+    let service = launch.signalling_url.clone();
+    let ended = app.clone();
+    let on_ended: client::OnEnded = Box::new(move || session_gone(&ended, id));
+    // The session runs in a process of its own (`session-processes`), so it outlives the app.
+    let observer = host_observer(&app, id, agent);
+    let client = match client::launch(&state.paths, id, launch, observer, on_ended).await {
+        Ok(client) => client,
+        Err(error) => {
+            update_tray(&app, id, None);
+            return Err(error);
+        }
+    };
+    // Join links open in a browser when the service serves the web viewer (`web-viewer` design
+    // decision 6); the app asks, so the session needs no HTTP client.
+    let checked = client.clone();
+    tauri::async_runtime::spawn(async move {
+        checked.set_web_viewer(services::web_viewer(&service).await);
+    });
+    let inserted = state.sessions.lock().unwrap().insert(
+        window.label(),
+        id,
+        Session::Host(client.clone()),
+        Some(name.clone()),
+    );
+    if let Err(error) = inserted {
+        // Another session started in this window meanwhile.
+        tauri::async_runtime::spawn(async move { client.end(SESSION_END_WAIT).await });
+        update_tray(&app, id, None);
+        return Err(error);
+    }
+    set_window_title(&window, Some(&name));
+    session_changed(&app);
+    let mut settings = state.settings.lock().unwrap();
+    settings.add_recent(folder);
+    settings.last_agent = Some(agent);
+    state.save(&settings);
+    drop(settings);
+    refresh_menu(&app);
+    Ok(())
+}
+
+/// How long ending a session process waits for it to confirm, so its viewers are told.
+const SESSION_END_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What a hosted session's notices do in the app: the tray and notifications.
+fn host_observer(app: &AppHandle, id: SessionId, agent: AgentId) -> client::Observer {
     let observed = app.clone();
-    let observer: host::Observer = Arc::new(move |notice: HostNotice| match notice {
+    Arc::new(move |notice: HostNotice| match notice {
         HostNotice::Summary(summary) => update_tray_summary(&observed, id, summary),
         HostNotice::ViewerJoined(name) => {
             notify(
@@ -692,42 +772,38 @@ async fn start_hosting(
                 message.unwrap_or_else(|| "It finished and waits for your next prompt.".into());
             notify(&observed, id, &format!("{} is waiting for you", agent.display_name()), &body);
         }
-    });
-    let service = options.signalling_url.clone();
-    let runtime = match HostRuntime::start(options, &state.environment(), observer).await {
-        Ok(runtime) => Arc::new(runtime),
-        Err(error) => {
-            update_tray(&app, id, None);
-            return Err(error);
-        }
+    })
+}
+
+fn tray_entry(
+    id: SessionId,
+    folder: String,
+    agent: AgentId,
+    summary: Summary,
+    controllable: bool,
+) -> tray::Entry {
+    tray::Entry { id, folder, agent, summary, controllable }
+}
+
+/// A hosted session ended without the app asking: its grace period ran out, or its process went
+/// away. Everything that showed it goes; its window goes back to the start screen.
+fn session_gone(app: &AppHandle, id: SessionId) {
+    let state = app.state::<AppState>();
+    let (window, removed) = {
+        let mut sessions = state.sessions.lock().unwrap();
+        (sessions.window_of(id).map(str::to_owned), sessions.remove(id))
     };
-    // Join links open in a browser when the service serves the web viewer (`web-viewer` design
-    // decision 6); the app asks, so the session needs no HTTP client.
-    let checked = runtime.clone();
-    tauri::async_runtime::spawn(async move {
-        checked.set_web_viewer(services::web_viewer(&service).await);
-    });
-    let inserted = state.sessions.lock().unwrap().insert(
-        window.label(),
-        id,
-        Session::Host(runtime.clone()),
-        Some(name.clone()),
-    );
-    if let Err(error) = inserted {
-        // Another session started in this window meanwhile.
-        runtime.close();
-        update_tray(&app, id, None);
-        return Err(error);
+    if removed.is_none() {
+        return; // the app ended it itself
     }
-    set_window_title(&window, Some(&name));
-    session_changed(&app);
-    let mut settings = state.settings.lock().unwrap();
-    settings.add_recent(folder);
-    settings.last_agent = Some(agent);
-    state.save(&settings);
-    drop(settings);
-    refresh_menu(&app);
-    Ok(())
+    tracing::info!(session = id, "session.gone");
+    update_tray(app, id, None);
+    refresh_menu(app);
+    session_changed(app);
+    if let Some(window) = window {
+        let _ =
+            app.emit_to(&window, "menu", MenuCommand { id: "session-ended".into(), path: None });
+    }
 }
 
 /// Runs `f` on the hosted session `window` shows, or fails if it shows none. The lock is let go
@@ -735,7 +811,7 @@ async fn start_hosting(
 fn with_host<T>(
     state: &AppState,
     window: &WebviewWindow,
-    f: impl FnOnce(&HostRuntime) -> T,
+    f: impl FnOnce(&SessionClient) -> T,
 ) -> Result<T, String> {
     let host = state.host_of(window.label())?;
     Ok(f(&host))
@@ -746,11 +822,8 @@ async fn host_attach(
     window: WebviewWindow,
     state: State<'_, AppState>,
     terminal: Channel<InvokeResponseBody>,
-    events: Channel<HostEvent>,
+    events: Channel<serde_json::Value>,
 ) -> Result<(), String> {
-    let terminal: host::TerminalSink =
-        Box::new(move |records| terminal.send(InvokeResponseBody::Raw(records)).is_ok());
-    let events: host::EventSink = Box::new(move |event| events.send(event).is_ok());
     with_host(&state, &window, |host| host.attach(terminal, events))
 }
 
@@ -785,7 +858,7 @@ async fn host_set_colors(
 
 #[tauri::command]
 async fn host_new_code(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
-    with_host(&state, &window, HostRuntime::new_code)
+    with_host(&state, &window, SessionClient::new_code)
 }
 
 #[tauri::command]
@@ -820,7 +893,9 @@ async fn host_close(app: AppHandle, window: WebviewWindow) -> Result<(), String>
 fn end_session(app: &AppHandle, id: SessionId) {
     let removed = app.state::<AppState>().sessions.lock().unwrap().remove(id);
     match removed {
-        Some(Session::Host(host)) => host.close(),
+        Some(Session::Host(host)) => {
+            tauri::async_runtime::spawn(async move { host.end(SESSION_END_WAIT).await });
+        }
         Some(Session::Viewer(viewer)) => viewer.leave(),
         None => {}
     }
@@ -949,17 +1024,76 @@ fn profile_dir(base: PathBuf) -> PathBuf {
     }
 }
 
+/// Finds the hosted sessions whose processes still run (`session-processes` design decision 4):
+/// sessions of this and the previous release join the app and are returned, to reopen their
+/// windows; older ones go in the tray to be ended. Entries of sessions that are gone are removed,
+/// and so are their files and the binaries no session uses any more.
+async fn find_sessions(app: &AppHandle) -> Vec<SessionId> {
+    let state = app.state::<AppState>();
+    let paths = state.paths.clone();
+    let mut reopen = Vec::new();
+    let mut live = Vec::new();
+    let mut versions = Vec::new();
+    for entry in client::run_entries(&paths.run_dir) {
+        let ended = app.clone();
+        let id = entry.id;
+        let observer = host_observer(app, id, entry.agent);
+        let on_ended: client::OnEnded = Box::new(move || session_gone(&ended, id));
+        let found = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client::connect(&entry.endpoint, entry.agent, observer, on_ended),
+        )
+        .await;
+        let Ok(Ok(client)) = found else {
+            client::remove_entry(&paths.run_dir, &entry);
+            continue;
+        };
+        tracing::info!(session = id, protocol = entry.protocol.0, "session.found");
+        live.push(id);
+        versions.push(entry.version.clone());
+        let controllable = client.controllable();
+        let summary = client.summary().unwrap_or(Summary {
+            status: AgentStatus::Unknown,
+            viewers: 0,
+            code: None,
+            sharing: SharingState::Connecting,
+        });
+        update_tray(
+            app,
+            id,
+            Some(tray_entry(id, entry.folder.clone(), entry.agent, summary, controllable)),
+        );
+        state.sessions.lock().unwrap().insert_windowless(
+            id,
+            Session::Host(client),
+            Some(entry.folder.clone()),
+        );
+        if controllable {
+            reopen.push(id);
+        }
+    }
+    remove_leftover_session_files(&paths.data_dir, &live);
+    for unused in client::unused_runtimes(&paths.runtime_dir, &versions) {
+        let _ = std::fs::remove_dir_all(unused);
+    }
+    reopen
+}
+
 /// Removes the files of sessions that ended with a crash or a quit: their output log holds
 /// everything the terminal printed, and is meant to live only as long as its session (design
-/// decision 4). Runs at start, when no session of this profile can be running.
-fn remove_leftover_session_files(dir: &Path) {
+/// decision 4). Runs at start. Each session process keeps its files in a folder named after its
+/// number (`session-processes`), so the folders of the `live` sessions stay; loose files are
+/// from releases before session processes.
+fn remove_leftover_session_files(dir: &Path, live: &[SessionId]) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if ["session-", "hooks-", "statusline-", "snapshots-"]
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
+        let ended_session = name.parse::<SessionId>().is_ok_and(|id| !live.contains(&id));
+        if ended_session
+            || ["session-", "hooks-", "statusline-", "snapshots-"]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
         {
             let path = entry.path();
             let _ = if path.is_dir() {
@@ -1309,7 +1443,7 @@ fn apply_zoom(window: &tauri::WebviewWindow, level: u16) {
 }
 
 /// The hosted session `id`, if it still runs.
-fn hosted(app: &AppHandle, id: SessionId) -> Option<Arc<HostRuntime>> {
+fn hosted(app: &AppHandle, id: SessionId) -> Option<Arc<SessionClient>> {
     match app.state::<AppState>().sessions.lock().unwrap().get(id)? {
         Session::Host(host) => Some(host),
         Session::Viewer(_) => None,
@@ -1479,8 +1613,12 @@ fn quit(app: &AppHandle) {
         .buttons(MessageDialogButtons::OkCancelCustom(confirm, "Cancel".into()))
         .show(move |confirmed| {
             if confirmed {
-                end_or_leave_all(&handle);
-                handle.exit(0);
+                // Quit is the one way of stopping the app that ends hosted sessions
+                // (`session-processes`); it waits until each has told its viewers.
+                tauri::async_runtime::spawn(async move {
+                    end_all(&handle).await;
+                    handle.exit(0);
+                });
             }
         });
 }
@@ -1567,15 +1705,20 @@ pub fn run() {
             let log_dir = profile_dir(app.path().app_log_dir()?);
             let (diagnostics, subscriber) = Diagnostics::new(log_dir.clone(), diagnostics::APP_LOG);
             let _ = tracing::subscriber::set_global_default(subscriber);
+            let swept = log_dir.clone();
             std::thread::spawn(move || {
                 loop {
-                    diagnostics::sweep(&log_dir, SystemTime::now());
+                    diagnostics::sweep(&swept, SystemTime::now());
                     std::thread::sleep(diagnostics::SWEEP_EVERY);
                 }
             });
             let config_dir = profile_dir(app.path().app_config_dir()?);
-            let data_dir = profile_dir(app.path().app_cache_dir()?).join("sessions");
-            remove_leftover_session_files(&data_dir);
+            let paths = Paths {
+                run_dir: profile_dir(app.path().app_data_dir()?).join("run"),
+                log_dir,
+                data_dir: profile_dir(app.path().app_cache_dir()?).join("sessions"),
+                runtime_dir: profile_dir(app.path().app_data_dir()?).join("session-runtime"),
+            };
             let settings_path = config_dir.join("settings.json");
             let environment = Arc::new(OnceLock::new());
             let background = environment.clone();
@@ -1595,7 +1738,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 settings_path,
                 diagnostics,
-                data_dir,
+                paths,
                 services: Services::from_environment(),
                 environment,
                 sessions: Mutex::default(),
@@ -1618,7 +1761,19 @@ pub fn run() {
                     watched.state::<AppState>().diagnostics.check_windows();
                 }
             });
-            open_session_window(app.handle(), MAIN_WINDOW, None);
+            // Hosted sessions that outlived the last run get their windows back; without any,
+            // the first window shows the start screen.
+            let reopened = tauri::async_runtime::block_on(find_sessions(app.handle()));
+            match reopened.split_first() {
+                Some((first, rest)) => {
+                    open_session_window(app.handle(), MAIN_WINDOW, Some(*first));
+                    for id in rest {
+                        let label = new_window_label(app.handle());
+                        open_session_window(app.handle(), &label, Some(*id));
+                    }
+                }
+                None => open_session_window(app.handle(), MAIN_WINDOW, None),
+            }
             refresh_menu(app.handle());
             // Join links: the one the app was started with, and any opened while it runs.
             #[cfg(any(windows, target_os = "linux"))]
@@ -1753,14 +1908,21 @@ mod tests {
             std::fs::write(dir.path().join(name), "secret output").unwrap();
         }
         std::fs::create_dir_all(dir.path().join("snapshots-d4/objects")).unwrap();
-        remove_leftover_session_files(dir.path());
-        let left: Vec<_> = std::fs::read_dir(dir.path())
+        // Session processes keep their files in a folder per session: 3 still runs, 2 ended.
+        for session in ["2", "3"] {
+            std::fs::create_dir_all(dir.path().join(session)).unwrap();
+            std::fs::write(dir.path().join(session).join("session-x.log"), "output").unwrap();
+        }
+        remove_leftover_session_files(dir.path(), &[3]);
+        let mut left: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect();
-        assert_eq!(left, ["notes.txt"]);
+        left.sort();
+        assert_eq!(left, ["3", "notes.txt"]);
+        assert!(dir.path().join("3/session-x.log").exists(), "a running session keeps its log");
         // A folder that does not exist yet is fine.
-        remove_leftover_session_files(&dir.path().join("missing"));
+        remove_leftover_session_files(&dir.path().join("missing"), &[]);
     }
 
     /// No agents on this PATH; the shell is found anyway.
@@ -1780,7 +1942,12 @@ mod tests {
             settings_path: PathBuf::from("settings.json"),
             settings: Mutex::new(settings),
             diagnostics: Diagnostics::new(dir.join("logs"), diagnostics::APP_LOG).0,
-            data_dir: PathBuf::from("sessions"),
+            paths: Paths {
+                run_dir: dir.join("run"),
+                log_dir: dir.join("logs"),
+                data_dir: dir.join("sessions"),
+                runtime_dir: dir.join("session-runtime"),
+            },
             services: Services {
                 built_in: "wss://built-in.example.com/signal".into(),
                 overridden: overridden.map(Into::into),

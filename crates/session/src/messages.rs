@@ -30,6 +30,9 @@ pub enum Command {
     },
     /// Shows the session in the app's window: a snapshot, then the terminal from the start.
     Attach,
+    /// The window closed while the app runs: stop streaming to it, and let the session answer
+    /// terminal queries itself.
+    Detach,
     Input {
         data: String,
     },
