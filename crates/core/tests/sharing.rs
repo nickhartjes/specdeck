@@ -37,10 +37,7 @@ fn loopback() -> PeerConfig {
 async fn signalling() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/signal", listener.local_addr().unwrap());
-    tokio::spawn(specdeck_signalling::serve(
-        listener,
-        Arc::new(specdeck_signalling::Service::default()),
-    ));
+    tokio::spawn(specdeck_server::serve(listener, Arc::new(specdeck_server::Service::default())));
     url
 }
 
@@ -325,10 +322,7 @@ async fn sharing_becomes_available_when_the_service_comes_up() {
     assert_eq!(event, ViewerEvent::ServiceUnavailable);
 
     let listener = TcpListener::bind(address).await.unwrap();
-    tokio::spawn(specdeck_signalling::serve(
-        listener,
-        Arc::new(specdeck_signalling::Service::default()),
-    ));
+    tokio::spawn(specdeck_server::serve(listener, Arc::new(specdeck_server::Service::default())));
     let code = ready(&mut hosted.events).await;
 
     let (_viewer, mut events) = join(&url, &code, "anna");

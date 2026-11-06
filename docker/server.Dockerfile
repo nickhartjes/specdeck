@@ -1,9 +1,9 @@
-# Signalling service image, with the web viewer built in (web-viewer design decision 5). Build from
-# the repository root:
-#   docker build -f docker/signalling.Dockerfile -t specdeck-signalling .
+# Sharing service image (signalling and TURN credentials), with the web viewer built in (web-viewer
+# design decision 5). Build from the repository root:
+#   docker build -f docker/server.Dockerfile -t specdeck-server .
 # On a network that only allows a company npm registry, hand the build your npm config as a secret;
 # it is mounted for the npm steps only and never stored in the image:
-#   docker build --secret id=npmrc,src=$HOME/.npmrc -f docker/signalling.Dockerfile .
+#   docker build --secret id=npmrc,src=$HOME/.npmrc -f docker/server.Dockerfile .
 
 # The web viewer's WebAssembly package (crates/web/pkg), with the wasm-bindgen CLI at the exact
 # version crates/web pins, as `just web-wasm` does.
@@ -33,13 +33,13 @@ FROM rust:1.99-slim-trixie AS build
 WORKDIR /src
 COPY . .
 COPY --from=ui /src/app/ui/dist-web app/ui/dist-web
-RUN cargo build --release --locked -p specdeck-signalling --features web-viewer
+RUN cargo build --release --locked -p specdeck-server --features web-viewer
 
 FROM debian:trixie-slim
 RUN useradd --system --uid 10001 specdeck
-COPY --from=build /src/target/release/specdeck-signalling /usr/local/bin/specdeck-signalling
+COPY --from=build /src/target/release/specdeck-server /usr/local/bin/specdeck-server
 # Numeric, so Kubernetes can check runAsNonRoot.
 USER 10001
 EXPOSE 8080
 ENV SPECDECK_LISTEN=0.0.0.0:8080 RUST_LOG=info
-ENTRYPOINT ["specdeck-signalling"]
+ENTRYPOINT ["specdeck-server"]

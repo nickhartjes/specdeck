@@ -10,11 +10,11 @@ resources:
   - namespace.yaml
   - ../base
 patches:
-  # The signalling image is built into Colima's Docker, which k3s uses directly: never pull it.
+  # The service image is built into Colima's Docker, which k3s uses directly: never pull it.
   # No ingress in front locally. TURN is reached on the node's address, which only the pod knows.
-  - target: { kind: Deployment, name: specdeck-signalling }
+  - target: { kind: Deployment, name: specdeck-server }
     patch: |-
-      - { op: replace, path: /spec/template/spec/containers/0/image, value: "specdeck-signalling:local" }
+      - { op: replace, path: /spec/template/spec/containers/0/image, value: "specdeck-server:local" }
       - { op: add, path: /spec/template/spec/containers/0/imagePullPolicy, value: Never }
       - { op: test, path: /spec/template/spec/containers/0/env/1/name, value: SPECDECK_TRUSTED_PROXIES }
       - { op: replace, path: /spec/template/spec/containers/0/env/1/value, value: "0" }

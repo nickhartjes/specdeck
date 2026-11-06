@@ -30,7 +30,7 @@ Carried over from the archived `native-shared-session-mvp` (its task number in b
 
 ## 4. Deployment
 
-- [ ] 4.1 Deploy signalling and coturn to a test namespace once the cluster operators confirm the relay port mapping, with the namespace enforcing the `restricted` Pod Security level; verify a session relayed through it
+- [ ] 4.1 Deploy the server and coturn to a test namespace once the cluster operators confirm the relay port mapping, with the namespace enforcing the `restricted` Pod Security level; verify a session relayed through it
 
 ## 5. Checks carried over from shipped changes
 
@@ -63,3 +63,4 @@ These changes shipped (up to 1.5.0) and were archived with only checks on real m
   - 2026-11-04, automated, without the app or coturn (see the archived `web-viewer` tasks for the setup): joining a running session with its history, the terminal and the timeline, the Developer view, the People tab, and **Leave** passed in Chromium, Firefox and WebKit. Still to do by hand with the app: Overview, search and copy, reconnect after a signalling restart, the session ending, closing the tab, and relay-only mode
 - [ ] 5.16 [zoom-window 4.2] Verify on Windows and Linux (WebView2, WebKitGTK) that Ctrl+`=`, Ctrl+`-` and Ctrl+`0` zoom even while the host's terminal has focus, that Ctrl+Shift+`-` still reaches the terminal, and that the accelerators parse. Use `Equal` if `=` does not. Record the result in `docs/verification.md`
 - [ ] 5.17 [nerd-font-symbols 3.3] On macOS (WKWebView) and Windows (WebView2), with no Nerd Font installed, host a session whose prompt prints Nerd Font symbols (or run `printf 'a\ue0a0b \uf07c c \ue0b0 d\n'` in bash) with a viewer joined in the app. Check that the symbols draw instead of boxes, that `b`, `c` and `d` stay in their columns, and that ordinary text and box-drawing characters look as in the previous release. Check once with the symbol first printed after the viewer joined, so the font loads while the terminal is open. Record the result in `docs/verification.md`
+- [ ] 5.18 [rename-signalling-to-server, Migration Plan 5] In the 1.9.0 release, remove `ghcr.io/nickhartjes/specdeck-signalling` from `IMAGES` in `.github/workflows/release.yml` and the transition paragraph ("The image's name") from `self-host/overview.md`; verify signed out of ghcr.io that `1.9.0` exists under `specdeck-server` only and that `specdeck-signalling:1.8` still pulls

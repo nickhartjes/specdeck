@@ -1,11 +1,11 @@
 ---
 title: Configuration reference
-description: The signalling service's settings and the coturn options it relies on.
+description: The SpecDeck server's settings and the coturn options it relies on.
 ---
 
-## Signalling service
+## Server
 
-`specdeck-signalling` reads its settings from the environment:
+`specdeck-server` reads its settings from the environment:
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -27,11 +27,11 @@ The service keeps rooms in memory, so run exactly one instance.
 
 ## coturn
 
-The signalling service signs TURN credentials with the shared secret (the TURN REST API scheme), so coturn needs:
+The server signs TURN credentials with the shared secret (the TURN REST API scheme), so coturn needs:
 
 | Option | Why |
 |---|---|
-| `--use-auth-secret`, `--static-auth-secret=<secret>` | Accept the credentials the signalling service hands out |
+| `--use-auth-secret`, `--static-auth-secret=<secret>` | Accept the credentials the server hands out |
 | `--external-ip=<public address>` | The address coturn advertises in relayed addresses |
 | `--min-port`, `--max-port` | The relay ports; open the same range in the firewall |
 | `--no-tcp`, `--no-tls`, `--no-dtls`, `--no-tcp-relay` | The apps use TURN over UDP only |

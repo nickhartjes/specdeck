@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, Response, StatusCode, header};
 use specdeck_protocol::control::PROTOCOL_VERSION;
-use specdeck_signalling::{Config, Service, WebViewer, router};
+use specdeck_server::{Config, Service, WebViewer, router};
 use tower::ServiceExt;
 
 fn page() -> WebViewer {

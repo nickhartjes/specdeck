@@ -11,7 +11,7 @@ Once your sharing service runs, everyone on the team points SpecDeck at it. Apps
 
 ## In Settings
 
-Each person opens **Settings** and enters the signalling domain under **Sharing service**, for example `specdeck.example.com`. SpecDeck makes it `wss://specdeck.example.com/signal`, checks that it answers, and uses it from the next session on. See [Settings](/specdeck/guide/settings/#sharing-service).
+Each person opens **Settings** and enters the server's domain under **Sharing service**, for example `specdeck.example.com`. SpecDeck makes it `wss://specdeck.example.com/signal`, checks that it answers, and uses it from the next session on. See [Settings](/specdeck/guide/settings/#sharing-service).
 
 ## Through a link
 

@@ -41,7 +41,7 @@ web-test:
 check-web: web-wasm web-test
     cargo clippy -p specdeck-web --target wasm32-unknown-unknown --all-targets -- -D warnings
     pnpm --dir app/ui build:web
-    cargo clippy -p specdeck-signalling --all-targets --features web-viewer -- -D warnings
+    cargo clippy -p specdeck-server --all-targets --features web-viewer -- -D warnings
 
 # Measure 20 viewers' effect on the host's terminal, alone so other work does not skew it
 capacity:
@@ -89,7 +89,7 @@ video *names="getting-started following diagnostics":
         )
     done
 
-# Deploy signalling and coturn to Colima's local Kubernetes (deploy/k8s/local); needs `colima start --kubernetes`
+# Deploy the sharing service and coturn to Colima's local Kubernetes (deploy/k8s/local); needs `colima start --kubernetes`
 local-up:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -98,11 +98,13 @@ local-up:
     # company registry; it is a build secret, never stored in the image.
     npmrc=(); [ -f "$HOME/.npmrc" ] && npmrc=(--secret "id=npmrc,src=$HOME/.npmrc")
     # Written so an empty list also works in macOS's bash 3.2 under `set -u`.
-    docker build ${npmrc[@]+"${npmrc[@]}"} -f docker/signalling.Dockerfile -t specdeck-signalling:local .
+    docker build ${npmrc[@]+"${npmrc[@]}"} -f docker/server.Dockerfile -t specdeck-server:local .
     scripts/local-kubectl.sh apply -k deploy/k8s/local
+    # Left over from before the rename to specdeck-server (rename-signalling-to-server decision 9).
+    scripts/local-kubectl.sh -n specdeck1-local delete deployment,service specdeck-signalling --ignore-not-found
     # The image tag does not change between builds: restart to pick up the new image.
-    scripts/local-kubectl.sh -n specdeck1-local rollout restart deployment/specdeck-signalling
-    scripts/local-kubectl.sh -n specdeck1-local rollout status deployment/specdeck-signalling deployment/specdeck-turn --timeout=120s
+    scripts/local-kubectl.sh -n specdeck1-local rollout restart deployment/specdeck-server
+    scripts/local-kubectl.sh -n specdeck1-local rollout status deployment/specdeck-server deployment/specdeck-turn --timeout=120s
 
 # Remove the local Kubernetes deployment
 local-down:
@@ -112,12 +114,12 @@ local-down:
 local-test: local-up
     #!/usr/bin/env bash
     set -euo pipefail
-    scripts/local-kubectl.sh -n specdeck1-local port-forward svc/specdeck-signalling 18081:8080 >/dev/null &
+    scripts/local-kubectl.sh -n specdeck1-local port-forward svc/specdeck-server 18081:8080 >/dev/null &
     trap 'kill $! 2>/dev/null || true' EXIT
     until curl -sf http://127.0.0.1:18081/health >/dev/null; do sleep 0.25; done
     SPECDECK_SIGNALLING_URL=ws://127.0.0.1:18081/signal cargo test -p specdeck-core --test turn_relay -- --ignored --nocapture
 
-# Local test setup: signalling and coturn on Colima's k3s, plus a host app and a viewer app (own settings each)
+# Local test setup: the sharing service and coturn on Colima's k3s, plus a host app and a viewer app (own settings each)
 local-dev: local-up
     #!/usr/bin/env bash
     set -euo pipefail
@@ -128,7 +130,7 @@ local-dev: local-up
     stop() { trap - EXIT INT TERM; for pgid in $(jobs -p); do kill -TERM -- -"$pgid" 2>/dev/null || true; done; }
     trap stop EXIT
     trap 'exit 130' INT TERM
-    scripts/local-kubectl.sh -n specdeck1-local port-forward svc/specdeck-signalling 18081:8080 >/dev/null </dev/null &
+    scripts/local-kubectl.sh -n specdeck1-local port-forward svc/specdeck-server 18081:8080 >/dev/null </dev/null &
     until curl -sf http://127.0.0.1:18081/health >/dev/null; do sleep 0.25; done
     export SPECDECK_SIGNALLING_URL=ws://127.0.0.1:18081/signal
     mkdir -p .local-dev

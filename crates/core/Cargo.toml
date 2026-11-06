@@ -32,6 +32,6 @@ libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
-specdeck-signalling = { path = "../signalling" }
+specdeck-server = { path = "../server" }
 env_logger = "0.11"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }

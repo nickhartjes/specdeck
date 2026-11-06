@@ -4749,7 +4749,7 @@ dependencies = [
  "serde_json",
  "specdeck-core",
  "specdeck-protocol",
- "specdeck-signalling",
+ "specdeck-server",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -4787,7 +4787,7 @@ dependencies = [
  "serde",
  "serde_json",
  "specdeck-protocol",
- "specdeck-signalling",
+ "specdeck-server",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -4815,7 +4815,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "specdeck-signalling"
+name = "specdeck-server"
 version = "1.6.0"
 dependencies = [
  "axum",

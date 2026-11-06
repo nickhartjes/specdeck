@@ -1,4 +1,4 @@
-//! Drives the signalling service with WebSocket test clients.
+//! Drives the sharing service with WebSocket test clients.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,7 +6,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
 use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage, SignalPayload};
-use specdeck_signalling::{Config, Service, TurnConfig, serve};
+use specdeck_server::{Config, Service, TurnConfig, serve};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
