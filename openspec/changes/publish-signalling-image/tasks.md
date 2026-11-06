@@ -9,7 +9,7 @@
 
 ## 2. Deploy files
 
-- [ ] 2.1 In `deploy/compose/compose.yaml` set `image: ghcr.io/nickhartjes/specdeck-signalling:${SPECDECK_VERSION:?Set SPECDECK_VERSION in .env}`, keeping `build:`; add `SPECDECK_VERSION` to `.env.example` with a comment; update the header comment (decision 6); verify `docker compose config` resolves the image with the variable set and fails with the message without it
+- [x] 2.1 In `deploy/compose/compose.yaml` set `image: ghcr.io/nickhartjes/specdeck-signalling:${SPECDECK_VERSION:?Set SPECDECK_VERSION in .env}`, keeping `build:`; add `SPECDECK_VERSION` to `.env.example` with a comment; update the header comment (decision 6); verify `docker compose config` resolves the image with the variable set and fails with the message without it
 - [x] 2.2 In `deploy/k8s/base` change the signalling image to `ghcr.io/nickhartjes/specdeck-signalling` with an `images:` entry (`newTag: "1"`) in `kustomization.yaml`, and update `deploy/k8s/README.md` (pinning in an overlay); verify `kubectl kustomize deploy/k8s/base` shows the ghcr image with tag `1`, and `kubectl kustomize deploy/k8s/local` still shows `specdeck-signalling:local` with `imagePullPolicy: Never`
 
 ## 3. Docs and first release
