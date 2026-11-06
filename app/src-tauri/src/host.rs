@@ -434,11 +434,12 @@ impl HostRuntime {
         self.sharing.set_viewer_limit(limit);
     }
 
-    /// Ends sharing and the agent.
-    pub fn close(self) {
+    /// Ends sharing and the agent. The session's files are deleted when the runtime is dropped,
+    /// right after the app lets go of the ended session.
+    pub fn close(&self) {
         self.attach_generation.fetch_add(1, Ordering::SeqCst);
         self.sharing.close();
-        self.session.close();
+        self.session.stop();
     }
 }
 

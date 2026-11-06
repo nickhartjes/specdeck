@@ -5,7 +5,7 @@
 //! The log never stops a session: when the folder cannot be written, events stay in memory only
 //! and the panel says so.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -46,9 +46,10 @@ pub struct Diagnostics {
     /// Why the log file cannot be written, if it cannot.
     file_error: Option<String>,
     verbose: AtomicBool,
-    /// The terminal's latest state, as the window reported it.
-    terminal: Mutex<Option<TerminalSnapshot>>,
-    watchdog: Mutex<Watchdog>,
+    /// Each window's terminal's latest state, as the window reported it, by window label.
+    terminals: Mutex<HashMap<String, TerminalSnapshot>>,
+    /// Each session window's heartbeat, by window label.
+    watchdogs: Mutex<HashMap<String, Watchdog>>,
     /// Flushes the file writer when dropped, at exit.
     _writer: Option<WorkerGuard>,
 }
@@ -80,8 +81,8 @@ impl Diagnostics {
             dir,
             file_error,
             verbose: AtomicBool::new(false),
-            terminal: Mutex::new(None),
-            watchdog: Mutex::new(Watchdog::default()),
+            terminals: Mutex::default(),
+            watchdogs: Mutex::default(),
             _writer: guard,
         };
         (diagnostics, subscriber)
@@ -93,13 +94,14 @@ impl Diagnostics {
         let _ = self.filter.reload(targets(verbose));
     }
 
-    /// Keeps the terminal's latest state and records it when it changed. The window already
-    /// reports a change of screen, mouse tracking or following at once and anything else at
-    /// most every 5 seconds.
-    pub fn report_terminal(&self, snapshot: TerminalSnapshot) {
-        let previous = self.terminal.lock().unwrap().replace(snapshot);
+    /// Keeps the terminal's latest state in `window` and records it when it changed. The window
+    /// already reports a change of screen, mouse tracking or following at once and anything else
+    /// at most every 5 seconds.
+    pub fn report_terminal(&self, window: &str, snapshot: TerminalSnapshot) {
+        let previous = self.terminals.lock().unwrap().insert(window.to_owned(), snapshot);
         if previous != Some(snapshot) {
             tracing::info!(
+                window,
                 screen = snapshot.screen.as_str(),
                 mouse_tracking = snapshot.mouse_tracking.as_str(),
                 scrollback_lines = snapshot.scrollback_lines,
@@ -113,15 +115,17 @@ impl Diagnostics {
         }
     }
 
-    /// The window's heartbeat, once a second while it is visible.
-    pub fn heartbeat(&self, beat: Heartbeat) {
-        let mut watchdog = self.watchdog.lock().unwrap();
+    /// A session window's heartbeat, once a second while it is visible.
+    pub fn heartbeat(&self, window: &str, beat: Heartbeat) {
+        let mut watchdogs = self.watchdogs.lock().unwrap();
+        let watchdog = watchdogs.entry(window.to_owned()).or_default();
         let now = Instant::now();
         if let Some(Change::Responsive { stalled }) = watchdog.beat(now, beat.visible) {
-            tracing::info!(stalled_ms = stalled.as_millis() as u64, "ui.responsive");
+            tracing::info!(window, stalled_ms = stalled.as_millis() as u64, "ui.responsive");
         }
         if let Some(size) = watchdog.size(now, beat) {
             tracing::info!(
+                window,
                 timeline_events = size.timeline_events,
                 elements = size.elements,
                 "ui.size"
@@ -129,25 +133,32 @@ impl Diagnostics {
         }
     }
 
-    /// Records a window that stopped beating; called once a second.
-    pub fn check_window(&self) {
-        let change = self.watchdog.lock().unwrap().check(Instant::now());
-        if let Some(Change::Unresponsive { silent }) = change {
-            tracing::warn!(silent_ms = silent.as_millis() as u64, "ui.unresponsive");
+    /// Records each window that stopped beating; called once a second.
+    pub fn check_windows(&self) {
+        let now = Instant::now();
+        for (window, watchdog) in self.watchdogs.lock().unwrap().iter_mut() {
+            if let Some(Change::Unresponsive { silent }) = watchdog.check(now) {
+                tracing::warn!(
+                    window = window.as_str(),
+                    silent_ms = silent.as_millis() as u64,
+                    "ui.unresponsive"
+                );
+            }
         }
     }
 
-    /// The main window closed: no beats are expected until a new one starts.
-    pub fn window_closed(&self) {
-        self.watchdog.lock().unwrap().close();
+    /// A session window closed: no beats are expected from it any more.
+    pub fn window_closed(&self, window: &str) {
+        self.watchdogs.lock().unwrap().remove(window);
+        self.terminals.lock().unwrap().remove(window);
     }
 
-    /// Everything the Connection status panel shows.
-    pub fn status(&self, session: SessionStatus) -> Status {
+    /// Everything the Connection status panel of `window` shows.
+    pub fn status(&self, window: &str, session: SessionStatus) -> Status {
         Status {
             session,
-            window: self.watchdog.lock().unwrap().size,
-            terminal: *self.terminal.lock().unwrap(),
+            window: self.watchdogs.lock().unwrap().get(window).and_then(|watchdog| watchdog.size),
+            terminal: self.terminals.lock().unwrap().get(window).copied(),
             events: self.recent(),
             log_file_error: self.file_error.clone(),
             verbose: self.verbose.load(Ordering::Relaxed),
@@ -388,11 +399,6 @@ impl Watchdog {
         Some(Change::Unresponsive { silent })
     }
 
-    fn close(&mut self) {
-        self.last_beat = None;
-        self.stalled = false;
-    }
-
     /// Keeps the window's size; returns it when it should be recorded.
     fn size(&mut self, now: Instant, beat: Heartbeat) -> Option<WindowSize> {
         let elements = beat.elements.or(self.size.map(|size| size.elements))?;
@@ -438,8 +444,12 @@ pub struct ExportHeader {
     pub arch: &'static str,
     pub sharing_service: ServiceKind,
     pub verbose: bool,
+    /// The session of the window the export was made from.
     pub session: SessionStatus,
     pub terminal: Option<TerminalSnapshot>,
+    /// The sessions open in other windows, if any.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub other_sessions: Vec<SessionStatus>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -466,7 +476,14 @@ impl ExportHeader {
             verbose: status.verbose,
             session: status.session,
             terminal: status.terminal,
+            other_sessions: Vec::new(),
         }
+    }
+
+    /// Adds the sessions open in other windows.
+    pub fn with_other_sessions(mut self, sessions: Vec<SessionStatus>) -> Self {
+        self.other_sessions = sessions;
+        self
     }
 }
 
@@ -581,7 +598,7 @@ mod tests {
             // Other crates' events are not ours to record.
             tracing::warn!(target: "hyper", "noise");
         });
-        assert!(diagnostics.status(SessionStatus::None).log_file_error.is_none());
+        assert!(diagnostics.status("main", SessionStatus::None).log_file_error.is_none());
         let recent = diagnostics.recent();
         let names: Vec<_> = recent.iter().map(|e| e["event"].as_str().unwrap()).collect();
         assert_eq!(
@@ -612,7 +629,8 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(target: "specdeck_core::diag", "signalling.connected");
         });
-        let error = diagnostics.status(SessionStatus::None).log_file_error.expect("an error");
+        let error =
+            diagnostics.status("main", SessionStatus::None).log_file_error.expect("an error");
         assert!(!error.contains(dir.path().to_str().unwrap()), "no path in {error}");
         assert_eq!(diagnostics.recent().len(), 1);
     }
@@ -708,19 +726,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned());
         tracing::subscriber::with_default(subscriber, || {
-            diagnostics.report_terminal(snapshot());
-            diagnostics.report_terminal(snapshot());
-            diagnostics.report_terminal(TerminalSnapshot {
-                mouse_tracking: MouseTracking::Any,
-                ..snapshot()
-            });
+            diagnostics.report_terminal("main", snapshot());
+            diagnostics.report_terminal("main", snapshot());
+            diagnostics.report_terminal(
+                "main",
+                TerminalSnapshot { mouse_tracking: MouseTracking::Any, ..snapshot() },
+            );
         });
         let states: Vec<_> =
             diagnostics.recent().into_iter().filter(|e| e["event"] == "terminal.state").collect();
         assert_eq!(states.len(), 2, "the repeat is not recorded");
         assert_eq!(states[0]["mouse_tracking"], "any");
         assert_eq!(states[1]["scrollback_lines"], 100_000);
-        let status = diagnostics.status(SessionStatus::None);
+        let status = diagnostics.status("main", SessionStatus::None);
         assert_eq!(status.terminal.unwrap().mouse_tracking, MouseTracking::Any);
     }
 
@@ -740,15 +758,16 @@ mod tests {
     fn the_status_is_this_apps_own_side() {
         let dir = tempfile::tempdir().unwrap();
         let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned());
-        let host = diagnostics.status(SessionStatus::Host { sharing: SharingStatus::default() });
+        let host =
+            diagnostics.status("main", SessionStatus::Host { sharing: SharingStatus::default() });
         let host = serde_json::to_value(host).unwrap();
         assert_eq!(host["session"]["role"], "host");
         assert_eq!(host["session"]["sharing"]["service"], "connecting");
         assert!(host["session"].get("viewer").is_none());
         assert_eq!(host["logFileError"], Value::Null);
 
-        let status =
-            diagnostics.status(SessionStatus::Viewer { viewer: viewer(ViewerPhase::Connected) });
+        let status = diagnostics
+            .status("main", SessionStatus::Viewer { viewer: viewer(ViewerPhase::Connected) });
         let status = serde_json::to_value(status).unwrap();
         assert_eq!(status["session"]["role"], "viewer");
         assert_eq!(status["session"]["viewer"]["phase"], "connected");
@@ -776,11 +795,11 @@ mod tests {
             let date = today - time::Duration::days(days_ago);
             std::fs::write(logs.join(day(date)), format!("{{\"event\":\"{line}\"}}\n")).unwrap();
         }
-        diagnostics.report_terminal(snapshot());
+        diagnostics.report_terminal("main", snapshot());
 
         let custom = "wss://marker-service.example.com/signal";
-        let status =
-            diagnostics.status(SessionStatus::Viewer { viewer: viewer(ViewerPhase::Connected) });
+        let status = diagnostics
+            .status("main", SessionStatus::Viewer { viewer: viewer(ViewerPhase::Connected) });
         let header = ExportHeader::new(status, custom, "wss://built-in.example.com/signal");
         let path = dir.path().join("export.jsonl");
         diagnostics.export(&path, &header).unwrap();
@@ -817,11 +836,24 @@ mod tests {
     }
 
     #[test]
+    fn an_export_includes_the_sessions_of_other_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned());
+        let host = SessionStatus::Host { sharing: SharingStatus::default() };
+        let header = ExportHeader::new(diagnostics.status("main", SessionStatus::None), "a", "a")
+            .with_other_sessions(vec![host]);
+        let header = serde_json::to_value(header).unwrap();
+        assert_eq!(header["session"]["role"], "none");
+        assert_eq!(header["otherSessions"][0]["role"], "host");
+    }
+
+    #[test]
     fn the_built_in_service_exports_as_default() {
         let dir = tempfile::tempdir().unwrap();
         let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned());
         let built_in = "wss://built-in.example.com/signal";
-        let header = ExportHeader::new(diagnostics.status(SessionStatus::None), built_in, built_in);
+        let header =
+            ExportHeader::new(diagnostics.status("main", SessionStatus::None), built_in, built_in);
         assert_eq!(header.sharing_service, ServiceKind::Default);
     }
 
@@ -829,7 +861,7 @@ mod tests {
     fn an_export_that_cannot_be_written_says_so_without_the_path() {
         let dir = tempfile::tempdir().unwrap();
         let (diagnostics, _subscriber) = Diagnostics::new(dir.path().join("logs"));
-        let header = ExportHeader::new(diagnostics.status(SessionStatus::None), "a", "a");
+        let header = ExportHeader::new(diagnostics.status("main", SessionStatus::None), "a", "a");
         let path = dir.path().join("missing-folder").join("export.jsonl");
         let error = diagnostics.export(&path, &header).unwrap_err();
         assert!(!error.contains("missing-folder"), "{error}");
@@ -878,11 +910,6 @@ mod tests {
         // Shown again: beats resume without a stall being reported.
         assert_eq!(hidden.beat(start + Duration::from_secs(70), true), None);
 
-        let mut closed = Watchdog::default();
-        closed.beat(start, true);
-        closed.close();
-        assert!(run(&mut closed, start, 60, |_| false).is_empty());
-
         let mut never = Watchdog::default();
         assert!(run(&mut never, start, 60, |_| false).is_empty(), "no window yet");
     }
@@ -910,13 +937,40 @@ mod tests {
     fn the_status_shows_the_windows_size() {
         let dir = tempfile::tempdir().unwrap();
         let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned());
-        diagnostics.heartbeat(Heartbeat {
-            visible: true,
-            timeline_events: 12,
-            elements: Some(3_400),
-        });
-        diagnostics.heartbeat(Heartbeat { visible: true, timeline_events: 13, elements: None });
-        let window = diagnostics.status(SessionStatus::None).window.unwrap();
+        diagnostics.heartbeat(
+            "main",
+            Heartbeat { visible: true, timeline_events: 12, elements: Some(3_400) },
+        );
+        diagnostics
+            .heartbeat("main", Heartbeat { visible: true, timeline_events: 13, elements: None });
+        let window = diagnostics.status("main", SessionStatus::None).window.unwrap();
         assert_eq!(window, WindowSize { timeline_events: 13, elements: 3_400 });
+    }
+
+    #[test]
+    fn each_window_is_watched_on_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned());
+        let beat =
+            |events| Heartbeat { visible: true, timeline_events: events, elements: Some(10) };
+        tracing::subscriber::with_default(subscriber, || {
+            diagnostics.heartbeat("main", beat(1));
+            diagnostics.heartbeat("window-2", beat(2));
+            diagnostics.report_terminal("window-2", snapshot());
+        });
+        let size = |window| diagnostics.status(window, SessionStatus::None).window;
+        assert_eq!(size("main").unwrap().timeline_events, 1);
+        assert_eq!(size("window-2").unwrap().timeline_events, 2);
+        assert!(diagnostics.status("main", SessionStatus::None).terminal.is_none());
+        assert!(diagnostics.status("window-2", SessionStatus::None).terminal.is_some());
+        let sizes: Vec<_> =
+            diagnostics.recent().into_iter().filter(|e| e["event"] == "ui.size").collect();
+        assert_eq!(sizes.len(), 2);
+        assert!(sizes.iter().any(|e| e["window"] == "window-2"));
+
+        // A closed window is no longer expected to beat.
+        diagnostics.window_closed("window-2");
+        assert!(size("window-2").is_none());
+        assert!(diagnostics.watchdogs.lock().unwrap().get("window-2").is_none());
     }
 }

@@ -107,7 +107,7 @@ impl ViewerRuntime {
         Self { session }
     }
 
-    pub fn leave(self) {
+    pub fn leave(&self) {
         self.session.leave();
     }
 

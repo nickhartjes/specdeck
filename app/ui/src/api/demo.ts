@@ -41,6 +41,8 @@ export const demoProfile: Profile = {
     { id: 'terminal', name: 'Terminal', installed: true, hasTimeline: false, reportsStatus: false, path: '/bin/zsh', installPage: null },
   ],
   hosting: false,
+  hostedSessions: 0,
+  watchedSessions: 0,
   platform: 'macos',
   sharingService: null,
   effectiveService: 'wss://specdeck.hartj.es/signal',
@@ -294,7 +296,7 @@ export function demoDiagnostics(screen: string): DiagnosticsStatus {
 }
 
 export function demoBridge(screen: string): Bridge {
-  const profile = { ...demoProfile, hosting: screen === 'host' };
+  const profile = { ...demoProfile, hosting: screen === 'host', hostedSessions: screen === 'host' ? 1 : 0 };
   // Like the engine, the demo sends each resize of the host's terminal back as a record.
   let hostTerminal: TerminalSink | null = null;
   return {
@@ -382,6 +384,8 @@ export function demoBridge(screen: string): Bridge {
     },
     leaveSession: async () => {},
     takeJoinLink: async () => null,
+    takeStartCommand: async () => null,
+    setSessionTitle: async () => {},
     readJoinLink: async (link) => ({ code: formatCode(link) }),
     copyText: async () => {},
     startScreenShown: async () => {},

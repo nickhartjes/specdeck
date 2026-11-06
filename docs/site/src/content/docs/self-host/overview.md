@@ -41,7 +41,7 @@ So watching in a browser means trusting the people who run the sharing service, 
 - **The published image** is signed by SpecDeck's release workflow. Check that the image you run was built by that workflow from a release tag, and not changed since:
 
   ```sh
-  cosign verify ghcr.io/nickhartjes/specdeck-signalling:1.0.0 \
+  cosign verify ghcr.io/nickhartjes/specdeck-signalling:1.6.0 \
     --certificate-identity-regexp '^https://github\.com/nickhartjes/specdeck/\.github/workflows/release\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```

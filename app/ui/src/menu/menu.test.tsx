@@ -47,26 +47,41 @@ describe('menu commands', () => {
     expect(screen.getByLabelText('Invite code')).toHaveFocus();
   });
 
-  it('asks a viewer before leaving the session for another', async () => {
+  it('keeps a watched session: the app opens another window for a new one', async () => {
     const bridge = await setup('start');
     await userEvent.type(screen.getByLabelText('Invite code'), '7K2M9QXH4TPA');
     await userEvent.click(screen.getByRole('button', { name: /Join/ }));
     act(() => menu({ id: 'join' }));
-    const dialog = screen.getByRole('alertdialog', { name: 'Leave this session?' });
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    act(() => menu({ id: 'host' }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(bridge.leaveSession).not.toHaveBeenCalled();
-
-    act(() => menu({ id: 'join' }));
-    await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Leave' }));
-    expect(bridge.leaveSession).toHaveBeenCalled();
-    expect(screen.getByLabelText('Invite code')).toHaveFocus();
+    expect(bridge.chooseFolder).not.toHaveBeenCalled();
   });
 
-  it('keeps a hosted session: one session at a time', async () => {
+  it('keeps a hosted session: the app opens another window for a new one', async () => {
     const bridge = await setup('host');
     act(() => menu({ id: 'join' }));
-    expect(await screen.findByText('End this session before you host or join another.')).toBeInTheDocument();
-    expect(bridge.leaveSession).not.toHaveBeenCalled();
+    act(() => menu({ id: 'recent', path: '/Users/nick/projects/api' }));
+    expect(screen.queryByText(/End this session/)).not.toBeInTheDocument();
+    expect(bridge.startHosting).not.toHaveBeenCalled();
+    expect(bridge.hostClose).not.toHaveBeenCalled();
+  });
+
+  it('a new window starts with the command it was opened for', async () => {
+    const bridge = fakeBridge('start', { takeStartCommand: vi.fn(async () => ({ id: 'recent', path: '/Users/nick/projects/api' })) });
+    renderWith(bridge, <App />);
+    await waitFor(() => expect(bridge.startHosting).toHaveBeenCalledWith(expect.any(String), '/Users/nick/projects/api', expect.any(Number), expect.any(Number)));
+  });
+
+  it('a new window opened to host chooses a folder', async () => {
+    const bridge = fakeBridge('start', { takeStartCommand: vi.fn(async () => ({ id: 'host' })) });
+    renderWith(bridge, <App />);
+    await waitFor(() => expect(bridge.chooseFolder).toHaveBeenCalled());
+  });
+
+  it('names the window after the hosted folder', async () => {
+    const bridge = await setup('host');
+    await waitFor(() => expect(bridge.setSessionTitle).toHaveBeenCalledWith('webshop'));
   });
 
   it('File > Copy Invite Code copies it while hosting', async () => {
@@ -117,22 +132,24 @@ describe('menu commands', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('That link is not a SpecDeck invite.');
   });
 
-  it('asks before leaving a watched session for a join link', async () => {
+  it('keeps a watched session when a join link comes in', async () => {
     const links = [null, { code: 'AAAA-BBBB-CCCC' }];
     const bridge = await setup('start', { takeJoinLink: vi.fn(async () => links.shift() ?? null) });
     await userEvent.type(screen.getByLabelText('Invite code'), '7K2M9QXH4TPA');
     await userEvent.click(screen.getByRole('button', { name: /Join/ }));
+    await waitFor(() => expect(bridge.joinSession).toHaveBeenCalledOnce());
     act(() => menu({ id: 'join-link' }));
-    const dialog = await screen.findByRole('alertdialog', { name: 'Leave this session?' });
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Leave' }));
-    expect(bridge.leaveSession).toHaveBeenCalled();
-    await waitFor(() => expect(bridge.joinSession).toHaveBeenLastCalledWith('AAAA-BBBB-CCCC', null, expect.any(Function), expect.any(Function)));
+    await waitFor(() => expect(bridge.takeJoinLink).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(bridge.leaveSession).not.toHaveBeenCalled();
+    expect(bridge.joinSession).toHaveBeenCalledOnce();
   });
 
   it('keeps a hosted session when a join link comes in', async () => {
     const bridge = await setup('host', { takeJoinLink: vi.fn(async () => ({ code: 'AAAA-BBBB-CCCC' })) });
     act(() => menu({ id: 'join-link' }));
-    expect(await screen.findByText('End this session before you host or join another.')).toBeInTheDocument();
+    await waitFor(() => expect(bridge.takeJoinLink).toHaveBeenCalled());
+    expect(screen.queryByText(/End this session/)).not.toBeInTheDocument();
     expect(bridge.joinSession).not.toHaveBeenCalled();
   });
 });

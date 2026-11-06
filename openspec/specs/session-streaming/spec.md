@@ -18,7 +18,7 @@ Every connected viewer SHALL receive the session's terminal output as it is prod
 - **THEN** output appears for the viewer within 1 second of appearing for the host
 
 ### Requirement: Full session for late joiners
-A viewer who joins after the session started SHALL first receive the session history from its start, then the live output, without gaps or duplicates, and SHALL end up with the same screen as the host.
+A viewer who joins after the session started SHALL first receive the session history from its start, then the live output, without gaps or duplicates, and SHALL end up with the same screen as the host. Where the host shares the invite code, the app SHALL tell the host that anyone who joins sees the whole session so far.
 
 #### Scenario: Join mid-session
 - **WHEN** a viewer joins a session that has been running for 30 minutes
@@ -31,6 +31,10 @@ A viewer who joins after the session started SHALL first receive the session his
 #### Scenario: Join after a resize
 - **WHEN** the host resized the terminal several times before a viewer joins
 - **THEN** the viewer's terminal shows the same content as the host's at the current size
+
+#### Scenario: Host is told at the invite code
+- **WHEN** the host's invite code is ready to share
+- **THEN** a short note beside it says that anyone who joins sees the whole session so far, terminal and timeline, and copying the code needs no extra click
 
 ### Requirement: Reconnect without loss
 A viewer whose connection drops SHALL be reconnected automatically while the session is open, without re-entering the invite code, and SHALL end up with the same terminal content as the host.

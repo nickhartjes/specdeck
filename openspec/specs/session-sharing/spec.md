@@ -44,8 +44,12 @@ The host SHALL be able to copy a join link holding the invite code and the host'
 - **THEN** the app opens and joins the session, asking for a username first if none is set
 
 #### Scenario: Join link while in another session
-- **WHEN** a viewer who is already viewing a session opens a join link for a different session
-- **THEN** the app asks whether to leave the current session before joining
+- **WHEN** a viewer who is already viewing or hosting a session opens a join link for a different session
+- **THEN** the app joins it in a new window, and the session already open keeps running in its own window
+
+#### Scenario: Join link with a free window
+- **WHEN** a viewer opens a join link while the focused window shows the start screen
+- **THEN** the app joins the session in that window and opens no new one
 
 #### Scenario: Link carries the host's service
 - **WHEN** a host using `specdeck.example.com` copies the join link
@@ -160,7 +164,7 @@ A viewer SHALL only be admitted when the host's and the viewer's apps speak the 
 - **THEN** the viewer is not admitted and is told that the host needs to update their app
 
 ### Requirement: Sharing service setting
-The user SHALL be able to set the sharing service in Settings, as a domain or a full URL. An empty setting SHALL mean the service built into the app. A changed setting SHALL apply to sessions started or joined afterwards, and SHALL NOT be changeable while the user hosts or views a session.
+The user SHALL be able to set the sharing service in Settings, as a domain or a full URL. An empty setting SHALL mean the service built into the app. A changed setting SHALL apply to sessions started or joined afterwards, and SHALL NOT be changeable while the user hosts or views a session in any window.
 
 #### Scenario: Own server entered as a domain
 - **WHEN** the user enters `specdeck.example.com` as the sharing service and then hosts a session
@@ -173,6 +177,10 @@ The user SHALL be able to set the sharing service in Settings, as a domain or a 
 #### Scenario: During a session
 - **WHEN** the user opens Settings while hosting or viewing a session
 - **THEN** the sharing service cannot be changed, and Settings says it applies to the next session
+
+#### Scenario: Session in another window
+- **WHEN** one window hosts a session, another shows the start screen, and the user opens Settings
+- **THEN** the sharing service cannot be changed until no window has a session
 
 ### Requirement: Sharing service check
 When the user saves a sharing service, the app SHALL check whether it can be reached and show the result. The setting SHALL be saved whether or not the check succeeds. A service reached without encryption SHALL be marked as not encrypted.

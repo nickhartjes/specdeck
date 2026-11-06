@@ -17,7 +17,11 @@ With **Terminal**, viewers see all output, including anything secret a command p
 
 The link also names your sharing service, so it works for viewers whose SpecDeck uses another one. When you and your viewers use [different sharing services](/specdeck/guide/join/#through-another-sharing-service), share the link rather than the bare code.
 
-You host one session at a time. To host or join another, end this one first.
+## Several sessions at once
+
+Each window shows one session. To host another agent or folder, or to watch a teammate while you host, open another window with **File › New Window** (**⇧⌘N** on macOS). **Host a Session…** and **Join a Session…** open a new window by themselves when the one in front already shows a session. Each session has its own invite code and viewers, and ending one leaves the others running.
+
+Settings are the same for every window: your name, sharing service, view and zoom. Each window's title names its session, so you can tell them apart in the Window menu or the taskbar.
 
 ## What viewers see
 
@@ -49,7 +53,7 @@ If you set up your own Claude Code status line, it keeps showing in the terminal
 
 ## Closing the window
 
-**Closing the window does not end the session.** The agent keeps running and viewers stay connected. While you host, SpecDeck shows an icon in the menu bar (macOS) or the system tray (Windows, Linux). Its menu shows what the agent is doing and how many people watch, and offers:
+**Closing the window does not end the session.** The agent keeps running and viewers stay connected. While you host, SpecDeck shows an icon in the menu bar (macOS) or the system tray (Windows, Linux). Its menu shows what the agent is doing and how many people watch, and offers the items below. With several sessions, the menu has one submenu per session, named after its folder, with the same items.
 
 | Menu item | What it does |
 |---|---|
@@ -57,7 +61,7 @@ If you set up your own Claude Code status line, it keeps showing in the terminal
 | **Copy Invite Code** | Copies the code, also while the window is closed |
 | **End Session…** | Ends the session for everyone, after asking |
 
-Quitting SpecDeck (**⌘Q** on macOS, **File › Quit** elsewhere) while you host asks first, because it ends the session for everyone.
+Quitting SpecDeck (**⌘Q** on macOS, **File › Quit** elsewhere) while you host asks first, because it ends the session for everyone. With several sessions open, it asks once for all of them.
 
 ## When sharing is unavailable
 

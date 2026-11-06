@@ -134,6 +134,12 @@ export function ViewerScreen({ code, server, view, onView, screenReader = false,
   };
 
   const host = state.participants.find((p) => p.role === 'Host');
+  // The window's title names the host's session, as the toolbar does.
+  const title = host ? `${host.label}'s session` : null;
+  useEffect(() => {
+    if (title) void bridge.setSessionTitle(title).catch(() => {});
+  }, [bridge, title]);
+  useEffect(() => () => void bridge.setSessionTitle(null).catch(() => {}), [bridge]);
   const agentName = state.agent ? AGENT_NAMES[state.agent] : 'the agent';
   const terminal = state.agent === 'terminal';
   const ending = state.ended ? END_MESSAGES[state.ended] : null;

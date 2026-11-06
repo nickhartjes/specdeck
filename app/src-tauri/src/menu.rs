@@ -17,6 +17,8 @@ pub const RECENT_PREFIX: &str = "recent:";
 
 /// Ids the UI handles, as sent in the `menu` event.
 pub mod ids {
+    /// Handled in Rust: opens another session window with the start screen.
+    pub const NEW_WINDOW: &str = "new-window";
     pub const HOST: &str = "host";
     pub const JOIN: &str = "join";
     pub const COPY_CODE: &str = "copy-code";
@@ -104,7 +106,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     }
     let recent = recent.enabled(!state.recent.is_empty()).build()?;
 
+    // No New Window key on Windows and Linux: Ctrl+Shift+N is Host there, and Ctrl+N belongs to
+    // the terminal.
     let mut file = SubmenuBuilder::new(app, "File")
+        .item(&item(app, ids::NEW_WINDOW, "New Window", keys("Cmd+Shift+N", None), true)?)
+        .separator()
         .item(&item(app, ids::HOST, "Host a Session…", keys("Cmd+N", Some("Ctrl+Shift+N")), true)?)
         .item(&recent)
         .item(&item(app, ids::JOIN, "Join a Session…", keys("Cmd+J", Some("Ctrl+Shift+J")), true)?)
