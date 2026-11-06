@@ -37,6 +37,17 @@ pub const APP_LOG: &str = "specdeck.log";
 pub fn session_log(id: u32) -> String {
     format!("specdeck-session-{id}.log")
 }
+
+/// The prefix of a log file's name, [`APP_LOG`] or a [`session_log`], if it is one.
+fn log_prefix(name: &str) -> Option<&str> {
+    if name.starts_with(APP_LOG) {
+        return Some(APP_LOG);
+    }
+    let id = name.strip_prefix("specdeck-session-")?;
+    let digits = id.bytes().take_while(u8::is_ascii_digit).count();
+    let end = "specdeck-session-".len() + digits + ".log".len();
+    (digits > 0 && id[digits..].starts_with(".log")).then(|| &name[..end])
+}
 /// Events the panel shows.
 const RECENT: usize = 500;
 /// Files older than this are removed.
@@ -74,10 +85,23 @@ fn targets(verbose: bool) -> Targets {
 }
 
 impl Diagnostics {
-    /// Sets up the log in `dir`, in daily files named `<prefix>.<date>` ([`APP_LOG`] or
-    /// [`session_log`]), and returns the subscriber to install. Without a usable folder the log
-    /// is kept in memory only.
+    /// Sets up the app's log in `dir`, in daily files named `<prefix>.<date>`, and returns the
+    /// subscriber to install. Without a usable folder the log is kept in memory only.
     pub fn new(dir: PathBuf, prefix: &str) -> (Self, impl tracing::Subscriber + Send + Sync) {
+        Self::open(dir, prefix, None)
+    }
+
+    /// The log of session `id`'s process, in its own files ([`session_log`]); each line says
+    /// `"process":"session-<id>"`, so an export tells the processes apart.
+    pub fn for_session(dir: PathBuf, id: u32) -> (Self, impl tracing::Subscriber + Send + Sync) {
+        Self::open(dir, &session_log(id), Some(format!("session-{id}")))
+    }
+
+    fn open(
+        dir: PathBuf,
+        prefix: &str,
+        process: Option<String>,
+    ) -> (Self, impl tracing::Subscriber + Send + Sync + use<>) {
         let (writer, guard, file_error) = match open_folder(&dir, prefix) {
             Ok(appender) => {
                 let (writer, guard) = tracing_appender::non_blocking(appender);
@@ -87,7 +111,7 @@ impl Diagnostics {
         };
         let recent = Arc::new(Mutex::new(VecDeque::with_capacity(RECENT)));
         let (filter, handle) = reload::Layer::new(targets(false));
-        let lines = JsonLines { recent: recent.clone(), writer };
+        let lines = JsonLines { recent: recent.clone(), writer, process };
         let subscriber = tracing_subscriber::registry().with(filter).with(lines);
         let diagnostics = Self {
             filter: handle,
@@ -228,6 +252,8 @@ fn open_folder(dir: &Path, prefix: &str) -> Result<RollingFileAppender, String> 
 struct JsonLines {
     recent: Arc<Mutex<VecDeque<Value>>>,
     writer: Option<NonBlocking>,
+    /// Which session process writes, if not the app.
+    process: Option<String>,
 }
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for JsonLines {
@@ -239,6 +265,9 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for JsonLines {
         line.insert("ts".into(), now.format(&Rfc3339).unwrap_or_default().into());
         line.insert("level".into(), event.metadata().level().as_str().into());
         line.insert("event".into(), fields.0.remove("message").unwrap_or_default());
+        if let Some(process) = &self.process {
+            line.insert("process".into(), process.clone().into());
+        }
         line.extend(fields.0);
         let line = Value::Object(line);
         if let Some(writer) = &self.writer {
@@ -356,6 +385,19 @@ pub struct Status {
     pub verbose: bool,
     /// Unix milliseconds, the clock the times in `session` use.
     pub now: u64,
+}
+
+impl Status {
+    /// Adds the events of the hosted session's process to the app's own, newest first.
+    pub fn with_session_events(mut self, events: Vec<Value>) -> Self {
+        self.events.extend(events);
+        self.events.sort_by_cached_key(|event| {
+            let time = event["ts"].as_str().and_then(|ts| OffsetDateTime::parse(ts, &Rfc3339).ok());
+            std::cmp::Reverse(time)
+        });
+        self.events.truncate(RECENT);
+        self
+    }
 }
 
 /// The window's heartbeat: whether it is visible, and how large its content is. The element
@@ -525,6 +567,8 @@ fn unix_ms(time: SystemTime) -> u64 {
 /// A log file and the day it is for.
 struct LogFile {
     path: PathBuf,
+    /// Whose log it is: [`APP_LOG`] or a [`session_log`].
+    prefix: String,
     date: Date,
     bytes: u64,
 }
@@ -537,12 +581,13 @@ fn log_files(dir: &Path) -> Vec<LogFile> {
         .flatten()
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
-            let rest = name.strip_prefix(APP_LOG)?;
+            let prefix = log_prefix(&name)?.to_owned();
+            let rest = &name[prefix.len()..];
             let metadata = entry.metadata().ok().filter(|m| m.is_file())?;
             let date = rest.strip_prefix('.').and_then(parse_date).or_else(|| {
                 metadata.modified().ok().map(|time| OffsetDateTime::from(time).date())
             })?;
-            Some(LogFile { path: entry.path(), date, bytes: metadata.len() })
+            Some(LogFile { path: entry.path(), prefix, date, bytes: metadata.len() })
         })
         .collect();
     files.sort_by_key(|file| file.date);
@@ -557,9 +602,10 @@ fn parse_date(text: &str) -> Option<Date> {
 }
 
 /// Removes files older than [`KEEP_DAYS`], then the oldest until the logs fit in [`MAX_BYTES`].
-/// Today's file, being written, is kept; a file dated in the future is kept until the size
-/// limit reaches it. A file that cannot be removed, such as one held open on Windows, is tried
-/// again on the next sweep.
+/// The app's and the session processes' files count together. Each log's newest file, which may
+/// be being written, is kept; a file dated in the future is kept until the size limit reaches
+/// it. A file that cannot be removed, such as one held open on Windows, is tried again on the
+/// next sweep.
 pub fn sweep(dir: &Path, now: SystemTime) {
     let today = OffsetDateTime::from(now).date();
     let mut kept = Vec::new();
@@ -570,17 +616,17 @@ pub fn sweep(dir: &Path, now: SystemTime) {
         }
     }
     let mut total: u64 = kept.iter().map(|file| file.bytes).sum();
-    // Oldest first, never the newest file, which is today's or about to be.
-    let newest = kept.pop();
-    for file in kept {
+    // Oldest first, never a log's newest file, which is today's or about to be.
+    let newest: HashMap<&str, usize> =
+        kept.iter().enumerate().map(|(index, file)| (file.prefix.as_str(), index)).collect();
+    for (index, file) in kept.iter().enumerate() {
         if total <= MAX_BYTES {
             break;
         }
-        if std::fs::remove_file(&file.path).is_ok() {
+        if newest[file.prefix.as_str()] != index && std::fs::remove_file(&file.path).is_ok() {
             total -= file.bytes;
         }
     }
-    drop(newest);
 }
 
 #[cfg(test)]
@@ -607,7 +653,7 @@ mod tests {
     #[test]
     fn a_session_process_logs_to_its_own_files() {
         let dir = tempfile::tempdir().unwrap();
-        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), &session_log(7));
+        let (diagnostics, subscriber) = Diagnostics::for_session(dir.path().to_owned(), 7);
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(target: "specdeck_session", "session.attached");
             tracing::info!(target: "specdeck_core::diag", "signalling.connected");
@@ -731,6 +777,101 @@ mod tests {
             names(dir.path()),
             ["specdeck.log.2026-11-03", "specdeck.log.2026-11-04", "specdeck.log.2026-11-05"]
         );
+    }
+
+    #[test]
+    fn session_logs_are_swept_like_the_apps() {
+        let dir = tempfile::tempdir().unwrap();
+        let today = Date::from_calendar_date(2026, time::Month::November, 5).unwrap();
+        for days_ago in [10, 1] {
+            let date = today - time::Duration::days(days_ago);
+            std::fs::write(dir.path().join(format!("{}.{date}", session_log(3))), "{}\n").unwrap();
+        }
+        std::fs::write(dir.path().join("specdeck-session-x.log.2026-10-01"), "").unwrap();
+
+        sweep(dir.path(), noon(today));
+        assert_eq!(
+            names(dir.path()),
+            ["specdeck-session-3.log.2026-11-04", "specdeck-session-x.log.2026-10-01"]
+        );
+    }
+
+    #[test]
+    fn the_size_limit_keeps_each_logs_newest_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let today = Date::from_calendar_date(2026, time::Month::November, 5).unwrap();
+        let mb = vec![b'x'; 1024 * 1024];
+        let files = [
+            format!("{}.2026-11-01", session_log(2)),
+            format!("{APP_LOG}.2026-11-03"),
+            format!("{}.2026-11-04", session_log(1)),
+            format!("{APP_LOG}.2026-11-05"),
+        ];
+        for name in &files {
+            let file = std::fs::File::create(dir.path().join(name)).unwrap();
+            let mut file = std::io::BufWriter::new(file);
+            for _ in 0..20 {
+                file.write_all(&mb).unwrap();
+            }
+        }
+        // 80 MB in four files, each but the app's first the newest of its log: only that goes,
+        // though the logs stay over the limit.
+        sweep(dir.path(), noon(today));
+        assert_eq!(names(dir.path()), [files[2].clone(), files[0].clone(), files[3].clone()]);
+    }
+
+    #[test]
+    fn an_export_includes_session_processes_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
+        let (session, subscriber) = Diagnostics::for_session(dir.path().to_owned(), 4);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "specdeck_core::diag", peer = 1u64, "peer.connected");
+        });
+        drop(session); // the process has ended; its file stays
+
+        let header = ExportHeader::new(diagnostics.status("main", SessionStatus::None), "a", "a");
+        let path = dir.path().join("export.jsonl");
+        diagnostics.export(&path, &header).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert_eq!(lines[1]["event"], "peer.connected");
+        assert_eq!(lines[1]["process"], "session-4");
+    }
+
+    #[test]
+    fn the_panel_shows_a_session_processs_events_with_the_apps() {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "specdeck_core::diag", "signalling.connected");
+        });
+        // Times leave out trailing zeros, so ".6Z" is later than ".59Z" though it sorts first as
+        // text.
+        let session = vec![
+            serde_json::json!({"ts": "2999-01-01T00:00:02.59Z", "event": "peer.path"}),
+            serde_json::json!({"ts": "2999-01-01T00:00:02.6Z", "event": "peer.connected"}),
+            serde_json::json!({"ts": "2000-01-01T00:00:00Z", "event": "session.started"}),
+        ];
+        let status = diagnostics.status("main", SessionStatus::None).with_session_events(session);
+        let events: Vec<_> = status.events.iter().map(|e| e["event"].as_str().unwrap()).collect();
+        assert_eq!(
+            events,
+            ["peer.connected", "peer.path", "signalling.connected", "session.started"]
+        );
+    }
+
+    #[test]
+    fn log_prefixes() {
+        assert_eq!(log_prefix("specdeck.log.2026-11-05"), Some(APP_LOG));
+        assert_eq!(
+            log_prefix("specdeck-session-12.log.2026-11-05"),
+            Some("specdeck-session-12.log")
+        );
+        assert_eq!(log_prefix("specdeck-session-.log.2026-11-05"), None);
+        assert_eq!(log_prefix("specdeck-session-1.txt"), None);
+        assert_eq!(log_prefix("specdeck-diagnostics-2026-11-05.jsonl"), None);
     }
 
     #[cfg(unix)]

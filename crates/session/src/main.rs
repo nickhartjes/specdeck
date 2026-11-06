@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use specdeck_core::peer::PeerConfig;
-use specdeck_diag::{Diagnostics, session_log};
+use specdeck_diag::Diagnostics;
 use specdeck_session::server::{self, Options, START_TIMEOUT};
 
 /// How long a session runs without the app before it ends itself (spec: A session without the
@@ -45,7 +45,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let (diagnostics, subscriber) = Diagnostics::new(PathBuf::from(log_dir), &session_log(id));
+    let (diagnostics, subscriber) = Diagnostics::for_session(PathBuf::from(log_dir), id);
     let _ = tracing::subscriber::set_global_default(subscriber);
     let options = Options {
         id,

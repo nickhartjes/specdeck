@@ -30,7 +30,7 @@
 
 ## 5. Diagnostics in the app
 
-- [ ] 5.1 Show a hosted session's sharing status and recent events in the Connection status panel from its process, propagate Verbose logging to every session, include session log files in the sweep, the 50 MB cap and Export diagnostics. Verify with tests that an export includes a session process's file and that the sweep removes an old one.
+- [x] 5.1 Show a hosted session's sharing status and recent events in the Connection status panel from its process, propagate Verbose logging to every session, include session log files in the sweep, the 50 MB cap and Export diagnostics. Verify with tests that an export includes a session process's file and that the sweep removes an old one.
 
 ## 6. Packaging
 

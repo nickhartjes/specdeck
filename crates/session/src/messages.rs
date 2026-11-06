@@ -77,8 +77,13 @@ pub enum Event {
     HostEvent { event: serde_json::Value },
     /// For the tray and notifications.
     Notice { notice: HostNotice },
-    /// What sharing is doing, for the Connection status panel (`SharingStatus`).
-    Status { sharing: serde_json::Value },
+    /// What sharing is doing, for the Connection status panel (`SharingStatus`), and the
+    /// process's latest log events, newest first.
+    Status {
+        sharing: serde_json::Value,
+        #[serde(default)]
+        events: Vec<serde_json::Value>,
+    },
     /// The session has ended; the process exits.
     Ended,
 }

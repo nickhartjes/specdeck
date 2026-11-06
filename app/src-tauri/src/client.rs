@@ -54,13 +54,21 @@ pub struct SessionClient {
     state: Arc<Mutex<ClientState>>,
 }
 
+/// A hosted session's side of the Connection status panel, from its process.
+pub struct ProcessStatus {
+    /// `SharingStatus`.
+    pub sharing: serde_json::Value,
+    /// Newest first.
+    pub events: Vec<serde_json::Value>,
+}
+
 #[derive(Default)]
 struct ClientState {
     terminal: Option<Channel<InvokeResponseBody>>,
     events: Option<Channel<serde_json::Value>>,
     summary: Option<Summary>,
     started: Option<oneshot::Sender<Result<(), String>>>,
-    status: Option<oneshot::Sender<serde_json::Value>>,
+    status: Option<oneshot::Sender<ProcessStatus>>,
     ended: Vec<oneshot::Sender<()>>,
     over: bool,
 }
@@ -146,8 +154,8 @@ impl SessionClient {
         self.state.lock().unwrap().summary.clone()
     }
 
-    /// What sharing is doing (`SharingStatus`), for the Connection status panel.
-    pub async fn sharing_status(&self) -> Option<serde_json::Value> {
+    /// What sharing is doing and the process's latest events, for the Connection status panel.
+    pub async fn status(&self) -> Option<ProcessStatus> {
         let (sender, receiver) = oneshot::channel();
         self.state.lock().unwrap().status = Some(sender);
         self.send(&Command::Status);
@@ -276,9 +284,9 @@ fn receive(frame: Frame, state: &Mutex<ClientState>, observer: &Observer) -> boo
                 None => tracing::warn!("session.command_failed"),
             }
         }
-        Event::Status { sharing } => {
+        Event::Status { sharing, events } => {
             if let Some(status) = state.lock().unwrap().status.take() {
-                let _ = status.send(sharing);
+                let _ = status.send(ProcessStatus { sharing, events });
             }
         }
         Event::Ended => return false,

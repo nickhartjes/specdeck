@@ -108,8 +108,8 @@ export function ConnectionStatus({ onClose }: { onClose: () => void }) {
         )}
 
         <p className="field-hint" id="export-hint">
-          The export holds this state and the last 7 days of this log: connection events, timings, sizes and whether you
-          connected directly or through the relay. It never holds terminal output, the timeline, invite codes, names, file
+          The export holds this state and the last 7 days of the log, also of the sessions you hosted: connection events,
+          timings, sizes and whether you connected directly or through the relay. It never holds terminal output, the timeline, invite codes, names, file
           paths or addresses. Nothing is sent anywhere; attach the file to a bug report yourself.
         </p>
         <div className="actions">

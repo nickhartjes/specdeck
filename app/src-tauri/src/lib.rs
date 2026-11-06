@@ -344,23 +344,31 @@ async fn set_screen_reader(
     Ok(profile(&state, window.label()))
 }
 
-/// This app's own side of a session; a hosted session's comes from its process.
-async fn status_of(session: &Session<SessionClient, ViewerRuntime>) -> SessionStatus {
+/// This app's side of a session; a hosted session's, with its latest events, comes from its
+/// process.
+async fn status_of(
+    session: &Session<SessionClient, ViewerRuntime>,
+) -> (SessionStatus, Vec<serde_json::Value>) {
     match session {
-        Session::Host(host) => SessionStatus::Host {
-            sharing: host.sharing_status().await.unwrap_or(serde_json::Value::Null),
-        },
-        Session::Viewer(viewer) => SessionStatus::Viewer { viewer: viewer.status() },
+        Session::Host(host) => {
+            let status = host.status().await;
+            let (sharing, events) =
+                status.map_or((serde_json::Value::Null, Vec::new()), |s| (s.sharing, s.events));
+            (SessionStatus::Host { sharing }, events)
+        }
+        Session::Viewer(viewer) => (SessionStatus::Viewer { viewer: viewer.status() }, Vec::new()),
     }
 }
 
-/// This app's own side of the session `window` shows.
-async fn session_status(state: &AppState, window: &str) -> SessionStatus {
+/// Everything the Connection status panel of `window` shows, with the events of the session
+/// process it hosts.
+async fn window_status(state: &AppState, window: &str) -> diagnostics::Status {
     let session = state.sessions.lock().unwrap().of_window(window);
-    match session {
+    let (session, events) = match session {
         Some((_, session)) => status_of(&session).await,
-        None => SessionStatus::None,
-    }
+        None => (SessionStatus::None, Vec::new()),
+    };
+    state.diagnostics.status(window, session).with_session_events(events)
 }
 
 /// What the Connection status panel of `window` shows.
@@ -369,8 +377,7 @@ async fn diagnostics_status(
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<diagnostics::Status, String> {
-    let session = session_status(&state, window.label()).await;
-    Ok(state.diagnostics.status(window.label(), session))
+    Ok(window_status(&state, window.label()).await)
 }
 
 /// The terminal's state from the window: enums and numbers only.
@@ -416,9 +423,10 @@ async fn export_diagnostics(state: &AppState, window: &str, path: &Path) -> Resu
     };
     let mut other_statuses = Vec::new();
     for session in &others {
-        other_statuses.push(status_of(session).await);
+        other_statuses.push(status_of(session).await.0);
     }
-    let status = state.diagnostics.status(window, session_status(state, window).await);
+    // The log files hold every process's events; the header needs no list of them.
+    let status = window_status(state, window).await;
     let header = ExportHeader::new(status, &state.sharing_service(), &state.services.built_in)
         .with_other_sessions(other_statuses);
     state.diagnostics.export(path, &header)
@@ -1052,6 +1060,10 @@ async fn find_sessions(app: &AppHandle) -> Vec<SessionId> {
         live.push(id);
         versions.push(entry.version.clone());
         let controllable = client.controllable();
+        if controllable {
+            // Sent at every attach, so the session always follows the setting.
+            client.set_verbose(state.settings.lock().unwrap().verbose_logging);
+        }
         let summary = client.summary().unwrap_or(Summary {
             status: AgentStatus::Unknown,
             viewers: 0,

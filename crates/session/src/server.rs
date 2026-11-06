@@ -311,7 +311,9 @@ async fn run(
         }
         Command::Status => {
             let sharing = serde_json::to_value(runtime.sharing_status()).unwrap_or_default();
-            shared.send(&Event::Status { sharing });
+            let events =
+                shared.options.diagnostics.as_ref().map(|d| d.recent()).unwrap_or_default();
+            shared.send(&Event::Status { sharing, events });
             Ok(())
         }
         Command::Start { .. } | Command::End => Ok(()),

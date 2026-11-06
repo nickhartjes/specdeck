@@ -346,7 +346,11 @@ async fn the_session_log_holds_no_content_or_secrets() {
     app.send(&Command::Input { data: format!("echo {TYPED}\n") }).await;
     app.until_text(&mut terminal, TYPED).await;
     app.send(&Command::Status).await;
-    app.until(&mut terminal, |event| matches!(event, Event::Status { .. })).await;
+    let status = app.until(&mut terminal, |event| matches!(event, Event::Status { .. })).await;
+    let Event::Status { events, .. } = status else { unreachable!() };
+    // The panel's events come from the process.
+    assert!(events.iter().any(|event| event["event"] == "session.started"), "{events:?}");
+    assert!(events.iter().all(|event| event["process"] == "session-1"), "{events:?}");
     app.send(&Command::End).await;
     process.exits().await;
 
