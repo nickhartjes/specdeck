@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "devDependencies": {
-    "hyperframes": "0.9.13",
+    "hyperframes": "0.9.15",
     "playwright": "^1.64.0"
   }
 }

@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       hyperframes:
-        specifier: 0.9.13
-        version: 0.9.13
+        specifier: 0.9.15
+        version: 0.9.15
       playwright:
         specifier: ^1.64.0
         version: 1.64.1
@@ -476,8 +476,8 @@ packages:
     resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
     engines: {node: '>=16.9.0'}
 
-  hyperframes@0.9.13:
-    resolution: {integrity: sha512-neTJ9pvGt6CWHV+A1WW+VcMAUr3ADIfINe5rLSkMYFmQGiRcsC1ZRnigNSpKUwIBVenl2kQC+lw2lH/boKeteA==}
+  hyperframes@0.9.15:
+    resolution: {integrity: sha512-YcrMXQu2dw2qChM1tlEJeAzA5QRDLk3ce5YDt1/6+h965l371wHfqy7oicgcAueBgfn5ZHVm+5IS16rkU3ljRQ==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -967,7 +967,7 @@ snapshots:
 
   hono@4.13.16: {}
 
-  hyperframes@0.9.13:
+  hyperframes@0.9.15:
     dependencies:
       '@hono/node-server': 2.1.6(hono@4.13.16)
       '@puppeteer/browsers': 3.2.6(yauzl@3.4.0)
