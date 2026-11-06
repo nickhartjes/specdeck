@@ -15,7 +15,7 @@
 ## 3. Docs and first release
 
 - [x] 3.1 Update `docs/site/src/content/docs/self-host/`: `docker-compose.md` (pull a pinned version by default, build from source with `--build` as the alternative, update by changing `SPECDECK_VERSION` and `docker compose pull`), `kubernetes.md` (the published image, pin a version or digest in an overlay, building and pushing your own as the alternative), `overview.md` (the web viewer's code paragraph: verifying the published image with `cosign verify` from design decision 4, or building it yourself); verify the docs site builds and each command in the changed pages matches the deploy files
-- [ ] 3.2 After the first release with an image: make the `specdeck-signalling` package public and linked to `nickhartjes/specdeck` in its package settings if it is not; verify, signed out of ghcr.io, `docker pull ghcr.io/nickhartjes/specdeck-signalling:<version>` and the `cosign verify` command from the docs succeed, and that `latest`, `<major>.<minor>` and `<major>` point at the same digest
+- [x] 3.2 After the first release with an image: make the `specdeck-signalling` package public and linked to `nickhartjes/specdeck` in its package settings if it is not; verify, signed out of ghcr.io, `docker pull ghcr.io/nickhartjes/specdeck-signalling:<version>` and the `cosign verify` command from the docs succeed, and that `latest`, `<major>.<minor>` and `<major>` point at the same digest
 - [x] 3.3 Remove the `container publishing` item from `todo.txt`; verify the Helm chart item still says it needs the published image
 
 ## Workflow follow-up
