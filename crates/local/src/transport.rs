@@ -369,8 +369,8 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[test]
-    fn a_second_listener_on_the_same_pipe_is_refused() {
+    #[tokio::test]
+    async fn a_second_listener_on_the_same_pipe_is_refused() {
         let name = pipe_name(&format!("twice-{}", std::process::id())).unwrap();
         let _first = Listener::bind(&name).unwrap();
         assert!(Listener::bind(&name).is_err());
