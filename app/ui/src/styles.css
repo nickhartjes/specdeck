@@ -1,6 +1,20 @@
 /* SpecDeck: a native, quiet frame around the terminal. System fonts, OS light/dark, one accent
    (the blue of the app icon), status colours only where something needs attention. */
 
+/* Nerd Font symbols (prompt, file and Powerline icons) for every viewer, with nothing installed.
+   Last in --mono and limited to the Private Use Area, so the platform's font still draws all other
+   text and the file loads only when a symbol is on screen. Its icons are 1em wide; size-adjust
+   scales them to about one terminal cell (0.6em), and xterm's letter-spacing takes up the rest.
+   The terminal measures again once this font loads (terminal/symbolFont.ts).
+   License: assets/fonts/LICENSE. */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: local("Symbols Nerd Font Mono"), url("./assets/fonts/SymbolsNerdFontMono-Regular.woff2") format("woff2");
+  font-display: block;
+  size-adjust: 60%;
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD;
+}
+
 :root {
   color-scheme: light;
   --window: #f4f5f7;
@@ -32,7 +46,7 @@
   --terminal-selection: rgba(61, 90, 153, 0.25);
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 16px rgba(16, 24, 40, 0.08);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Ubuntu, Cantarell, "Noto Sans", sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Ubuntu Mono", "DejaVu Sans Mono", monospace;
+  --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Symbols Nerd Font Mono", monospace;
   --radius: 8px;
 }
 
