@@ -24,7 +24,7 @@ spec:
             - --max-port=49179
             - --external-ip=$(TURN_EXTERNAL_IP)
             - --realm=specdeck
-            # Credentials come from the signalling service (TURN REST API scheme).
+            # Credentials come from the sharing service (TURN REST API scheme).
             - --use-auth-secret
             - --static-auth-secret=$(TURN_SECRET)
             - --fingerprint

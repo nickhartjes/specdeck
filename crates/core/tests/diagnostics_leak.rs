@@ -19,7 +19,7 @@ use specdeck_protocol::AgentId;
 use specdeck_protocol::control::PROTOCOL_VERSION;
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::timeline::Entry;
-use specdeck_signalling::{Config, Service, TurnConfig};
+use specdeck_server::{Config, Service, TurnConfig};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -128,7 +128,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     };
     let service = Service::new(Config { turn: Some(turn), ..Config::default() });
     let listener = TcpListener::bind(address).await.unwrap();
-    tokio::spawn(specdeck_signalling::serve(listener, Arc::new(service)));
+    tokio::spawn(specdeck_server::serve(listener, Arc::new(service)));
     let code = tokio::time::timeout(WAIT, async {
         loop {
             if let Some(SharingEvent::Ready { code }) = sharing_events.recv().await {

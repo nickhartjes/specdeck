@@ -62,10 +62,7 @@ async fn viewer_matches_host(name: &str) {
     let (agent, cols, rows, steps) = recording(name);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/signal", listener.local_addr().unwrap());
-    tokio::spawn(specdeck_signalling::serve(
-        listener,
-        Arc::new(specdeck_signalling::Service::default()),
-    ));
+    tokio::spawn(specdeck_server::serve(listener, Arc::new(specdeck_server::Service::default())));
 
     let dir = tempfile::tempdir().unwrap();
     let log = Arc::new(OutputLog::create(dir.path()).unwrap());

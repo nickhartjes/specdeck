@@ -8,9 +8,9 @@ Current version: `PROTOCOL_VERSION = 2` ([`src/control.rs`](src/control.rs)). Ve
 
 1. The host generates an [`InviteCode`](src/invite.rs): 12 random Crockford base32 characters (no I, L, O or U), shown as `7K2M-9QXH-4TPA`. When parsing, case, spaces and dashes are ignored, and O, I and L are read as 0, 1 and 1. A join link is `specdeck://join/<code>`.
 2. Both sides derive two values from the code with HKDF-SHA256 (salt `specdeck invite v1`):
-   - **room id** (info `room id`, 16 bytes, hex): the only thing the signalling service sees;
+   - **room id** (info `room id`, 16 bytes, hex): the only thing the sharing service sees;
    - **auth key** (info `auth key`, 32 bytes): never sent anywhere.
-3. The viewer's offer and the host's answer travel through the signalling service as [`SignedDescription`](src/signal_auth.rs)s: the SDP with an HMAC-SHA256 under the auth key over a version label, the kind (`offer` or `answer`), the connection id and the SDP, each length-prefixed. The receiver checks the tag for the expected kind and connection before using the SDP. The signalling service therefore cannot substitute DTLS fingerprints, or replay a description into another connection or direction.
+3. The viewer's offer and the host's answer travel through the sharing service as [`SignedDescription`](src/signal_auth.rs)s: the SDP with an HMAC-SHA256 under the auth key over a version label, the kind (`offer` or `answer`), the connection id and the SDP, each length-prefixed. The receiver checks the tag for the expected kind and connection before using the SDP. The sharing service therefore cannot substitute DTLS fingerprints, or replay a description into another connection or direction.
 
 ## Channels
 

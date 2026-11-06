@@ -138,9 +138,9 @@ mod tests {
     async fn a_running_service_is_reachable() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/signal", listener.local_addr().unwrap());
-        tokio::spawn(specdeck_signalling::serve(
+        tokio::spawn(specdeck_server::serve(
             listener,
-            Arc::new(specdeck_signalling::Service::default()),
+            Arc::new(specdeck_server::Service::default()),
         ));
         assert_eq!(check(&url).await, ServiceCheck { reachable: true, problem: None });
     }
@@ -161,23 +161,21 @@ mod tests {
         );
     }
 
-    async fn service_with(web: Option<specdeck_signalling::WebViewer>) -> String {
+    async fn service_with(web: Option<specdeck_server::WebViewer>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/signal", listener.local_addr().unwrap());
-        let config = specdeck_signalling::Config { web, ..Default::default() };
-        tokio::spawn(specdeck_signalling::serve(
+        let config = specdeck_server::Config { web, ..Default::default() };
+        tokio::spawn(specdeck_server::serve(
             listener,
-            Arc::new(specdeck_signalling::Service::new(config)),
+            Arc::new(specdeck_server::Service::new(config)),
         ));
         url
     }
 
     #[tokio::test]
     async fn a_service_with_the_web_viewer_says_so() {
-        let page = specdeck_signalling::WebViewer::from_files([(
-            "web.html".to_owned(),
-            b"<html>".to_vec(),
-        )]);
+        let page =
+            specdeck_server::WebViewer::from_files([("web.html".to_owned(), b"<html>".to_vec())]);
         assert!(web_viewer(&service_with(Some(page)).await).await);
     }
 

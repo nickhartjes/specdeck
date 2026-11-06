@@ -1,5 +1,5 @@
-# TLS for the signalling service: Caddy gets a certificate for SPECDECK_DOMAIN and passes
-# WebSocket connections on /signal (and /health) through.
+# TLS for the sharing service: Caddy gets a certificate for SPECDECK_DOMAIN and passes
+# everything through, WebSocket connections on /signal included.
 {$SPECDECK_DOMAIN} {
-	reverse_proxy signalling:8080
+	reverse_proxy server:8080
 }

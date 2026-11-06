@@ -190,9 +190,9 @@ impl Live {
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/signal", listener.local_addr().unwrap());
-        tokio::spawn(specdeck_signalling::serve(
+        tokio::spawn(specdeck_server::serve(
             listener,
-            Arc::new(specdeck_signalling::Service::default()),
+            Arc::new(specdeck_server::Service::default()),
         ));
 
         let env = Environment::detect(Duration::from_secs(10));

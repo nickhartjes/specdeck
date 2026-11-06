@@ -8,7 +8,7 @@
 **/node_modules/
 **/dist/
 app/src-tauri/gen/
-# The web viewer's builds; the image builds its own (docker/signalling.Dockerfile).
+# The web viewer's builds; the image builds its own (docker/server.Dockerfile).
 crates/web/pkg/
 app/ui/dist-web/
 docs/site/.astro/

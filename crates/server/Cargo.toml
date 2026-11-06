@@ -1,6 +1,6 @@
 [package]
-name = "specdeck-signalling"
-description = "SpecDeck matchmaking service and TURN credentials"
+name = "specdeck-server"
+description = "SpecDeck sharing service: matchmaking, TURN credentials and the web viewer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

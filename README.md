@@ -41,16 +41,16 @@ Releases built before the signing certificates are in place are unsigned, so the
 |---|---|
 | [`crates/protocol`](crates/protocol) | Wire protocol shared by hosts and viewers: messages, frames, signing, invite codes (no I/O) |
 | [`crates/core`](crates/core) | Session engine: runs the agent in a pty, output log, timeline, WebRTC connections |
-| [`crates/signalling`](crates/signalling) | Matchmaking service and TURN credentials; serves the web viewer when built with `web-viewer` |
+| [`crates/server`](crates/server) | The sharing service (`specdeck-server`): matchmaking and TURN credentials; serves the web viewer when built with `web-viewer` |
 | [`crates/web`](crates/web) | The viewer logic of `crates/protocol` as WebAssembly, for the web viewer |
 | [`app/src-tauri`](app/src-tauri) | Tauri shell: windows, menus, tray, commands |
 | [`app/ui`](app/ui) | Web UI (React, TypeScript, Vite), for the app and the web viewer (`web.html`, `src/web`) |
 | [`openspec`](openspec) | Specs and change proposals |
-| [`deploy/compose`](deploy/compose) | Docker Compose setup for signalling, coturn and Caddy on one server |
-| [`deploy/k8s`](deploy/k8s) | Kubernetes manifests for signalling and coturn (`base`, `local`) ([README](deploy/k8s/README.md)) |
+| [`deploy/compose`](deploy/compose) | Docker Compose setup for the server, coturn and Caddy on one server |
+| [`deploy/k8s`](deploy/k8s) | Kubernetes manifests for the server and coturn (`base`, `local`) ([README](deploy/k8s/README.md)) |
 | [`docs/site`](docs/site) | Documentation site (Astro Starlight), published to GitHub Pages by [`docs.yml`](.github/workflows/docs.yml) |
 | [`docs/video`](docs/video) | How-to videos, made from the UI's demo mode with HyperFrames and a local voice ([README](docs/video/README.md)) |
-| [`docker`](docker) | Signalling service image |
+| [`docker`](docker) | Server image (`specdeck-server`, published to `ghcr.io/nickhartjes/specdeck-server`) |
 | [`scripts`](scripts) | Helper scripts used by the `just` recipes and CI |
 
 ## Development
@@ -69,13 +69,13 @@ just video     # the how-to videos (docs/video/<name>/renders)
 just check-web # web viewer: WebAssembly core and tests, the page (app/ui/dist-web), the service with it
 ```
 
-To run the web viewer against a local service, run `just web-wasm` and `pnpm --dir app/ui build:web`, then `cargo run -p specdeck-signalling --features web-viewer` and open `http://127.0.0.1:8080/`.
+To run the web viewer against a local service, run `just web-wasm` and `pnpm --dir app/ui build:web`, then `cargo run -p specdeck-server --features web-viewer` and open `http://127.0.0.1:8080/`.
 
 Run `just` to list all recipes. To try sharing on your own machine (Colima with Kubernetes, `colima start --kubernetes`):
 
 ```sh
-just local-dev     # signalling and coturn on Colima's k3s, plus a host app and a viewer app
-just local-up      # only deploy signalling and coturn to Colima's k3s
+just local-dev     # the server and coturn on Colima's k3s, plus a host app and a viewer app
+just local-up      # only deploy the server and coturn to Colima's k3s
 just local-test    # check that two peers connect through the relay only
 just local-down    # remove the deployment
 ```

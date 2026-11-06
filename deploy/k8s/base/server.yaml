@@ -1,24 +1,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: specdeck-signalling
-  labels: { app: specdeck-signalling }
+  name: specdeck-server
+  labels: { app: specdeck-server }
 spec:
   # Rooms live in memory: run exactly one replica.
   replicas: 1
   strategy: { type: Recreate }
   selector:
-    matchLabels: { app: specdeck-signalling }
+    matchLabels: { app: specdeck-server }
   template:
     metadata:
-      labels: { app: specdeck-signalling }
+      labels: { app: specdeck-server }
     spec:
       securityContext:
         seccompProfile: { type: RuntimeDefault }
       containers:
-        - name: signalling
+        - name: server
           # Tag set in kustomization.yaml (images).
-          image: ghcr.io/nickhartjes/specdeck-signalling
+          image: ghcr.io/nickhartjes/specdeck-server
           ports:
             - { containerPort: 8080, name: http }
           env:
@@ -50,9 +50,9 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: specdeck-signalling
+  name: specdeck-server
 spec:
-  selector: { app: specdeck-signalling }
+  selector: { app: specdeck-server }
   ports:
     - { port: 8080, targetPort: http, name: http }
 # Expose /signal (WebSocket) and /health through the cluster's ingress with TLS. The app connects

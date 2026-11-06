@@ -1,4 +1,4 @@
-//! Runs the signalling service. Configuration comes from the environment:
+//! Runs the sharing service. Configuration comes from the environment:
 //!
 //! - `SPECDECK_LISTEN`: address to listen on (default `0.0.0.0:8080`)
 //! - `SPECDECK_TURN_SECRET`: coturn's `static-auth-secret`; without it, no TURN credentials
@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use specdeck_signalling::{Config, Service, TurnConfig, serve};
+use specdeck_server::{Config, Service, TurnConfig, serve};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -29,17 +29,17 @@ async fn main() -> std::io::Result<()> {
         tracing::warn!("no TURN relay configured (SPECDECK_TURN_SECRET, SPECDECK_TURN_URLS)");
     }
     let listener = TcpListener::bind(&address).await?;
-    tracing::info!("signalling service listening on {address}");
+    tracing::info!("sharing service listening on {address}");
     serve(listener, Arc::new(Service::new(config))).await
 }
 
 #[cfg(feature = "web-viewer")]
-fn web_viewer() -> Option<specdeck_signalling::WebViewer> {
-    Some(specdeck_signalling::WebViewer::embedded())
+fn web_viewer() -> Option<specdeck_server::WebViewer> {
+    Some(specdeck_server::WebViewer::embedded())
 }
 
 #[cfg(not(feature = "web-viewer"))]
-fn web_viewer() -> Option<specdeck_signalling::WebViewer> {
+fn web_viewer() -> Option<specdeck_server::WebViewer> {
     None
 }
 
