@@ -11,7 +11,7 @@ description: Join with an invite code or a link, and choose how you follow sessi
   - Hosts copy a web link when their sharing service serves the web viewer.
 - **With a code:** under **Join a session** (or **File › Join a Session…**, **⌘J** on macOS, **Ctrl+Shift+J** on Windows and Linux), type or paste the invite code or link and select **Join**. Upper or lower case and dashes do not matter, and the code is formatted as you type.
 
-If you are watching another session, SpecDeck asks before it leaves that one. If a link does not work, SpecDeck says so on the start screen; see [Troubleshooting](/specdeck/guide/troubleshooting/) for what each message means.
+If the window you are using already shows a session, a link opens in a new window and the other session keeps running. If a link does not work, SpecDeck says so on the start screen; see [Troubleshooting](/specdeck/guide/troubleshooting/) for what each message means.
 
 ## Through another sharing service
 

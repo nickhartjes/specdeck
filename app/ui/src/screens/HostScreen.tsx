@@ -147,10 +147,14 @@ export function HostScreen({ view, onView, screenReader = false, onEnded , updat
     if (command.id === 'copy-code') {
       if (state.code) void copy(formatCode(state.code), 'Invite code copied');
       else showToast('The invite code is not ready yet.');
-    } else if (['host', 'join', 'recent'].includes(command.id)) {
-      showToast('End this session before you host or join another.');
     }
   });
+
+  // The window's title names the folder, so the platform's window list tells sessions apart.
+  useEffect(() => {
+    if (folderName) void bridge.setSessionTitle(folderName).catch(() => {});
+  }, [bridge, folderName]);
+  useEffect(() => () => void bridge.setSessionTitle(null).catch(() => {}), [bridge]);
 
   const end = async () => {
     setConfirmEnd(false);

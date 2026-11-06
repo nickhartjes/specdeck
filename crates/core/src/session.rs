@@ -320,6 +320,12 @@ impl HostSession {
 
     /// Ends the agent and the session. The output log and hook settings are deleted.
     pub fn close(self) {
+        self.stop();
+    }
+
+    /// Ends the agent and the session where it is shared between threads. The output log and
+    /// hook settings are deleted once the session is dropped too.
+    pub fn stop(&self) {
         let _ = self.killer.lock().unwrap().kill();
         let _ = self.commands.send(Command::Close);
     }

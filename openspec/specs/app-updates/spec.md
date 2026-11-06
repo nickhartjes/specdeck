@@ -69,7 +69,7 @@ When a verified update is ready, the app SHALL show a notice with the new versio
 - **THEN** the app does not show it again until it starts again or finds a newer version
 
 ### Requirement: Updating during a session
-While the user hosts or watches a session, choosing Restart to update SHALL first ask, saying that restarting ends the hosted session for everyone or leaves the watched one. Cancelling SHALL keep the session and the update ready.
+While the user hosts or watches a session, choosing Restart to update SHALL first ask, saying that restarting ends the hosted session for everyone or leaves the watched one. With sessions in several windows, the app SHALL ask once, covering all of them. Cancelling SHALL keep every session and the update ready.
 
 #### Scenario: Host restarts
 - **WHEN** the host chooses Restart to update during a session
@@ -78,6 +78,10 @@ While the user hosts or watches a session, choosing Restart to update SHALL firs
 #### Scenario: Viewer cancels
 - **WHEN** a viewer chooses Restart to update and then Cancel
 - **THEN** the viewer stays in the session and the notice stays
+
+#### Scenario: Several sessions
+- **WHEN** the user hosts two sessions and watches one, and chooses Restart to update
+- **THEN** the app asks once, saying that two hosted sessions end for everyone and the watched one is left, and only on confirmation ends all of them, installs and restarts
 
 ### Requirement: Check for updates on demand
 The menu SHALL offer **Check for Updates…** (in the SpecDeck menu on macOS, in Help on Windows and Linux). It SHALL check at once, whatever the setting, and report the outcome: up to date, an update that is being downloaded or is ready, or that the check failed.

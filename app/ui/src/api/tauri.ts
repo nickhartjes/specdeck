@@ -2,6 +2,7 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { exportFileName } from '../model/diagnostics';
 import type { Bridge } from './bridge';
@@ -65,6 +66,8 @@ export const tauriBridge: Bridge = {
     invoke('join_session', { code, server, terminal: bytesChannel(terminal), events: channel<ViewEvent>(events) }),
   leaveSession: () => invoke('leave_session'),
   takeJoinLink: () => invoke<JoinLink | null>('take_join_link'),
+  takeStartCommand: () => invoke<MenuCommand | null>('take_start_command'),
+  setSessionTitle: (name) => invoke('set_session_title', { name }),
   readJoinLink: (link) => invoke<JoinLink>('read_join_link', { link }),
   copyText: (text) => navigator.clipboard.writeText(text),
   startScreenShown: () => invoke('start_screen_shown'),
@@ -82,7 +85,9 @@ export const tauriBridge: Bridge = {
     return true;
   },
   onMenu: (handler) => {
-    const stop = listen<MenuCommand>('menu', (event) => handler(event.payload));
+    // Only the commands sent to this window: the global `listen` also hears those sent to the
+    // other windows (`multiple-windows` design decision 4).
+    const stop = getCurrentWebviewWindow().listen<MenuCommand>('menu', (event) => handler(event.payload));
     return () => void stop.then((unlisten) => unlisten());
   },
 };

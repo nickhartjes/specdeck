@@ -70,6 +70,8 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     lastAgent: null,
     agents: [],
     hosting: false,
+    hostedSessions: 0,
+    watchedSessions: connection !== null ? 1 : 0,
     notifications: false,
     view,
     translucent: false,
@@ -157,6 +159,9 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       return Promise.resolve();
     },
     takeJoinLink: () => Promise.resolve(null),
+    // One page, one session: no other windows to start or title.
+    takeStartCommand: () => Promise.resolve(null),
+    setSessionTitle: () => Promise.resolve(),
     readJoinLink: (link) => Promise.resolve(readJoinLink(link)),
     copyText: (text) => navigator.clipboard.writeText(text),
     startScreenShown: () => Promise.resolve(),

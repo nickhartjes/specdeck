@@ -12,6 +12,7 @@ Everything in SpecDeck works with the keyboard alone, and every control has a na
 | Move on from a viewer's terminal | **Tab**, as anywhere else |
 | Start a new line in the agent's prompt, in your own terminal | **Shift+Enter** |
 | Switch side-panel tabs | The left and right arrow keys, once a tab has focus |
+| New window | **⇧⌘N** (macOS), or **File › New Window** (Windows, Linux) |
 | Host a session | **⌘N** (macOS) or **Ctrl+Shift+N** (Windows, Linux) |
 | Join a session | **⌘J** (macOS) or **Ctrl+Shift+J** (Windows, Linux) |
 | Find in the terminal and timeline | **⌘F** (macOS) or **Ctrl+F** (Windows, Linux); **Ctrl+Shift+F** in the host's own terminal |

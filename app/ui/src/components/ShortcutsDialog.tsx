@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { isMac } from '../menu/menu';
 
 const MAC: [string, string][] = [
+  ['New window', '⇧⌘N'],
   ['Host a session', '⌘N'],
   ['Join a session', '⌘J'],
   ['Copy the invite code', '⇧⌘C'],

@@ -55,8 +55,12 @@ export interface Bridge {
   /** Joins through `server`, from a link the user agreed to, or their own service when null. */
   joinSession(code: string, server: string | null, terminal: TerminalSink, events: (event: ViewEvent) => void): Promise<void>;
   leaveSession(): Promise<void>;
-  /** The join link that opened the app or came in since, once; null when there is none. */
+  /** The join link for this window that opened the app or came in since, once; null when there is none. */
   takeJoinLink(): Promise<JoinLink | null>;
+  /** The host, join or recent-folder command a new window opened with, once; null when there is none. */
+  takeStartCommand(): Promise<MenuCommand | null>;
+  /** Names this window's session in its title, or clears it with null. */
+  setSessionTitle(name: string | null): Promise<void>;
   /** Reads a link pasted into the start screen. */
   readJoinLink(link: string): Promise<JoinLink>;
   copyText(text: string): Promise<void>;
@@ -69,9 +73,9 @@ export interface Bridge {
   reconnectViewer(): Promise<void>;
   /** Saves the diagnostics where the user chooses; false when they cancel. */
   exportDiagnostics(): Promise<boolean>;
-  /** The main window is alive; see model/heartbeat.ts. */
+  /** This window is alive; see model/heartbeat.ts. */
   heartbeat(beat: Heartbeat): Promise<void>;
-  /** Calls `handler` for each native menu command; returns a function that stops listening. */
+  /** Calls `handler` for each native menu command sent to this window; returns a function that stops listening. */
   onMenu(handler: (command: MenuCommand) => void): () => void;
 }
 

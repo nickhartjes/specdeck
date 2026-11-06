@@ -4,12 +4,13 @@ mod menu;
 mod migrate;
 mod notify;
 mod services;
+mod sessions;
 mod settings;
 mod tray;
 mod updates;
 mod viewer;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -26,7 +27,8 @@ use specdeck_protocol::{AgentId, AgentStatus};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::menu::MenuEvent;
 use tauri::{
-    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -38,6 +40,7 @@ use tauri_plugin_window_state::StateFlags;
 use crate::diagnostics::{Diagnostics, ExportHeader, Heartbeat, SessionStatus, TerminalSnapshot};
 use crate::host::{HostEvent, HostNotice, HostRuntime, SharingState, StartOptions, Summary};
 use crate::services::{ServiceCheck, Services};
+use crate::sessions::{MAIN_WINDOW, Session, SessionId, Sessions, is_session_window};
 use crate::settings::{Settings, View, ZOOM_DEFAULT, zoom_in, zoom_out};
 use crate::updates::{GitHubFeed, Outcome, UpdateState, Updates};
 use crate::viewer::{EndReason, ViewEvent, ViewerRuntime};
@@ -53,12 +56,18 @@ struct AppState {
     services: Services,
     /// The user's login-shell environment, read once in the background at start.
     environment: Arc<OnceLock<Environment>>,
-    host: Mutex<Option<HostRuntime>>,
-    viewer: Mutex<Option<ViewerRuntime>>,
-    /// The main window shows the desktop through it (macOS vibrancy, Windows 11 Mica).
+    /// Every hosted and watched session, and the window that shows each.
+    sessions: Mutex<Sessions<HostRuntime, ViewerRuntime>>,
+    /// The hosted sessions as the tray shows them, in the order they started.
+    tray: Mutex<BTreeMap<SessionId, tray::Entry>>,
+    /// Which session each notification was about, for a click on it.
+    notices: Mutex<notify::Notices>,
+    /// The session windows show the desktop through them (macOS vibrancy, Windows 11 Mica).
     translucent: AtomicBool,
-    /// A join link the window has not handled yet.
-    join_link: Mutex<Option<JoinLink>>,
+    /// Join links the windows have not handled yet, by window label.
+    join_links: Mutex<HashMap<String, JoinLink>>,
+    /// A start command a new window opens with (host, join, a recent folder), by window label.
+    start_commands: Mutex<HashMap<String, MenuCommand>>,
     /// New releases: whether one is being fetched or is ready to install.
     updates: Arc<Updates<tauri_plugin_updater::Update>>,
     versions: Mutex<HashMap<PathBuf, ReadVersion>>,
@@ -74,8 +83,18 @@ impl AppState {
         self.services.effective(self.settings.lock().unwrap().sharing_service.as_deref())
     }
 
+    /// Whether any window hosts or watches a session.
     fn in_session(&self) -> bool {
-        self.host.lock().unwrap().is_some() || self.viewer.lock().unwrap().is_some()
+        self.sessions.lock().unwrap().count() > 0
+    }
+
+    fn hosting(&self) -> bool {
+        !self.sessions.lock().unwrap().hosts().is_empty()
+    }
+
+    /// The hosted session `window` shows, or an error to return.
+    fn host_of(&self, window: &str) -> Result<Arc<HostRuntime>, String> {
+        self.sessions.lock().unwrap().host_of(window).ok_or_else(|| "No session is running.".into())
     }
 
     fn save(&self, settings: &Settings) {
@@ -112,8 +131,11 @@ struct Profile {
     recent_folders: Vec<RecentFolder>,
     last_agent: Option<AgentId>,
     agents: Vec<AgentInfo>,
-    /// Set while a session is hosted, so a reopened window goes straight back to it.
+    /// Set while this window shows a hosted session, so a reopened window goes straight back to it.
     hosting: bool,
+    /// The sessions hosted and watched in all windows, for the question before restarting.
+    hosted_sessions: usize,
+    watched_sessions: usize,
     notifications: bool,
     /// How the user follows sessions; `None` until they answered the first-join question.
     view: Option<View>,
@@ -127,7 +149,7 @@ struct Profile {
     built_in_service: String,
     /// `SPECDECK_SIGNALLING_URL` decides the service, so the setting has no effect.
     service_overridden: bool,
-    /// Hosting or viewing; the sharing service cannot change meanwhile.
+    /// Hosting or viewing in any window; the sharing service cannot change meanwhile.
     in_session: bool,
     /// This install updates itself, so Settings offers the update setting.
     updates_itself: bool,
@@ -154,13 +176,15 @@ fn agent_infos(env: &Environment) -> Vec<AgentInfo> {
         .collect()
 }
 
-fn profile(state: &AppState) -> Profile {
+/// The profile as `window` sees it.
+fn profile(state: &AppState, window: &str) -> Profile {
     let settings = state.settings.lock().unwrap().clone();
     let agents = agent_infos(&state.environment());
-    // Each takes the session locks itself, so not inside the struct expression below, where the
-    // guards would live until its end.
-    let hosting = state.host.lock().unwrap().is_some();
-    let in_session = state.in_session();
+    let (hosting, hosted_sessions, watched_sessions) = {
+        let sessions = state.sessions.lock().unwrap();
+        (sessions.host_of(window).is_some(), sessions.hosts().len(), sessions.viewers().len())
+    };
+    let in_session = hosted_sessions + watched_sessions > 0;
     Profile {
         username: settings.username.clone(),
         recent_folders: settings
@@ -177,6 +201,8 @@ fn profile(state: &AppState) -> Profile {
         last_agent: settings.last_agent,
         agents,
         hosting,
+        hosted_sessions,
+        watched_sessions,
         notifications: settings.notifications,
         view: settings.view,
         translucent: state.translucent.load(Ordering::Relaxed),
@@ -261,13 +287,14 @@ async fn open_install_page(app: AppHandle, agent: AgentId) -> Result<(), String>
 }
 
 #[tauri::command]
-async fn get_profile(state: State<'_, AppState>) -> Result<Profile, String> {
-    Ok(profile(&state))
+async fn get_profile(window: WebviewWindow, state: State<'_, AppState>) -> Result<Profile, String> {
+    Ok(profile(&state, window.label()))
 }
 
 #[tauri::command]
 async fn set_username(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     username: String,
 ) -> Result<Profile, String> {
@@ -277,12 +304,13 @@ async fn set_username(
         state.save(&settings);
     }
     settings_changed(&app);
-    Ok(profile(&state))
+    Ok(profile(&state, window.label()))
 }
 
 #[tauri::command]
 async fn set_notifications(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<Profile, String> {
@@ -292,12 +320,13 @@ async fn set_notifications(
         state.save(&settings);
     }
     settings_changed(&app);
-    Ok(profile(&state))
+    Ok(profile(&state, window.label()))
 }
 
 #[tauri::command]
 async fn set_screen_reader(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<Profile, String> {
@@ -307,71 +336,93 @@ async fn set_screen_reader(
         state.save(&settings);
     }
     settings_changed(&app);
-    Ok(profile(&state))
+    Ok(profile(&state, window.label()))
 }
 
-/// This app's own side of the session it is in.
-fn session_status(state: &AppState) -> SessionStatus {
-    if let Some(host) = state.host.lock().unwrap().as_ref() {
-        return SessionStatus::Host { sharing: host.sharing_status() };
-    }
-    match state.viewer.lock().unwrap().as_ref() {
-        Some(viewer) => SessionStatus::Viewer { viewer: viewer.status() },
-        None => SessionStatus::None,
+/// This app's own side of a session.
+fn status_of(session: &Session<HostRuntime, ViewerRuntime>) -> SessionStatus {
+    match session {
+        Session::Host(host) => SessionStatus::Host { sharing: host.sharing_status() },
+        Session::Viewer(viewer) => SessionStatus::Viewer { viewer: viewer.status() },
     }
 }
 
-/// What the Connection status panel shows.
+/// This app's own side of the session `window` shows.
+fn session_status(state: &AppState, window: &str) -> SessionStatus {
+    let session = state.sessions.lock().unwrap().of_window(window);
+    session.map_or(SessionStatus::None, |(_, session)| status_of(&session))
+}
+
+/// What the Connection status panel of `window` shows.
 #[tauri::command]
-async fn diagnostics_status(state: State<'_, AppState>) -> Result<diagnostics::Status, String> {
-    Ok(state.diagnostics.status(session_status(&state)))
+async fn diagnostics_status(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<diagnostics::Status, String> {
+    Ok(state.diagnostics.status(window.label(), session_status(&state, window.label())))
 }
 
 /// The terminal's state from the window: enums and numbers only.
 #[tauri::command]
 async fn diagnostics_report_terminal(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     snapshot: TerminalSnapshot,
 ) -> Result<(), String> {
-    state.diagnostics.report_terminal(snapshot);
+    state.diagnostics.report_terminal(window.label(), snapshot);
     Ok(())
 }
 
 /// Drops the viewer's connection and reconnects at once.
 #[tauri::command]
-async fn reconnect_viewer(state: State<'_, AppState>) -> Result<(), String> {
-    if state.host.lock().unwrap().is_some() {
-        return diagnostics::check_reconnect(true, None);
-    }
-    match state.viewer.lock().unwrap().as_ref() {
-        Some(viewer) => viewer.reconnect(),
+async fn reconnect_viewer(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    let session = state.sessions.lock().unwrap().of_window(window.label());
+    match session {
+        Some((_, Session::Host(_))) => diagnostics::check_reconnect(true, None),
+        Some((_, Session::Viewer(viewer))) => viewer.reconnect(),
         None => diagnostics::check_reconnect(false, None),
     }
 }
 
 /// Saves the diagnostics to `path`, which the user chose. Nothing is uploaded.
 #[tauri::command]
-async fn diagnostics_export(state: State<'_, AppState>, path: PathBuf) -> Result<(), String> {
-    export_diagnostics(&state, &path)
+async fn diagnostics_export(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    path: PathBuf,
+) -> Result<(), String> {
+    export_diagnostics(&state, window.label(), &path)
 }
 
-fn export_diagnostics(state: &AppState, path: &Path) -> Result<(), String> {
-    let status = state.diagnostics.status(session_status(state));
-    let header = ExportHeader::new(status, &state.sharing_service(), &state.services.built_in);
+/// Exports the diagnostics as `window` sees them, with the sessions of the other windows.
+fn export_diagnostics(state: &AppState, window: &str, path: &Path) -> Result<(), String> {
+    let others: Vec<_> = {
+        let sessions = state.sessions.lock().unwrap();
+        let own = sessions.of_window(window).map(|(id, _)| id);
+        let hosts = sessions.hosts().into_iter().map(|(id, host)| (id, Session::Host(host)));
+        let viewers = sessions.viewers().into_iter().map(|(id, v)| (id, Session::Viewer(v)));
+        hosts.chain(viewers).filter(|(id, _)| Some(*id) != own).map(|(_, s)| s).collect()
+    };
+    let status = state.diagnostics.status(window, session_status(state, window));
+    let header = ExportHeader::new(status, &state.sharing_service(), &state.services.built_in)
+        .with_other_sessions(others.iter().map(status_of).collect());
     state.diagnostics.export(path, &header)
 }
 
 /// Help › Export Diagnostics: entirely in Rust, with the native save dialog, so it works
-/// while the window's UI does not respond.
+/// while the window's UI does not respond. Exported as the focused window sees it.
 fn export_diagnostics_from_menu(app: &AppHandle) {
     let handle = app.clone();
+    let window = app.state::<AppState>().sessions.lock().unwrap().focused().map(str::to_owned);
+    let window = window.unwrap_or_else(|| MAIN_WINDOW.to_owned());
     app.dialog()
         .file()
         .set_file_name(diagnostics::export_file_name())
         .add_filter("Diagnostics", &["jsonl"])
         .save_file(move |path| {
             let Some(path) = path.and_then(|path| path.into_path().ok()) else { return };
-            let (kind, text) = match export_diagnostics(&handle.state::<AppState>(), &path) {
+            let state = handle.state::<AppState>();
+            let (kind, text) = match export_diagnostics(&state, &window, &path) {
                 Ok(()) => (MessageDialogKind::Info, "Diagnostics saved.".to_owned()),
                 Err(error) => (MessageDialogKind::Error, error),
             };
@@ -379,10 +430,14 @@ fn export_diagnostics_from_menu(app: &AppHandle) {
         });
 }
 
-/// The main window's heartbeat, once a second while it is visible.
+/// A session window's heartbeat, once a second while it is visible.
 #[tauri::command]
-async fn diagnostics_heartbeat(state: State<'_, AppState>, beat: Heartbeat) -> Result<(), String> {
-    state.diagnostics.heartbeat(beat);
+async fn diagnostics_heartbeat(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    beat: Heartbeat,
+) -> Result<(), String> {
+    state.diagnostics.heartbeat(window.label(), beat);
     Ok(())
 }
 
@@ -390,6 +445,7 @@ async fn diagnostics_heartbeat(state: State<'_, AppState>, beat: Heartbeat) -> R
 #[tauri::command]
 async fn set_verbose_logging(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<Profile, String> {
@@ -400,13 +456,14 @@ async fn set_verbose_logging(
     }
     state.diagnostics.set_verbose(enabled);
     settings_changed(&app);
-    Ok(profile(&state))
+    Ok(profile(&state, window.label()))
 }
 
 /// Turns the background update checks on or off; turning them on checks at once.
 #[tauri::command]
 async fn set_check_updates(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<Profile, String> {
@@ -421,7 +478,7 @@ async fn set_check_updates(
         tauri::async_runtime::spawn(async move { updates.check(&feed).await });
     }
     settings_changed(&app);
-    Ok(profile(&state))
+    Ok(profile(&state, window.label()))
 }
 
 /// What the windows show about updates, for a window that opens after the last change.
@@ -434,8 +491,8 @@ async fn update_status(state: State<'_, AppState>) -> Result<UpdateState, String
 /// the sharing service gives its last messages half a second to leave.
 const SESSION_END_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Installs the ready update and starts the new version (auto-update design decision 7). A
-/// hosted session ends for everyone and a watched one is left first; the window has already
+/// Installs the ready update and starts the new version (auto-update design decision 7). Every
+/// hosted session ends for everyone and every watched one is left first; the window has already
 /// asked. On Windows the installer exits the app and starts the new version itself.
 #[tauri::command]
 async fn restart_to_update(app: AppHandle) -> Result<(), String> {
@@ -444,7 +501,7 @@ async fn restart_to_update(app: AppHandle) -> Result<(), String> {
         return Err("No update is ready.".into());
     };
     let installed = updates::install_after_session(
-        || end_or_leave_session(&app),
+        || end_or_leave_all(&app),
         SESSION_END_GRACE,
         || update.install(&bytes).map_err(|error| error.to_string()),
     )
@@ -456,25 +513,26 @@ async fn restart_to_update(app: AppHandle) -> Result<(), String> {
     app.restart();
 }
 
-/// Ends a hosted session or leaves a watched one; whether there was one.
-fn end_or_leave_session(app: &AppHandle) -> bool {
+/// Ends every hosted session and leaves every watched one; whether there was any.
+fn end_or_leave_all(app: &AppHandle) -> bool {
     let state = app.state::<AppState>();
-    let hosting = state.host.lock().unwrap().is_some();
-    if hosting {
-        end_session(app);
+    let (hosts, viewers) = {
+        let sessions = state.sessions.lock().unwrap();
+        (sessions.hosts(), sessions.viewers())
+    };
+    for (id, _) in &hosts {
+        end_session(app, *id);
     }
-    let viewer = state.viewer.lock().unwrap().take();
-    let watching = viewer.is_some();
-    if let Some(viewer) = viewer {
-        viewer.leave();
-        session_changed(app);
+    for (id, _) in &viewers {
+        leave(app, *id);
     }
-    hosting || watching
+    !hosts.is_empty() || !viewers.is_empty()
 }
 
 #[tauri::command]
 async fn set_view(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     view: View,
 ) -> Result<Profile, String> {
@@ -484,14 +542,15 @@ async fn set_view(
         state.save(&settings);
     }
     settings_changed(&app);
-    Ok(profile(&state))
+    Ok(profile(&state, window.label()))
 }
 
 /// Sets the sharing service, from a domain or URL; empty means the built-in one. Takes effect for
-/// the next session.
+/// the next session, and cannot change while any window has one.
 #[tauri::command]
 async fn set_sharing_service(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     service: String,
 ) -> Result<Profile, String> {
@@ -508,7 +567,7 @@ async fn set_sharing_service(
         state.save(&settings);
     }
     settings_changed(&app);
-    Ok(profile(&state))
+    Ok(profile(&state, window.label()))
 }
 
 /// Whether a sharing service, as a normalized URL, can be reached.
@@ -517,15 +576,23 @@ async fn check_sharing_service(service: String) -> Result<ServiceCheck, String> 
     Ok(services::check(&service).await)
 }
 
-/// Shows a notification, if the user wants them and the window is not in front.
-fn notify(app: &AppHandle, title: &str, body: &str) {
-    let enabled = app.state::<AppState>().settings.lock().unwrap().notifications;
-    notify::notify(app, enabled, title, body);
+/// Shows a notification about session `id`, if the user wants them and the session's window is
+/// not in front. With several sessions open, the title says which one.
+fn notify(app: &AppHandle, id: SessionId, title: &str, body: &str) {
+    let state = app.state::<AppState>();
+    let enabled = state.settings.lock().unwrap().notifications;
+    let (window, title) = {
+        let sessions = state.sessions.lock().unwrap();
+        let title = notify::title(title, sessions.name(id), sessions.count());
+        (sessions.window_of(id).map(str::to_owned), title)
+    };
+    notify::notify(app, &state.notices, id, window.as_deref(), enabled, &title, body);
 }
 
 #[tauri::command]
 async fn remove_recent_folder(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     path: PathBuf,
 ) -> Result<Profile, String> {
@@ -535,20 +602,54 @@ async fn remove_recent_folder(
         state.save(&settings);
     }
     refresh_menu(&app);
-    Ok(profile(&state))
+    Ok(profile(&state, window.label()))
+}
+
+/// The name a folder goes by in titles, the tray and notifications.
+fn folder_name(folder: &Path) -> String {
+    folder.file_name().map_or_else(
+        || folder.to_string_lossy().into_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// Puts hosted session `id` in the tray, brings it up to date, or with `None` takes it out.
+fn update_tray(app: &AppHandle, id: SessionId, entry: Option<tray::Entry>) {
+    let state = app.state::<AppState>();
+    let mut entries = state.tray.lock().unwrap();
+    match entry {
+        Some(entry) => drop(entries.insert(id, entry)),
+        None => drop(entries.remove(&id)),
+    }
+    // Under the lock, so two sessions changing at once cannot show an older list last.
+    let entries: Vec<_> = entries.values().cloned().collect::<Vec<_>>();
+    let _ = tray::refresh(app, &entries);
+}
+
+/// A hosted session's summary changed; ignored once the session has left the tray.
+fn update_tray_summary(app: &AppHandle, id: SessionId, summary: Summary) {
+    let entry = {
+        let state = app.state::<AppState>();
+        let mut entries = state.tray.lock().unwrap();
+        let Some(entry) = entries.get_mut(&id) else { return };
+        entry.summary = summary;
+        entry.clone()
+    };
+    update_tray(app, id, Some(entry));
 }
 
 #[tauri::command]
 async fn start_hosting(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     agent: AgentId,
     folder: PathBuf,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    if state.host.lock().unwrap().is_some() {
-        return Err("A session is already running. End it before starting another.".into());
+    if !state.sessions.lock().unwrap().is_free(window.label()) {
+        return Err("This window already shows a session. Open a new window for another.".into());
     }
     let username = state.settings.lock().unwrap().username.clone().ok_or("Set your name first.")?;
     let options = StartOptions {
@@ -561,47 +662,56 @@ async fn start_hosting(
         signalling_url: state.sharing_service(),
         peer: PeerConfig::default(),
     };
+    let id = state.sessions.lock().unwrap().next_id();
+    let name = folder_name(&folder);
     // The menu-bar or tray icon shows the session from the start, and follows it.
-    let folder_name = folder.file_name().map_or_else(
-        || folder.to_string_lossy().into_owned(),
-        |name| name.to_string_lossy().into_owned(),
-    );
     let starting = Summary {
         status: AgentStatus::Starting,
         viewers: 0,
         code: None,
         sharing: SharingState::Connecting,
     };
-    let _ = tray::show(&app, &folder_name, agent, &starting);
+    update_tray(&app, id, Some(tray::Entry { id, folder: name.clone(), agent, summary: starting }));
     let observed = app.clone();
     let observer: host::Observer = Arc::new(move |notice: HostNotice| match notice {
-        HostNotice::Summary(summary) => {
-            tray::update(&observed, &folder_name, agent, &summary);
-        }
+        HostNotice::Summary(summary) => update_tray_summary(&observed, id, summary),
         HostNotice::ViewerJoined(name) => {
             notify(
                 &observed,
+                id,
                 &format!("{name} joined"),
                 &format!("{name} is watching your session."),
             );
         }
         HostNotice::ViewerLeft(name) => {
-            notify(&observed, &format!("{name} left"), &format!("{name} stopped watching."));
+            notify(&observed, id, &format!("{name} left"), &format!("{name} stopped watching."));
         }
         HostNotice::AgentWaiting { message } => {
             let body =
                 message.unwrap_or_else(|| "It finished and waits for your next prompt.".into());
-            notify(&observed, &format!("{} is waiting for you", agent.display_name()), &body);
+            notify(&observed, id, &format!("{} is waiting for you", agent.display_name()), &body);
         }
     });
     let runtime = match HostRuntime::start(options, &state.environment(), observer).await {
-        Ok(runtime) => runtime,
+        Ok(runtime) => Arc::new(runtime),
         Err(error) => {
-            tray::remove(&app);
+            update_tray(&app, id, None);
             return Err(error);
         }
     };
-    *state.host.lock().unwrap() = Some(runtime);
+    let inserted = state.sessions.lock().unwrap().insert(
+        window.label(),
+        id,
+        Session::Host(runtime.clone()),
+        Some(name.clone()),
+    );
+    if let Err(error) = inserted {
+        // Another session started in this window meanwhile.
+        runtime.close();
+        update_tray(&app, id, None);
+        return Err(error);
+    }
+    set_window_title(&window, Some(&name));
     session_changed(&app);
     let mut settings = state.settings.lock().unwrap();
     settings.add_recent(folder);
@@ -612,32 +722,49 @@ async fn start_hosting(
     Ok(())
 }
 
-/// Runs `f` on the hosted session, or fails if there is none.
-fn with_host<T>(state: &AppState, f: impl FnOnce(&HostRuntime) -> T) -> Result<T, String> {
-    state.host.lock().unwrap().as_ref().map(f).ok_or_else(|| "No session is running.".into())
+/// Runs `f` on the hosted session `window` shows, or fails if it shows none. The lock is let go
+/// first: a session may call back into the app while it works.
+fn with_host<T>(
+    state: &AppState,
+    window: &WebviewWindow,
+    f: impl FnOnce(&HostRuntime) -> T,
+) -> Result<T, String> {
+    let host = state.host_of(window.label())?;
+    Ok(f(&host))
 }
 
 #[tauri::command]
 async fn host_attach(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     terminal: Channel<InvokeResponseBody>,
     events: Channel<HostEvent>,
 ) -> Result<(), String> {
-    with_host(&state, |host| host.attach(terminal, events))
+    with_host(&state, &window, |host| host.attach(terminal, events))
 }
 
 #[tauri::command]
-async fn host_input(state: State<'_, AppState>, data: String) -> Result<(), String> {
-    with_host(&state, |host| host.input(&data))?
+async fn host_input(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    data: String,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.input(&data))?
 }
 
 #[tauri::command]
-async fn host_resize(state: State<'_, AppState>, cols: u16, rows: u16) -> Result<(), String> {
-    with_host(&state, |host| host.resize(cols, rows))
+async fn host_resize(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.resize(cols, rows))
 }
 
 #[tauri::command]
 async fn host_set_colors(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     foreground: String,
     background: String,
@@ -646,49 +773,77 @@ async fn host_set_colors(
     else {
         return Err("Colours must be #rrggbb.".into());
     };
-    with_host(&state, |host| host.set_colors(Colors { foreground, background }))
+    with_host(&state, &window, |host| host.set_colors(Colors { foreground, background }))
 }
 
 #[tauri::command]
-async fn host_new_code(state: State<'_, AppState>) -> Result<(), String> {
-    with_host(&state, HostRuntime::new_code)
+async fn host_new_code(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    with_host(&state, &window, HostRuntime::new_code)
 }
 
 #[tauri::command]
-async fn host_remove_viewer(state: State<'_, AppState>, viewer_id: u32) -> Result<(), String> {
-    with_host(&state, |host| host.remove_viewer(viewer_id))
+async fn host_remove_viewer(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    viewer_id: u32,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.remove_viewer(viewer_id))
 }
 
 #[tauri::command]
-async fn host_set_viewer_limit(state: State<'_, AppState>, limit: u8) -> Result<(), String> {
-    with_host(&state, |host| host.set_viewer_limit(limit))
+async fn host_set_viewer_limit(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    limit: u8,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.set_viewer_limit(limit))
 }
 
 #[tauri::command]
-async fn host_close(app: AppHandle) -> Result<(), String> {
-    end_session(&app);
+async fn host_close(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    let id = app.state::<AppState>().sessions.lock().unwrap().of_window(window.label());
+    if let Some((id, Session::Host(_))) = id {
+        end_session(&app, id);
+    }
+    set_window_title(&window, None);
     Ok(())
 }
 
-/// Ends the hosted session, if any, and everything that showed it outside the window.
-fn end_session(app: &AppHandle) {
-    if let Some(host) = app.state::<AppState>().host.lock().unwrap().take() {
-        host.close();
+/// Ends hosted session `id`, if it runs, and everything that showed it outside its window.
+fn end_session(app: &AppHandle, id: SessionId) {
+    let removed = app.state::<AppState>().sessions.lock().unwrap().remove(id);
+    match removed {
+        Some(Session::Host(host)) => host.close(),
+        Some(Session::Viewer(viewer)) => viewer.leave(),
+        None => {}
     }
-    tray::remove(app);
+    update_tray(app, id, None);
     refresh_menu(app);
     session_changed(app);
+}
+
+/// Leaves watched session `id`, if it is still open.
+fn leave(app: &AppHandle, id: SessionId) {
+    let removed = app.state::<AppState>().sessions.lock().unwrap().remove(id);
+    if let Some(Session::Viewer(viewer)) = removed {
+        viewer.leave();
+        session_changed(app);
+    }
 }
 
 #[tauri::command]
 async fn join_session(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     code: String,
     server: Option<String>,
     terminal: Channel<InvokeResponseBody>,
     events: Channel<ViewEvent>,
 ) -> Result<(), String> {
+    if state.sessions.lock().unwrap().host_of(window.label()).is_some() {
+        return Err("This window hosts a session. Open a new window to join another.".into());
+    }
     let code = InviteCode::from_join_link(code.trim())
         .or_else(|_| InviteCode::parse(&code))
         .map_err(|_| "That is not an invite code. It looks like 7K2M-9QXH-4TPA.".to_string())?;
@@ -698,6 +853,7 @@ async fn join_session(
         Some(server) => service::normalize(&server).map_err(|error| error.to_string())?,
         None => state.sharing_service(),
     };
+    let id = state.sessions.lock().unwrap().next_id();
     let notified = app.clone();
     let runtime = ViewerRuntime::join(
         code,
@@ -709,18 +865,28 @@ async fn join_session(
         move |reason| match reason {
             EndReason::Closed => notify(
                 &notified,
+                id,
                 "The host ended the session",
                 "You can keep reading what was shared until you leave.",
             ),
             EndReason::Removed => notify(
                 &notified,
+                id,
                 "The host removed you",
                 "You are no longer connected to the session.",
             ),
             _ => {}
         },
     );
-    if let Some(previous) = state.viewer.lock().unwrap().replace(runtime) {
+    // Joining again in the same window (trying again after a failure) replaces the session.
+    let previous = {
+        let mut sessions = state.sessions.lock().unwrap();
+        let previous = sessions.of_window(window.label()).map(|(previous, _)| previous);
+        let previous = previous.and_then(|previous| sessions.remove(previous));
+        sessions.insert(window.label(), id, Session::Viewer(Arc::new(runtime)), None)?;
+        previous
+    };
+    if let Some(Session::Viewer(previous)) = previous {
         previous.leave();
     }
     session_changed(&app);
@@ -728,12 +894,43 @@ async fn join_session(
 }
 
 #[tauri::command]
-async fn leave_session(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(viewer) = state.viewer.lock().unwrap().take() {
-        viewer.leave();
+async fn leave_session(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let id = state.sessions.lock().unwrap().of_window(window.label()).map(|(id, _)| id);
+    if let Some(id) = id {
+        leave(&app, id);
     }
-    session_changed(&app);
+    set_window_title(&window, None);
     Ok(())
+}
+
+/// Names the session the calling window shows, for its title and its notifications; the
+/// viewer's window knows the host's folder only once the session's first state arrives.
+#[tauri::command]
+async fn set_session_title(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    name: Option<String>,
+) -> Result<(), String> {
+    state.sessions.lock().unwrap().set_name(window.label(), name.clone());
+    set_window_title(&window, name.as_deref());
+    Ok(())
+}
+
+/// `shop — SpecDeck` while the window shows the session in `shop`, otherwise `SpecDeck`, so the
+/// platform's window list tells session windows apart.
+fn set_window_title(window: &WebviewWindow, session: Option<&str>) {
+    let _ = window.set_title(&session_window_title(session));
+}
+
+fn session_window_title(session: Option<&str>) -> String {
+    match session {
+        Some(name) if !name.is_empty() => format!("{name} — {}", window_title()),
+        _ => window_title(),
+    }
 }
 
 fn parse_hex(color: &str) -> Option<specdeck_core::mirror::Rgb> {
@@ -825,14 +1022,26 @@ async fn read_join_link(state: State<'_, AppState>, link: String) -> Result<Join
     Ok(read_link(&link, &state.sharing_service()))
 }
 
-/// A `specdeck://` link was opened: keep it for the window and bring the window to the front.
-/// The window takes it with `take_join_link`, at start or when told about it.
+/// A `specdeck://` link was opened: keep it for a window, and bring that window to the front. The
+/// focused window takes it when it shows no session; otherwise a new window opens for it
+/// (`multiple-windows` design decision 10). The window takes it with `take_join_link`, at start
+/// or when told about it.
 fn open_link(app: &AppHandle, link: &str) {
     let state = app.state::<AppState>();
     let pending = read_link(link, &state.sharing_service());
-    *state.join_link.lock().unwrap() = Some(pending);
-    open_main_window(app);
-    let _ = app.emit_to("main", "menu", MenuCommand { id: "join-link".into(), path: None });
+    let free = state.sessions.lock().unwrap().free_window(&session_windows(app));
+    let label = match free {
+        Some(label) => label,
+        None => new_window_label(app),
+    };
+    state.join_links.lock().unwrap().insert(label.clone(), pending);
+    match app.get_webview_window(&label) {
+        Some(window) => {
+            show_window(&window);
+            let _ = app.emit_to(&label, "menu", MenuCommand { id: "join-link".into(), path: None });
+        }
+        None => open_session_window(app, &label, None),
+    }
 }
 
 /// The start screen is usable. With `SPECDECK_MEASURE_START` set, says so on standard output, for
@@ -845,21 +1054,101 @@ fn start_screen_shown() {
 }
 
 #[tauri::command]
-async fn take_join_link(state: State<'_, AppState>) -> Result<Option<JoinLink>, String> {
-    Ok(state.join_link.lock().unwrap().take())
+async fn take_join_link(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<JoinLink>, String> {
+    Ok(state.join_links.lock().unwrap().remove(window.label()))
 }
 
-fn open_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        return;
+/// The start command a new window opened with, if any: host, join or a recent folder.
+#[tauri::command]
+async fn take_start_command(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<MenuCommand>, String> {
+    Ok(state.start_commands.lock().unwrap().remove(window.label()))
+}
+
+/// The labels of the open session windows.
+fn session_windows(app: &AppHandle) -> Vec<String> {
+    app.webview_windows().into_keys().filter(|label| is_session_window(label)).collect()
+}
+
+/// The label a new session window gets.
+fn new_window_label(app: &AppHandle) -> String {
+    let number = app.state::<AppState>().sessions.lock().unwrap().next_id();
+    sessions::new_window_label(&session_windows(app), number)
+}
+
+fn show_window(window: &WebviewWindow) {
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+/// Brings the session window the user last used to the front, or another open one. With none
+/// open, opens one: on a hosted session no window shows, if there is one, as the only window
+/// did before. Returns the window's label.
+fn focus_or_open(app: &AppHandle) -> String {
+    let state = app.state::<AppState>();
+    let open = session_windows(app);
+    let (focused, windowless) = {
+        let sessions = state.sessions.lock().unwrap();
+        (sessions.focused().map(str::to_owned), sessions.windowless_host())
+    };
+    let existing = focused.filter(|label| open.contains(label)).or_else(|| open.first().cloned());
+    if let Some(window) = existing.as_deref().and_then(|label| app.get_webview_window(label)) {
+        show_window(&window);
+        return window.label().to_owned();
     }
-    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-        .title(window_title())
+    let label = new_window_label(app);
+    open_session_window(app, &label, windowless);
+    label
+}
+
+/// Brings session `id`'s window to the front, or reopens it on the hosted session.
+fn show_session(app: &AppHandle, id: SessionId) {
+    let window = app.state::<AppState>().sessions.lock().unwrap().window_of(id).map(str::to_owned);
+    match window.and_then(|label| app.get_webview_window(&label)) {
+        Some(window) => show_window(&window),
+        None => {
+            let label = new_window_label(app);
+            open_session_window(app, &label, Some(id));
+        }
+    }
+}
+
+/// Opens a new window with `start` for a start command (host, join, a recent folder): the
+/// command is kept for the window, which takes it when it has loaded.
+fn open_window_for(app: &AppHandle, start: MenuCommand) {
+    let label = new_window_label(app);
+    app.state::<AppState>().start_commands.lock().unwrap().insert(label.clone(), start);
+    open_session_window(app, &label, None);
+}
+
+/// Opens session window `label`, showing hosted session `attach` if given and otherwise the
+/// start screen. It has the size of the focused window and opens a step right and down from it
+/// (`multiple-windows` design decision 9); the first window's own place is restored by the
+/// window-state plugin instead.
+fn open_session_window(app: &AppHandle, label: &str, attach: Option<SessionId>) {
+    let state = app.state::<AppState>();
+    let name = attach.and_then(|id| {
+        let mut sessions = state.sessions.lock().unwrap();
+        sessions.attach(label, id);
+        sessions.name(id).map(str::to_owned)
+    });
+    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::default())
+        .title(session_window_title(name.as_deref()))
         .inner_size(1200.0, 800.0)
         .min_inner_size(720.0, 480.0);
+    let from = state.sessions.lock().unwrap().focused().map(str::to_owned);
+    let from = from.or_else(|| session_windows(app).into_iter().next());
+    if let Some((size, position)) =
+        from.and_then(|from| app.get_webview_window(&from)).and_then(|from| cascaded_from(&from))
+    {
+        builder = builder.inner_size(size.0, size.1).position(position.0, position.1);
+    }
     // macOS: the toolbar is the title bar, with the window buttons centred in it.
     #[cfg(target_os = "macos")]
     {
@@ -873,9 +1162,26 @@ fn open_main_window(app: &AppHandle) {
         builder = builder.transparent(true);
     }
     let Ok(window) = builder.build() else { return };
-    apply_zoom(&window, app.state::<AppState>().settings.lock().unwrap().zoom);
+    apply_zoom(&window, state.settings.lock().unwrap().zoom);
     let translucent = apply_material(&window);
-    app.state::<AppState>().translucent.store(translucent, Ordering::Relaxed);
+    state.translucent.store(translucent, Ordering::Relaxed);
+}
+
+/// The size of `from` and the position a new window takes next to it, in logical pixels.
+fn cascaded_from(from: &WebviewWindow) -> Option<((f64, f64), (f64, f64))> {
+    let scale = from.scale_factor().ok()?;
+    let size = from.inner_size().ok()?.to_logical::<f64>(scale);
+    let position = from.outer_position().ok()?.to_logical::<f64>(scale);
+    let monitor = from.current_monitor().ok()??;
+    let screen_scale = monitor.scale_factor();
+    let screen_position = monitor.position().to_logical::<f64>(screen_scale);
+    let screen_size = monitor.size().to_logical::<f64>(screen_scale);
+    let at = sessions::cascade(
+        (position.x, position.y),
+        (size.width, size.height),
+        (screen_position.x, screen_position.y, screen_size.width, screen_size.height),
+    );
+    Some(((size.width, size.height), at))
 }
 
 /// Puts the platform's window material behind the page: the sidebar vibrancy on macOS, Mica on
@@ -903,11 +1209,11 @@ fn apply_material(window: &tauri::WebviewWindow) -> bool {
     }
 }
 
-/// Rebuilds the menu from the recent folders and whether a session is hosted.
+/// Rebuilds the menu from the recent folders and whether any session is hosted.
 fn refresh_menu(app: &AppHandle) {
     let state = app.state::<AppState>();
     let recent = state.settings.lock().unwrap().existing_recent();
-    let hosting = state.host.lock().unwrap().is_some();
+    let hosting = state.hosting();
     let updates = state.updates.state() != UpdateState::Disabled;
     if let Ok(menu) = menu::build(app, &menu::MenuState { recent: &recent, hosting, updates }) {
         let _ = app.set_menu(menu);
@@ -924,20 +1230,31 @@ struct MenuCommand {
     path: Option<PathBuf>,
 }
 
+/// Menu commands that start a session, and so go to a window that shows none.
+const START_COMMANDS: [&str; 3] = [menu::ids::HOST, menu::ids::JOIN, "recent"];
+
 fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref();
     match id {
         menu::ids::QUIT => return quit(app),
         menu::ids::SETTINGS => return open_settings_window(app),
+        menu::ids::NEW_WINDOW => {
+            let label = new_window_label(app);
+            return open_session_window(app, &label, None);
+        }
         menu::ids::ZOOM_IN => return change_zoom(app, zoom_in),
         menu::ids::ZOOM_OUT => return change_zoom(app, zoom_out),
         menu::ids::ZOOM_RESET => return change_zoom(app, |_| ZOOM_DEFAULT),
         menu::ids::CHECK_UPDATES => return check_for_updates(app),
         menu::ids::EXPORT_DIAGNOSTICS => return export_diagnostics_from_menu(app),
-        tray::ids::OPEN => return open_main_window(app),
-        tray::ids::COPY_CODE => return copy_invite_code(app),
-        tray::ids::END => return confirm_end_session(app),
         _ => {}
+    }
+    if let Some((action, session)) = tray::parse(id) {
+        return match action {
+            tray::Action::Open => show_session(app, session),
+            tray::Action::CopyCode => copy_invite_code(app, session),
+            tray::Action::End => confirm_end_session(app, session),
+        };
     }
     let command = match id.strip_prefix(menu::RECENT_PREFIX) {
         Some(index) => {
@@ -950,13 +1267,28 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         }
         None => MenuCommand { id: id.into(), path: None },
     };
-    // The menu works with the window closed too (macOS, while hosting).
-    open_main_window(app);
-    let _ = app.emit("menu", command);
+    // Host, join and recent folders go to the focused window when it shows no session, and
+    // otherwise to a new window (`multiple-windows` design decision 5).
+    if START_COMMANDS.contains(&command.id.as_str()) {
+        let free =
+            app.state::<AppState>().sessions.lock().unwrap().free_window(&session_windows(app));
+        match free.and_then(|label| app.get_webview_window(&label)) {
+            Some(window) => {
+                show_window(&window);
+                let _ = app.emit_to(window.label(), "menu", command);
+            }
+            None => open_window_for(app, command),
+        }
+        return;
+    }
+    // Everything else concerns the focused window's session. The menu works with every window
+    // closed too (macOS, while hosting).
+    let label = focus_or_open(app);
+    let _ = app.emit_to(&label, "menu", command);
 }
 
-/// Moves the zoom level, remembers it and applies it to the main window if it is open. The
-/// settings window keeps its normal size: it cannot be resized to fit.
+/// Moves the zoom level, remembers it and applies it to every session window. The settings
+/// window keeps its normal size: it cannot be resized to fit.
 fn change_zoom(app: &AppHandle, step: impl FnOnce(u16) -> u16) {
     let state = app.state::<AppState>();
     let level = {
@@ -965,8 +1297,10 @@ fn change_zoom(app: &AppHandle, step: impl FnOnce(u16) -> u16) {
         state.save(&settings);
         settings.zoom
     };
-    if let Some(window) = app.get_webview_window("main") {
-        apply_zoom(&window, level);
+    for label in session_windows(app) {
+        if let Some(window) = app.get_webview_window(&label) {
+            apply_zoom(&window, level);
+        }
     }
 }
 
@@ -976,17 +1310,19 @@ fn apply_zoom(window: &tauri::WebviewWindow, level: u16) {
     let _ = window.set_zoom(f64::from(level) / 100.0);
 }
 
-/// Copies the invite code from the tray, which works with the window closed too.
-fn copy_invite_code(app: &AppHandle) {
-    let code = app.state::<AppState>().host.lock().unwrap().as_ref().and_then(HostRuntime::code);
-    if let Some(code) = code {
-        let _ = app.clipboard().write_text(code);
+/// The hosted session `id`, if it still runs.
+fn hosted(app: &AppHandle, id: SessionId) -> Option<Arc<HostRuntime>> {
+    match app.state::<AppState>().sessions.lock().unwrap().get(id)? {
+        Session::Host(host) => Some(host),
+        Session::Viewer(_) => None,
     }
 }
 
-/// What the hosted session runs, if anything.
-fn hosted_agent(app: &AppHandle) -> Option<AgentId> {
-    app.state::<AppState>().host.lock().unwrap().as_ref().map(|host| host.agent)
+/// Copies session `id`'s invite code from the tray, which works with its window closed too.
+fn copy_invite_code(app: &AppHandle, id: SessionId) {
+    if let Some(code) = hosted(app, id).and_then(|host| host.code()) {
+        let _ = app.clipboard().write_text(code);
+    }
 }
 
 /// What ending a session stops, for the questions before ending it.
@@ -997,27 +1333,38 @@ fn what_stops(agent: Option<AgentId>) -> &'static str {
     }
 }
 
-/// Ends the session from the tray, after the same question the window asks.
-fn confirm_end_session(app: &AppHandle) {
+/// Ends session `id` from the tray, after the same question the window asks.
+fn confirm_end_session(app: &AppHandle, id: SessionId) {
+    let Some(host) = hosted(app, id) else { return };
     let handle = app.clone();
     app.dialog()
         .message(format!(
             "Everyone watching is disconnected, {}, and the invite code stops working.",
-            what_stops(hosted_agent(app))
+            what_stops(Some(host.agent))
         ))
         .title("End the session for everyone?")
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom("End Session".into(), "Cancel".into()))
         .show(move |confirmed| {
-            if confirmed {
-                end_session(&handle);
-                // An open window goes back to the start screen.
-                let _ = handle.emit("menu", MenuCommand { id: "session-ended".into(), path: None });
+            if !confirmed {
+                return;
+            }
+            let window = handle
+                .state::<AppState>()
+                .sessions
+                .lock()
+                .unwrap()
+                .window_of(id)
+                .map(str::to_owned);
+            end_session(&handle, id);
+            // Its open window goes back to the start screen.
+            if let Some(window) = window {
+                let ended = MenuCommand { id: "session-ended".into(), path: None };
+                let _ = handle.emit_to(&window, "menu", ended);
             }
         });
 }
 
-/// Quits, after confirming when that would end a hosted session for everyone.
 /// The background update checks, for as long as the app runs (spec: Background update checks).
 fn start_update_checks(app: &AppHandle, updates: Arc<Updates<tauri_plugin_updater::Update>>) {
     let app = app.clone();
@@ -1064,9 +1411,9 @@ fn show_update_outcome(app: &AppHandle, outcome: &Outcome) {
                 ))
                 .show(move |restart| {
                     if restart {
-                        open_main_window(&handle);
+                        let label = focus_or_open(&handle);
                         let _ = handle.emit_to(
-                            "main",
+                            &label,
                             "menu",
                             MenuCommand { id: "restart-to-update".into(), path: None },
                         );
@@ -1078,25 +1425,63 @@ fn show_update_outcome(app: &AppHandle, outcome: &Outcome) {
     }
 }
 
+/// The question before quitting with hosted sessions: its title, message and confirm button.
+/// One question covers every session in every window (`multiple-windows` design decision 8).
+fn quit_question(hosted: &[AgentId], watched: usize) -> (String, String, String) {
+    let also_watching = match watched {
+        0 => String::new(),
+        1 => " You also stop watching the session you watch.".into(),
+        n => format!(" You also stop watching the {n} sessions you watch."),
+    };
+    if let [agent] = hosted {
+        return (
+            "End the session and quit?".into(),
+            format!(
+                "Quitting ends your session. Everyone watching is disconnected and {}.{also_watching}",
+                what_stops(Some(*agent))
+            ),
+            "End Session and Quit".into(),
+        );
+    }
+    let shells = hosted.iter().filter(|agent| **agent == AgentId::Terminal).count();
+    let stops = match (shells, hosted.len() - shells) {
+        (0, _) => "the agents stop",
+        (_, 0) => "the shells stop",
+        _ => "the agents and shells stop",
+    };
+    let n = hosted.len();
+    (
+        format!("End {n} sessions and quit?"),
+        format!(
+            "Quitting ends the {n} sessions you host. Everyone watching them is disconnected and \
+             {stops}.{also_watching}"
+        ),
+        "End Sessions and Quit".into(),
+    )
+}
+
+/// Quits, after confirming when that would end hosted sessions for everyone. Watched sessions
+/// are left without asking, as before.
 fn quit(app: &AppHandle) {
-    if app.state::<AppState>().host.lock().unwrap().is_none() {
+    let state = app.state::<AppState>();
+    let (hosted, watched) = {
+        let sessions = state.sessions.lock().unwrap();
+        let hosted: Vec<_> = sessions.hosts().into_iter().map(|(_, host)| host.agent).collect();
+        (hosted, sessions.viewers().len())
+    };
+    if hosted.is_empty() {
         return app.exit(0);
     }
+    let (title, message, confirm) = quit_question(&hosted, watched);
     let handle = app.clone();
     app.dialog()
-        .message(format!(
-            "Quitting ends your session. Everyone watching is disconnected and {}.",
-            what_stops(hosted_agent(app))
-        ))
-        .title("End the session and quit?")
+        .message(message)
+        .title(title)
         .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "End Session and Quit".into(),
-            "Cancel".into(),
-        ))
+        .buttons(MessageDialogButtons::OkCancelCustom(confirm, "Cancel".into()))
         .show(move |confirmed| {
             if confirmed {
-                end_session(&handle);
+                end_or_leave_all(&handle);
                 handle.exit(0);
             }
         });
@@ -1124,9 +1509,12 @@ fn open_settings_window(app: &AppHandle) {
     .build();
 }
 
-/// Tells the main window that the settings changed, so it shows the new name.
+/// Tells the session windows that the settings changed, so they show the new name.
 fn settings_changed(app: &AppHandle) {
-    let _ = app.emit_to("main", "menu", MenuCommand { id: "profile-changed".into(), path: None });
+    for label in session_windows(app) {
+        let changed = MenuCommand { id: "profile-changed".into(), path: None };
+        let _ = app.emit_to(&label, "menu", changed);
+    }
 }
 
 /// A session started or ended: Settings shows whether the sharing service can be changed.
@@ -1151,10 +1539,11 @@ pub fn run() {
     // `just local-dev` run side by side instead.
     if test_profile().is_none() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            open_main_window(app);
+            focus_or_open(app);
         }));
     }
-    // Window size and position per profile; the settings window always opens centred.
+    // Window size and position per profile, for the first session window only: further windows
+    // open next to the focused one, and the settings window always opens centred.
     let window_state_file = match test_profile() {
         Some(profile) => format!(".window-state-{profile}.json"),
         None => ".window-state.json".into(),
@@ -1165,7 +1554,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_filename(window_state_file)
-                .with_denylist(&["settings"])
+                .with_filter(|label| label == MAIN_WINDOW)
                 .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
                 .build(),
         )
@@ -1211,10 +1600,12 @@ pub fn run() {
                 data_dir,
                 services: Services::from_environment(),
                 environment,
-                host: Mutex::new(None),
-                viewer: Mutex::new(None),
+                sessions: Mutex::default(),
+                tray: Mutex::default(),
+                notices: Mutex::default(),
                 translucent: AtomicBool::new(false),
-                join_link: Mutex::new(None),
+                join_links: Mutex::default(),
+                start_commands: Mutex::default(),
                 updates: updates.clone(),
                 versions: Mutex::default(),
             });
@@ -1226,10 +1617,10 @@ pub fn run() {
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
-                    watched.state::<AppState>().diagnostics.check_window();
+                    watched.state::<AppState>().diagnostics.check_windows();
                 }
             });
-            open_main_window(app.handle());
+            open_session_window(app.handle(), MAIN_WINDOW, None);
             refresh_menu(app.handle());
             // Join links: the one the app was started with, and any opened while it runs.
             #[cfg(any(windows, target_os = "linux"))]
@@ -1245,26 +1636,48 @@ pub fn run() {
                     open_link(&links, url.as_str());
                 }
             });
-            // A click on a notification brings the session to the front.
+            // A click on a notification brings its session's window to the front.
             let handle = app.handle().clone();
-            let _ = app.notification().on_action(move |_| open_main_window(&handle));
+            let _ = app.notification().on_action(move |performed| {
+                let clicked = performed.notification().map(|notification| notification.id());
+                let state = handle.state::<AppState>();
+                let session = state.notices.lock().unwrap().clicked(clicked);
+                let running =
+                    session.filter(|id| state.sessions.lock().unwrap().get(*id).is_some());
+                match running {
+                    Some(id) => show_session(&handle, id),
+                    None => drop(focus_or_open(&handle)),
+                }
+            });
             Ok(())
         })
         .on_menu_event(on_menu_event)
         .on_window_event(|window, event| {
-            // Only the main window shows a session; the settings window comes and goes.
-            if let WindowEvent::Destroyed = event
-                && window.label() == "main"
-            {
-                let state = window.state::<AppState>();
-                state.diagnostics.window_closed();
-                // A hosted session keeps running without its window; viewing ends with it.
-                if let Some(host) = state.host.lock().unwrap().as_ref() {
-                    host.detach();
+            // Session windows only; the settings window comes and goes.
+            if !is_session_window(window.label()) {
+                return;
+            }
+            let state = window.state::<AppState>();
+            match event {
+                WindowEvent::Focused(true) => {
+                    state.sessions.lock().unwrap().set_focused(window.label());
                 }
-                if let Some(viewer) = state.viewer.lock().unwrap().take() {
-                    viewer.leave();
+                WindowEvent::Destroyed => {
+                    state.diagnostics.window_closed(window.label());
+                    state.join_links.lock().unwrap().remove(window.label());
+                    state.start_commands.lock().unwrap().remove(window.label());
+                    // A hosted session keeps running without its window; watching ends with it.
+                    let closed = state.sessions.lock().unwrap().window_closed(window.label());
+                    match closed {
+                        Some(Session::Host(host)) => host.detach(),
+                        Some(Session::Viewer(viewer)) => {
+                            viewer.leave();
+                            session_changed(window.app_handle());
+                        }
+                        None => {}
+                    }
                 }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1300,20 +1713,20 @@ pub fn run() {
             join_session,
             leave_session,
             take_join_link,
+            take_start_command,
+            set_session_title,
             start_screen_shown,
         ])
         .build(tauri::generate_context!())
         .expect("error while building SpecDeck");
 
     app.run(|app, event| match event {
-        // Closing the last window while hosting keeps the session (and the app) running.
-        RunEvent::ExitRequested { api, code: None, .. }
-            if app.state::<AppState>().host.lock().unwrap().is_some() =>
-        {
+        // Closing the last window while hosting keeps the sessions (and the app) running.
+        RunEvent::ExitRequested { api, code: None, .. } if app.state::<AppState>().hosting() => {
             api.prevent_exit();
         }
         #[cfg(target_os = "macos")]
-        RunEvent::Reopen { .. } => open_main_window(app),
+        RunEvent::Reopen { .. } => drop(focus_or_open(app)),
         _ => {}
     });
 }
@@ -1375,10 +1788,12 @@ mod tests {
                 overridden: overridden.map(Into::into),
             },
             environment,
-            host: Mutex::new(None),
-            viewer: Mutex::new(None),
+            sessions: Mutex::default(),
+            tray: Mutex::default(),
+            notices: Mutex::default(),
             translucent: AtomicBool::new(false),
-            join_link: Mutex::new(None),
+            join_links: Mutex::default(),
+            start_commands: Mutex::default(),
             updates: Arc::new(Updates::new(false, |_| {})),
             versions: Mutex::default(),
         }
@@ -1388,21 +1803,71 @@ mod tests {
     fn the_profile_says_which_sharing_service_sessions_use() {
         let dir = tempfile::tempdir().unwrap();
         let state = |overridden, setting| state(dir.path(), overridden, setting);
-        let built_in = profile(&state(None, None));
+        let built_in = profile(&state(None, None), MAIN_WINDOW);
         assert_eq!(built_in.sharing_service, None);
         assert_eq!(built_in.effective_service, "wss://built-in.example.com/signal");
         assert_eq!(built_in.built_in_service, "wss://built-in.example.com/signal");
         assert!(!built_in.service_overridden);
         assert!(!built_in.in_session);
 
-        let own = profile(&state(None, Some("wss://own.example.com/signal")));
+        let own = profile(&state(None, Some("wss://own.example.com/signal")), MAIN_WINDOW);
         assert_eq!(own.sharing_service.as_deref(), Some("wss://own.example.com/signal"));
         assert_eq!(own.effective_service, "wss://own.example.com/signal");
 
-        let overridden =
-            profile(&state(Some("ws://127.0.0.1:1/signal"), Some("wss://own.example.com/signal")));
+        let overridden = profile(
+            &state(Some("ws://127.0.0.1:1/signal"), Some("wss://own.example.com/signal")),
+            MAIN_WINDOW,
+        );
         assert_eq!(overridden.effective_service, "ws://127.0.0.1:1/signal");
         assert!(overridden.service_overridden);
+    }
+
+    #[test]
+    fn quitting_asks_once_for_every_session() {
+        let (title, message, confirm) = quit_question(&[AgentId::ClaudeCode], 0);
+        assert_eq!(title, "End the session and quit?");
+        assert_eq!(
+            message,
+            "Quitting ends your session. Everyone watching is disconnected and the agent stops."
+        );
+        assert_eq!(confirm, "End Session and Quit");
+
+        let (_, message, _) = quit_question(&[AgentId::Terminal], 1);
+        assert_eq!(
+            message,
+            "Quitting ends your session. Everyone watching is disconnected and the shell stops. \
+             You also stop watching the session you watch."
+        );
+
+        let (title, message, confirm) = quit_question(&[AgentId::ClaudeCode, AgentId::Terminal], 1);
+        assert_eq!(title, "End 2 sessions and quit?");
+        assert_eq!(
+            message,
+            "Quitting ends the 2 sessions you host. Everyone watching them is disconnected and \
+             the agents and shells stop. You also stop watching the session you watch."
+        );
+        assert_eq!(confirm, "End Sessions and Quit");
+
+        let (_, message, _) = quit_question(&[AgentId::Codex, AgentId::Omp, AgentId::Pi], 2);
+        assert!(message.contains("the 3 sessions you host"), "{message}");
+        assert!(message.contains("the agents stop."), "{message}");
+        assert!(message.ends_with("the 2 sessions you watch."), "{message}");
+    }
+
+    #[test]
+    fn a_window_title_names_its_session() {
+        assert_eq!(session_window_title(None), window_title());
+        assert_eq!(session_window_title(Some("")), window_title());
+        assert_eq!(session_window_title(Some("shop")), format!("shop — {}", window_title()));
+    }
+
+    #[test]
+    fn the_profile_says_whether_this_window_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path(), None, None);
+        let fresh = profile(&state, MAIN_WINDOW);
+        assert!(!fresh.hosting && !fresh.in_session);
+        assert_eq!((fresh.hosted_sessions, fresh.watched_sessions), (0, 0));
     }
 
     #[test]

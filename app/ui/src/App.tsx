@@ -9,6 +9,7 @@ import { UpdateButton, UpdateNotice, useReadyUpdate } from './components/UpdateN
 import { dispatchMenu, useMenu, type MenuCommand } from './menu/menu';
 import { formatCode } from './model/code';
 import { startHeartbeat } from './model/heartbeat';
+import { restartQuestion, type RestartQuestion } from './model/restart';
 import { HostScreen } from './screens/HostScreen';
 import { StartScreen } from './screens/StartScreen';
 import { ViewerScreen } from './screens/ViewerScreen';
@@ -24,27 +25,13 @@ export function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'start' });
   const [error, setError] = useState<string | null>(null);
-  // A host or join command for the start screen, and one waiting for the viewer to confirm leaving.
+  // A host or join command for the start screen. A window that shows a session gets none: the app
+  // opens those in a new window.
   const [startCommand, setStartCommand] = useState<MenuCommand | null>(null);
-  const [leaveFor, setLeaveFor] = useState<(MenuCommand & { link?: JoinLink }) | null>(null);
   // A join link through another sharing service, waiting for the user to agree.
   const [joinThrough, setJoinThrough] = useState<JoinLink | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState(false);
-  // A new SpecDeck ready to install, the question before restarting during a session, and why
-  // installing failed.
-  const update = useReadyUpdate();
-  const [askRestart, setAskRestart] = useState(false);
-  const [updateError, setUpdateError] = useState<string | null>(null);
-  const installUpdate = () => {
-    setAskRestart(false);
-    bridge.restartToUpdate().catch((e) => setUpdateError(errorMessage(e)));
-  };
-  // Restarting ends a hosted session for everyone and leaves a watched one, so it asks first.
-  const restartToUpdate = () => (screen.kind === 'start' ? installUpdate() : setAskRestart(true));
-  const updateButton = update.version ? <UpdateButton version={update.version} onRestart={restartToUpdate} /> : null;
-
-  const setView = (view: View) => void bridge.setView(view).then(setProfile);
   const refresh = () =>
     bridge.getProfile().then((p) => {
       setProfile(p);
@@ -53,6 +40,28 @@ export function App() {
       document.documentElement.classList.toggle('translucent', p.translucent);
       return p;
     });
+  // A new SpecDeck ready to install, the question before restarting during a session, and why
+  // installing failed.
+  const update = useReadyUpdate();
+  const [askRestart, setAskRestart] = useState<RestartQuestion | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const installUpdate = () => {
+    setAskRestart(null);
+    bridge.restartToUpdate().catch((e) => setUpdateError(errorMessage(e)));
+  };
+  // Restarting ends every hosted session for everyone and leaves every watched one, in all
+  // windows, so it asks first when there is any.
+  const restartToUpdate = async () => {
+    const p = await refresh().catch(() => profile);
+    const hosted = Math.max(p?.hostedSessions ?? 0, screen.kind === 'host' ? 1 : 0);
+    const watched = Math.max(p?.watchedSessions ?? 0, screen.kind === 'viewer' ? 1 : 0);
+    const question = restartQuestion(update.version ?? '', hosted, watched);
+    if (question) setAskRestart(question);
+    else installUpdate();
+  };
+  const updateButton = update.version ? <UpdateButton version={update.version} onRestart={() => void restartToUpdate()} /> : null;
+
+  const setView = (view: View) => void bridge.setView(view).then(setProfile);
 
   useEffect(() => bridge.onMenu(dispatchMenu), [bridge]);
   // Joins from a link, asking first when it names another sharing service.
@@ -61,19 +70,13 @@ export function App() {
     if (link.server) setJoinThrough(link);
     else setScreen({ kind: 'viewer', code: link.code });
   };
-  // A join link that opened the app, or came in while it runs.
+  // A join link that opened the app, or came in while it runs. The app gives one only to a window
+  // on its start screen, and opens a new window for it otherwise.
   const takeJoinLink = async () => {
     const link = await bridge.takeJoinLink();
-    if (!link) return;
-    if (link.error) {
-      if (screen.kind === 'start') setScreen({ kind: 'start', joinError: link.error });
-      return;
-    }
-    if (!link.code) return;
-    if (screen.kind === 'start') joinFromLink(link);
-    else if (screen.kind === 'viewer') setLeaveFor({ id: 'join-link', path: link.code, link });
-    // A hosted session says to end it first.
-    else dispatchMenu({ id: 'join' });
+    if (!link || screen.kind !== 'start') return;
+    if (link.error) setScreen({ kind: 'start', joinError: link.error });
+    else if (link.code) joinFromLink(link);
   };
   // The join field on the start screen: a code, or a pasted link that may name a service.
   const join = (code: string, pasted?: string) => {
@@ -93,21 +96,22 @@ export function App() {
     if (command.id === 'shortcuts') return setShortcuts(true);
     if (command.id === 'connection-status') return setConnectionStatus(true);
     if (command.id === 'join-link') return void takeJoinLink();
-    if (command.id === 'restart-to-update') return restartToUpdate();
+    if (command.id === 'restart-to-update') return void restartToUpdate();
     // Changed in the settings window.
     if (command.id === 'profile-changed') return void refresh();
-    if (!START_COMMANDS.has(command.id)) return;
-    if (screen.kind === 'start') setStartCommand(command);
-    else if (screen.kind === 'viewer') setLeaveFor(command);
-    // A hosted session answers these itself: one session at a time.
+    if (START_COMMANDS.has(command.id) && screen.kind === 'start') setStartCommand(command);
   });
 
   useEffect(() => {
     refresh()
-      // A window reopened while a session runs goes straight back to it.
+      // A window reopened while a session runs goes straight back to it; a new window may have
+      // opened for a join link or a start command.
       .then((p) => {
         if (p.hosting) setScreen({ kind: 'host' });
-        else void takeJoinLink();
+        else {
+          void takeJoinLink();
+          void bridge.takeStartCommand().then((command) => command && setStartCommand(command));
+        }
         const demo = import.meta.env.DEV ? new URLSearchParams(location.search).get('demo') : null;
         if (demo === 'viewer') setScreen({ kind: 'viewer', code: '7K2M9QXH4TPA' });
       })
@@ -162,7 +166,7 @@ export function App() {
       {/* Without a toolbar the top of the window is where it is dragged (macOS title bar). */}
       {screen.kind === 'start' && <div className="drag-strip" data-tauri-drag-region />}
       {screen.kind === 'start' && update.version && !updateError && (
-        <UpdateNotice version={update.version} onRestart={restartToUpdate} onDismiss={update.dismiss} />
+        <UpdateNotice version={update.version} onRestart={() => void restartToUpdate()} onDismiss={update.dismiss} />
       )}
       {updateError && (
         <div className="update-notice" role="alert">
@@ -187,28 +191,6 @@ export function App() {
           onCommandDone={() => setStartCommand(null)}
         />
       )}
-      {leaveFor && (
-        <ConfirmDialog
-          title="Leave this session?"
-          confirm="Leave"
-          onCancel={() => setLeaveFor(null)}
-          onConfirm={() => {
-            void bridge.leaveSession();
-            if (leaveFor.link) {
-              setScreen({ kind: 'start' });
-              joinFromLink(leaveFor.link);
-            } else if (leaveFor.id === 'join-link' && leaveFor.path) {
-              setScreen({ kind: 'viewer', code: leaveFor.path });
-            } else {
-              setScreen({ kind: 'start' });
-              setStartCommand(leaveFor);
-            }
-            setLeaveFor(null);
-          }}
-        >
-          <p>You stop watching. You can join again with the invite code while the session runs.</p>
-        </ConfirmDialog>
-      )}
       {joinThrough?.code && joinThrough.server && (
         <JoinThroughDialog
           serverName={joinThrough.serverName ?? joinThrough.server}
@@ -227,17 +209,13 @@ export function App() {
       )}
       {askRestart && update.version && (
         <ConfirmDialog
-          title={screen.kind === 'host' ? 'End the session for everyone and restart?' : 'Leave the session and restart?'}
-          confirm={screen.kind === 'host' ? 'End Session and Restart' : 'Leave and Restart'}
-          danger={screen.kind === 'host'}
-          onCancel={() => setAskRestart(false)}
+          title={askRestart.title}
+          confirm={askRestart.confirm}
+          danger={askRestart.danger}
+          onCancel={() => setAskRestart(null)}
           onConfirm={installUpdate}
         >
-          <p>
-            {screen.kind === 'host'
-              ? `Restarting installs SpecDeck ${update.version}. It ends your session: everyone watching is disconnected and the agent stops.`
-              : `Restarting installs SpecDeck ${update.version}. You stop watching; you can join again with the invite code while the session runs.`}
-          </p>
+          <p>{askRestart.text}</p>
         </ConfirmDialog>
       )}
       {shortcuts && <ShortcutsDialog onClose={() => setShortcuts(false)} />}

@@ -66,7 +66,11 @@ export interface Profile {
   recentFolders: RecentFolder[];
   lastAgent: AgentId | null;
   agents: AgentInfo[];
+  /** This window shows a hosted session. */
   hosting: boolean;
+  /** The sessions hosted and watched in all windows, for the question before restarting. */
+  hostedSessions: number;
+  watchedSessions: number;
   /** Whether to show OS notifications while the window is not in front. */
   notifications: boolean;
   /** How the user follows sessions; null until they answered the first-join question. */
@@ -81,7 +85,7 @@ export interface Profile {
   builtInService: string;
   /** SPECDECK_SIGNALLING_URL decides the service, so the setting has no effect. */
   serviceOverridden: boolean;
-  /** Hosting or viewing a session; the service cannot change meanwhile. */
+  /** Hosting or viewing a session in any window; the service cannot change meanwhile. */
   inSession: boolean;
   /** This install updates itself (macOS app, Windows installer, AppImage). */
   updatesItself: boolean;

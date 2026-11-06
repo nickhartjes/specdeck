@@ -1,22 +1,62 @@
 //! The menu-bar (macOS) or tray (Windows, Linux) icon while a session is hosted (design decision
-//! 11). It shows the session's state and viewers, and offers the window, the invite code and
-//! ending the session, also while the window is closed.
+//! 11). It shows each hosted session's state and viewers, and offers its window, its invite code
+//! and ending it, also while the window is closed. One icon serves every hosted session
+//! (`multiple-windows` design decision 6): one session gets a flat menu, several a submenu each.
 
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::{AgentId, AgentStatus};
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
+use tauri::menu::{
+    IsMenuItem, Menu, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Runtime};
 
 use crate::host::{SharingState, Summary};
+use crate::sessions::SessionId;
 
 const TRAY_ID: &str = "session";
 
-pub mod ids {
-    pub const OPEN: &str = "tray:open";
-    pub const COPY_CODE: &str = "tray:copy-code";
-    pub const END: &str = "tray:end";
+/// Item ids start with this; the action and the session follow, as `tray:open:3`.
+const PREFIX: &str = "tray:";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Open,
+    CopyCode,
+    End,
+}
+
+impl Action {
+    const ALL: [Action; 3] = [Action::Open, Action::CopyCode, Action::End];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Action::Open => "open",
+            Action::CopyCode => "copy-code",
+            Action::End => "end",
+        }
+    }
+}
+
+fn item_id(key: &str, session: SessionId) -> String {
+    format!("{PREFIX}{key}:{session}")
+}
+
+/// The action and session of a tray item id, if it is one.
+pub fn parse(id: &str) -> Option<(Action, SessionId)> {
+    let (action, session) = id.strip_prefix(PREFIX)?.rsplit_once(':')?;
+    let action = Action::ALL.into_iter().find(|known| known.as_str() == action)?;
+    Some((action, session.parse().ok()?))
+}
+
+/// A hosted session as the tray shows it.
+#[derive(Clone, Debug)]
+pub struct Entry {
+    pub id: SessionId,
+    pub folder: String,
+    pub agent: AgentId,
+    pub summary: Summary,
 }
 
 /// The first line of the menu: what the agent is doing.
@@ -44,47 +84,91 @@ fn viewers_line(summary: &Summary) -> String {
     }
 }
 
-fn menu<R: Runtime>(
+/// One menu line: an item, or a separator.
+enum Line<R: Runtime> {
+    Item(MenuItem<R>),
+    Separator(PredefinedMenuItem<R>),
+}
+
+impl<R: Runtime> Line<R> {
+    fn as_item(&self) -> &dyn IsMenuItem<R> {
+        match self {
+            Line::Item(item) => item,
+            Line::Separator(separator) => separator,
+        }
+    }
+}
+
+/// A session's lines: what it is doing, then its window, its code and ending it. The folder line
+/// is left out in a submenu, whose title already names the folder.
+fn session_lines<R: Runtime>(
     app: &AppHandle<R>,
-    folder: &str,
-    agent: AgentId,
-    summary: &Summary,
-) -> tauri::Result<Menu<R>> {
-    let info =
-        |id: &str, text: String| MenuItemBuilder::with_id(id, text).enabled(false).build(app);
-    let code = summary.code.as_deref().and_then(|code| InviteCode::parse(code).ok());
+    entry: &Entry,
+    with_folder: bool,
+) -> tauri::Result<Vec<Line<R>>> {
+    let item = |key: &str, text: String, enabled: bool| -> tauri::Result<Line<R>> {
+        let item = MenuItemBuilder::with_id(item_id(key, entry.id), text).enabled(enabled);
+        Ok(Line::Item(item.build(app)?))
+    };
+    let info = |key: &str, text: String| item(key, text, false);
+    let action = |action: Action, text: String, enabled: bool| item(action.as_str(), text, enabled);
+    let separator = || Ok::<_, tauri::Error>(Line::Separator(PredefinedMenuItem::separator(app)?));
+    let code = entry.summary.code.as_deref().and_then(|code| InviteCode::parse(code).ok());
     let copy_text = match &code {
         Some(code) => format!("Copy Invite Code  {code}"),
         None => "Copy Invite Code".into(),
     };
-    MenuBuilder::new(app)
-        .item(&info("tray:folder", format!("Hosting {folder}"))?)
-        .item(&info("tray:state", state_line(agent, summary))?)
-        .item(&info("tray:viewers", viewers_line(summary))?)
-        .separator()
-        .item(&MenuItemBuilder::with_id(ids::OPEN, "Open Window").build(app)?)
-        .item(
-            &MenuItemBuilder::with_id(ids::COPY_CODE, copy_text)
-                .enabled(code.is_some())
-                .build(app)?,
-        )
-        .separator()
-        .item(&MenuItemBuilder::with_id(ids::END, "End Session…").build(app)?)
-        .build()
+    let mut lines = Vec::new();
+    if with_folder {
+        lines.push(info("folder", format!("Hosting {}", entry.folder))?);
+    }
+    lines.extend([
+        info("state", state_line(entry.agent, &entry.summary))?,
+        info("viewers", viewers_line(&entry.summary))?,
+        separator()?,
+        action(Action::Open, "Open Window".into(), true)?,
+        action(Action::CopyCode, copy_text, code.is_some())?,
+        separator()?,
+        action(Action::End, "End Session…".into(), true)?,
+    ]);
+    Ok(lines)
 }
 
-fn tooltip(folder: &str, summary: &Summary) -> String {
-    format!("SpecDeck: hosting {folder} · {}", viewers_line(summary))
+fn menu<R: Runtime>(app: &AppHandle<R>, entries: &[Entry]) -> tauri::Result<Menu<R>> {
+    if let [entry] = entries {
+        let lines = session_lines(app, entry, true)?;
+        let items: Vec<_> = lines.iter().map(Line::as_item).collect();
+        return MenuBuilder::new(app).items(&items).build();
+    }
+    let mut submenus = Vec::new();
+    for entry in entries {
+        let lines = session_lines(app, entry, false)?;
+        let items: Vec<_> = lines.iter().map(Line::as_item).collect();
+        submenus.push(SubmenuBuilder::new(app, &entry.folder).items(&items).build()?);
+    }
+    let items: Vec<&dyn IsMenuItem<R>> = submenus.iter().map(|s| s as &dyn IsMenuItem<R>).collect();
+    MenuBuilder::new(app).items(&items).build()
 }
 
-/// Shows the icon for a session that just started.
-pub fn show<R: Runtime>(
-    app: &AppHandle<R>,
-    folder: &str,
-    agent: AgentId,
-    summary: &Summary,
-) -> tauri::Result<()> {
-    remove(app);
+fn tooltip(entries: &[Entry]) -> String {
+    match entries {
+        [entry] => format!("SpecDeck: hosting {} · {}", entry.folder, viewers_line(&entry.summary)),
+        _ => format!("SpecDeck: hosting {} sessions", entries.len()),
+    }
+}
+
+/// Shows the hosted sessions `entries`, in this order: adds the icon for the first one, brings
+/// its menu up to date for a change, and removes it when none is left.
+pub fn refresh<R: Runtime>(app: &AppHandle<R>, entries: &[Entry]) -> tauri::Result<()> {
+    if entries.is_empty() {
+        remove(app);
+        return Ok(());
+    }
+    let menu = menu(app, entries)?;
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        tray.set_menu(Some(menu))?;
+        return tray.set_tooltip(Some(tooltip(entries)));
+    }
     let icon = if cfg!(target_os = "macos") {
         Image::from_bytes(include_bytes!("../icons/tray-template.png"))?
     } else {
@@ -95,27 +179,18 @@ pub fn show<R: Runtime>(
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .icon_as_template(true)
-        .tooltip(tooltip(folder, summary))
-        .menu(&menu(app, folder, agent, summary)?)
+        .tooltip(tooltip(entries))
+        .menu(&menu)
         .show_menu_on_left_click(true)
         .build(app)?;
     Ok(())
-}
-
-/// Brings the icon's menu up to date.
-pub fn update<R: Runtime>(app: &AppHandle<R>, folder: &str, agent: AgentId, summary: &Summary) {
-    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
-    if let Ok(menu) = menu(app, folder, agent, summary) {
-        let _ = tray.set_menu(Some(menu));
-    }
-    let _ = tray.set_tooltip(Some(tooltip(folder, summary)));
 }
 
 /// Removes the icon: no session is hosted.
 ///
 /// On the main thread: AppKit aborts the app when a status item is removed from any other, and
 /// ending a session runs on a command's worker thread.
-pub fn remove<R: Runtime>(app: &AppHandle<R>) {
+fn remove<R: Runtime>(app: &AppHandle<R>) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || drop(handle.remove_tray_by_id(TRAY_ID)));
 }
@@ -154,5 +229,30 @@ mod tests {
         assert_eq!(state_line(AgentId::Omp, &exited), "omp has exited");
         let live = summary(AgentStatus::Unknown, 2, SharingState::Ready);
         assert_eq!(state_line(AgentId::Terminal, &live), "Session is live");
+    }
+
+    #[test]
+    fn item_ids_name_the_action_and_the_session() {
+        for action in Action::ALL {
+            assert_eq!(parse(&item_id(action.as_str(), 12)), Some((action, 12)));
+        }
+        assert_eq!(parse("tray:open:3"), Some((Action::Open, 3)));
+        assert_eq!(parse("tray:copy-code:7"), Some((Action::CopyCode, 7)));
+        // Information lines and other menus' ids are not actions.
+        assert_eq!(parse("tray:state:3"), None);
+        assert_eq!(parse("tray:open"), None);
+        assert_eq!(parse("host"), None);
+    }
+
+    #[test]
+    fn the_tooltip_names_one_session_or_counts_several() {
+        let entry = |id, folder: &str| Entry {
+            id,
+            folder: folder.into(),
+            agent: AgentId::ClaudeCode,
+            summary: summary(AgentStatus::Working, 2, SharingState::Ready),
+        };
+        assert_eq!(tooltip(&[entry(1, "shop")]), "SpecDeck: hosting shop · 2 viewers");
+        assert_eq!(tooltip(&[entry(1, "shop"), entry(2, "api")]), "SpecDeck: hosting 2 sessions");
     }
 }
