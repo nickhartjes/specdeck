@@ -10,7 +10,7 @@
 - [x] 2.1 Move `diagnostics.rs` from `app/src-tauri` into a shared crate (`crates/diag`), with the log file prefix as a parameter, and add the session log target to `targets()`. Verify the existing diagnostics tests and `crates/core/tests/diagnostics_leak.rs` pass, and that `cargo clippy --workspace --all-targets -- -D warnings` passes.
 - [x] 2.2 Derive `Serialize`/`Deserialize` for `Environment` (`crates/core/src/environment.rs`). Verify with a round-trip unit test.
 - [x] 2.3 Create `crates/local`: length-prefixed frames, JSON control messages and binary data frames, the version handshake (own and previous release), and the frozen `end` message (design decision 3). Verify with unit tests: framing across split reads, a handshake accepting N and N-1 and refusing N-2 except for `end`, and an oversized frame refused.
-- [ ] 2.4 Add the transport to `crates/local`: a Unix socket in a 0700 folder with a peer-uid check on macOS and Linux, a named pipe with a user-only ACL on Windows. Verify with a test that connects, exchanges a frame and is refused when the socket's folder is not private.
+- [x] 2.4 Add the transport to `crates/local`: a Unix socket in a 0700 folder with a peer-uid check on macOS and Linux, a named pipe with a user-only ACL on Windows. Verify with a test that connects, exchanges a frame and is refused when the socket's folder is not private.
 
 ## 3. The session process (`crates/session`)
 
