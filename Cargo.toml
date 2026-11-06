@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/protocol", "crates/core", "crates/diag", "crates/local", "crates/server", "crates/web", "app/src-tauri"]
+members = ["crates/protocol", "crates/core", "crates/diag", "crates/local", "crates/server", "crates/session", "crates/web", "app/src-tauri"]
 
 [workspace.package]
 version = "1.6.0"
@@ -12,3 +12,5 @@ rust-version = "1.99"
 specdeck-protocol = { path = "crates/protocol" }
 specdeck-core = { path = "crates/core" }
 specdeck-diag = { path = "crates/diag" }
+specdeck-local = { path = "crates/local" }
+specdeck-session = { path = "crates/session" }

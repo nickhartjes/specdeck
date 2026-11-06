@@ -14,11 +14,11 @@
 
 ## 3. The session process (`crates/session`)
 
-- [ ] 3.1 Create the `specdeck-session` binary and move `HostRuntime` and its tests from `app/src-tauri/src/host.rs` into it. Replace the Tauri `Channel`s with frames on the app connection and the `Observer` with notice frames. Verify the moved tests pass.
-- [ ] 3.2 Serve the local protocol: start from the start message (with the app's `Environment`), attach (replacing the previous app connection and replaying the output log from the given sequence), every host command, status, verbose logging and `end`. Verify with an integration test that starts the binary, attaches, sends input to a Terminal session, detaches, reattaches and receives the full terminal from sequence 0.
-- [ ] 3.3 Write and remove the run-folder entry (`<id>.json`, socket) and end on SIGTERM or `end` like `close`. Verify with the integration test that the entry exists while running and is gone after `end`.
-- [ ] 3.4 Add the 10-minute grace timer (design decision 5): started when the app connection closes, stopped on attach, ending the session like `close`, with the duration overridable in debug builds for tests. Keep notices while no app is attached and send them at the next attach. Verify with the integration test that a session without an app ends after the (shortened) timer and a viewer sees the host's end, and that one reattached in time keeps running.
-- [ ] 3.5 Keep the session's diagnostic log in the log folder as `specdeck-session-<id>.log.<date>` (design decision 7). Verify the leak test runs against the session binary's events and passes.
+- [x] 3.1 Create the `specdeck-session` binary and move `HostRuntime` and its tests from `app/src-tauri/src/host.rs` into it. Replace the Tauri `Channel`s with frames on the app connection and the `Observer` with notice frames. Verify the moved tests pass.
+- [x] 3.2 Serve the local protocol: start from the start message (with the app's `Environment`), attach (replacing the previous app connection and replaying the output log from the given sequence), every host command, status, verbose logging and `end`. Verify with an integration test that starts the binary, attaches, sends input to a Terminal session, detaches, reattaches and receives the full terminal from sequence 0.
+- [x] 3.3 Write and remove the run-folder entry (`<id>.json`, socket) and end on SIGTERM or `end` like `close`. Verify with the integration test that the entry exists while running and is gone after `end`.
+- [x] 3.4 Add the 10-minute grace timer (design decision 5): started when the app connection closes, stopped on attach, ending the session like `close`, with the duration overridable in debug builds for tests. Keep notices while no app is attached and send them at the next attach. Verify with the integration test that a session without an app ends after the (shortened) timer and a viewer sees the host's end, and that one reattached in time keeps running.
+- [x] 3.5 Keep the session's diagnostic log in the log folder as `specdeck-session-<id>.log.<date>` (design decision 7). Verify the leak test runs against the session binary's events and passes.
 
 ## 4. The app as client
 

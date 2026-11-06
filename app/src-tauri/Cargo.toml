@@ -38,6 +38,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # The diagnostic log: specdeck-core emits the events, specdeck-diag writes them.
 specdeck-diag.workspace = true
+specdeck-session.workspace = true
 tracing = "0.1"
 
 [dev-dependencies]

@@ -4751,6 +4751,7 @@ dependencies = [
  "specdeck-diag",
  "specdeck-protocol",
  "specdeck-server",
+ "specdeck-session",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -4856,6 +4857,22 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "specdeck-session"
+version = "1.6.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "specdeck-core",
+ "specdeck-diag",
+ "specdeck-local",
+ "specdeck-protocol",
+ "specdeck-server",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

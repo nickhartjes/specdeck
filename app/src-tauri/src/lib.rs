@@ -1,6 +1,7 @@
 // The diagnostic log, shared with the session processes.
 pub(crate) use specdeck_diag as diagnostics;
-mod host;
+// The hosted session, shared with the session process (`session-processes`).
+use specdeck_session::runtime as host;
 mod menu;
 mod migrate;
 mod notify;
@@ -20,7 +21,6 @@ use std::time::SystemTime;
 use serde::Serialize;
 use specdeck_core::agent;
 use specdeck_core::environment::{Environment, PROBE_TIMEOUT};
-use specdeck_core::mirror::Colors;
 use specdeck_core::peer::PeerConfig;
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::service;
@@ -693,6 +693,7 @@ async fn start_hosting(
             notify(&observed, id, &format!("{} is waiting for you", agent.display_name()), &body);
         }
     });
+    let service = options.signalling_url.clone();
     let runtime = match HostRuntime::start(options, &state.environment(), observer).await {
         Ok(runtime) => Arc::new(runtime),
         Err(error) => {
@@ -700,6 +701,12 @@ async fn start_hosting(
             return Err(error);
         }
     };
+    // Join links open in a browser when the service serves the web viewer (`web-viewer` design
+    // decision 6); the app asks, so the session needs no HTTP client.
+    let checked = runtime.clone();
+    tauri::async_runtime::spawn(async move {
+        checked.set_web_viewer(services::web_viewer(&service).await);
+    });
     let inserted = state.sessions.lock().unwrap().insert(
         window.label(),
         id,
@@ -741,6 +748,9 @@ async fn host_attach(
     terminal: Channel<InvokeResponseBody>,
     events: Channel<HostEvent>,
 ) -> Result<(), String> {
+    let terminal: host::TerminalSink =
+        Box::new(move |records| terminal.send(InvokeResponseBody::Raw(records)).is_ok());
+    let events: host::EventSink = Box::new(move |event| events.send(event).is_ok());
     with_host(&state, &window, |host| host.attach(terminal, events))
 }
 
@@ -770,11 +780,7 @@ async fn host_set_colors(
     foreground: String,
     background: String,
 ) -> Result<(), String> {
-    let (Some(foreground), Some(background)) = (parse_hex(&foreground), parse_hex(&background))
-    else {
-        return Err("Colours must be #rrggbb.".into());
-    };
-    with_host(&state, &window, |host| host.set_colors(Colors { foreground, background }))
+    with_host(&state, &window, |host| host.set_colors_hex(&foreground, &background))?
 }
 
 #[tauri::command]
@@ -932,15 +938,6 @@ fn session_window_title(session: Option<&str>) -> String {
         Some(name) if !name.is_empty() => format!("{name} — {}", window_title()),
         _ => window_title(),
     }
-}
-
-fn parse_hex(color: &str) -> Option<specdeck_core::mirror::Rgb> {
-    let hex = color.strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
-    Some(specdeck_core::mirror::Rgb { r: channel(0)?, g: channel(2)?, b: channel(4)? })
 }
 
 /// Separate settings and data per profile, so two apps can run side by side for local testing

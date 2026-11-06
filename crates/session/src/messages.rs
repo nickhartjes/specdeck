@@ -1,0 +1,120 @@
+//! The control messages between the app and a session process (design decision 3). Each side
+//! first sends `hello` ([`specdeck_local::Frozen`]); `end` keeps the frozen shape too, so any
+//! release can end a session.
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+use specdeck_core::environment::Environment;
+use specdeck_protocol::AgentId;
+
+use crate::runtime::HostNotice;
+
+/// From the app.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+pub enum Command {
+    /// Starts the agent and sharing; the first command to a new session process.
+    Start {
+        agent: AgentId,
+        folder: PathBuf,
+        cols: u16,
+        rows: u16,
+        username: String,
+        /// The folder for the output log and hook files.
+        data_dir: PathBuf,
+        signalling_url: String,
+        /// The login shell's environment, as the app detected it.
+        environment: Environment,
+        verbose: bool,
+    },
+    /// Shows the session in the app's window: a snapshot, then the terminal from the start.
+    Attach,
+    Input {
+        data: String,
+    },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
+    /// The host terminal's colours, as `#rrggbb`.
+    Colors {
+        foreground: String,
+        background: String,
+    },
+    NewCode,
+    RemoveViewer {
+        viewer_id: u32,
+    },
+    ViewerLimit {
+        limit: u8,
+    },
+    /// Whether the sharing service serves the web viewer; the app checks it.
+    WebViewer {
+        available: bool,
+    },
+    Verbose {
+        enabled: bool,
+    },
+    /// Asks for [`Event::Status`].
+    Status,
+    /// Ends the session for everyone.
+    End,
+}
+
+/// From the session process.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+pub enum Event {
+    /// The agent runs; the answer to `start`.
+    Started,
+    /// The agent could not start, or a command failed; in plain words.
+    Failed { message: String },
+    /// For the host's window, as the UI reads it (`HostEvent`); the app passes it on unchanged.
+    HostEvent { event: serde_json::Value },
+    /// For the tray and notifications.
+    Notice { notice: HostNotice },
+    /// What sharing is doing, for the Connection status panel (`SharingStatus`).
+    Status { sharing: serde_json::Value },
+    /// The session has ended; the process exits.
+    Ended,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use specdeck_local::Frozen;
+
+    #[test]
+    fn end_is_the_frozen_end() {
+        let ours = serde_json::to_value(Command::End).unwrap();
+        assert_eq!(ours, serde_json::to_value(Frozen::End).unwrap());
+    }
+
+    #[test]
+    fn commands_and_events_read_back() {
+        let start = Command::Start {
+            agent: AgentId::Terminal,
+            folder: "/tmp/shop".into(),
+            cols: 100,
+            rows: 30,
+            username: "Nick".into(),
+            data_dir: "/tmp/data".into(),
+            signalling_url: "wss://example.com/signal".into(),
+            environment: [("PATH", "/bin")].into_iter().collect(),
+            verbose: false,
+        };
+        let json = serde_json::to_string(&start).unwrap();
+        assert!(json.starts_with(r#"{"type":"start","agent":"#), "{json}");
+        assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), start);
+
+        let remove = r#"{"type":"remove-viewer","viewerId":3}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(remove).unwrap(),
+            Command::RemoveViewer { viewer_id: 3 }
+        );
+        let notice = Event::Notice { notice: HostNotice::ViewerJoined("Anna".into()) };
+        let json = serde_json::to_string(&notice).unwrap();
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), notice);
+    }
+}

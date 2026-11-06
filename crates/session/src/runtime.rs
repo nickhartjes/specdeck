@@ -1,5 +1,6 @@
-//! A hosted session as the app sees it: the engine's session and sharing, the state the window
-//! shows, and streaming the terminal to the window (design decision 2).
+//! A hosted session: the engine's session and sharing, the state the host's window shows, and
+//! streaming the terminal to it (design decision 2). It runs in a session process, and the app
+//! attaches to it (`session-processes`).
 //!
 //! The window can close and reopen while the session runs; on every attach it gets the whole
 //! output log replayed, so it shows the full scrollback.
@@ -8,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specdeck_core::environment::Environment;
 use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
@@ -17,11 +18,16 @@ use specdeck_core::sharing::{MAX_VIEWERS, Sharing, SharingConfig, SharingEvent, 
 use specdeck_protocol::control::{Participant, Role};
 use specdeck_protocol::timeline::{Entry, TimelineEvent};
 use specdeck_protocol::{AgentId, AgentStatus};
-use tauri::ipc::{Channel, InvokeResponseBody};
 
 use specdeck_protocol::terminal_stream::encode_records;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// Where an attached window's events go; returns false once it is gone.
+pub type EventSink = Box<dyn Fn(HostEvent) -> bool + Send>;
+
+/// Where an attached window's terminal goes, as encoded records; returns false once it is gone.
+pub type TerminalSink = Box<dyn Fn(Vec<u8>) -> bool + Send + Sync>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SharingState {
     Connecting,
@@ -73,7 +79,7 @@ pub enum HostEvent {
 }
 
 /// What the tray shows of the session; sent whenever one of these changes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Summary {
     pub status: AgentStatus,
     pub viewers: usize,
@@ -82,7 +88,7 @@ pub struct Summary {
 }
 
 /// What the app shows of the session outside its window: the tray, and notifications.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HostNotice {
     /// The tray's view changed.
     Summary(Summary),
@@ -96,6 +102,15 @@ pub enum HostNotice {
 
 /// Hears about changes the app shows outside the window.
 pub type Observer = Arc<dyn Fn(HostNotice) + Send + Sync>;
+
+fn parse_hex(color: &str) -> Option<specdeck_core::mirror::Rgb> {
+    let hex = color.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let channel = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+    Some(specdeck_core::mirror::Rgb { r: channel(0)?, g: channel(2)?, b: channel(4)? })
+}
 
 /// Viewers who joined and left between two participant lists, by name.
 fn viewer_changes(before: &[Participant], after: &[Participant]) -> Vec<HostNotice> {
@@ -124,7 +139,7 @@ struct Ui {
     status: AgentStatus,
     /// The sharing service serves the web viewer (`services::web_viewer`).
     web_viewer: bool,
-    events: Option<Channel<HostEvent>>,
+    events: Option<EventSink>,
     observer: Observer,
     last_summary: Option<Summary>,
     /// Notices for the observer, told once the lock is released.
@@ -152,7 +167,7 @@ impl Ui {
 
     fn send(&mut self, event: HostEvent) {
         if let Some(events) = &self.events
-            && events.send(event).is_err()
+            && !events(event)
         {
             self.events = None;
         }
@@ -235,17 +250,6 @@ impl HostRuntime {
         }));
         let notice = ui.lock().unwrap().observe();
         notice.tell();
-
-        // Join links open in a browser when the service serves the web viewer
-        // (`web-viewer` design decision 6).
-        let checked = ui.clone();
-        let service = options.signalling_url.clone();
-        tokio::spawn(async move {
-            let available = crate::services::web_viewer(&service).await;
-            let mut ui = checked.lock().unwrap();
-            ui.web_viewer = available;
-            ui.send(HostEvent::WebViewer { available });
-        });
 
         let shared = ui.clone();
         tokio::spawn(async move {
@@ -331,9 +335,18 @@ impl HostRuntime {
         })
     }
 
+    /// Whether the sharing service serves the web viewer, so join links open in a browser
+    /// (`web-viewer` design decision 6). The app checks it, which keeps an HTTP client out of the
+    /// session process.
+    pub fn set_web_viewer(&self, available: bool) {
+        let mut ui = self.ui.lock().unwrap();
+        ui.web_viewer = available;
+        ui.send(HostEvent::WebViewer { available });
+    }
+
     /// Connects a window: sends the current state, then the terminal from the start of the
     /// session and everything that follows.
-    pub fn attach(&self, terminal: Channel<InvokeResponseBody>, events: Channel<HostEvent>) {
+    pub fn attach(&self, terminal: TerminalSink, events: EventSink) {
         let view = self.session.view();
         {
             let mut ui = self.ui.lock().unwrap();
@@ -370,8 +383,7 @@ impl HostRuntime {
                 match records.last().map(Record::seq) {
                     Some(last) => {
                         cursor = last + 1;
-                        if terminal.send(InvokeResponseBody::Raw(encode_records(&records))).is_err()
-                        {
+                        if !terminal(encode_records(&records)) {
                             return;
                         }
                     }
@@ -407,6 +419,16 @@ impl HostRuntime {
 
     pub fn set_colors(&self, colors: specdeck_core::mirror::Colors) {
         self.session.set_colors(colors);
+    }
+
+    /// The host terminal's colours, as `#rrggbb`; refused otherwise.
+    pub fn set_colors_hex(&self, foreground: &str, background: &str) -> Result<(), String> {
+        let (Some(foreground), Some(background)) = (parse_hex(foreground), parse_hex(background))
+        else {
+            return Err("Colours must be #rrggbb.".into());
+        };
+        self.set_colors(specdeck_core::mirror::Colors { foreground, background });
+        Ok(())
     }
 
     pub fn new_code(&self) {

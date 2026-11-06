@@ -1,0 +1,25 @@
+[package]
+name = "specdeck-session"
+description = "A hosted SpecDeck session, run as a process of its own next to the app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "specdeck-session"
+path = "src/main.rs"
+
+[dependencies]
+specdeck-core.workspace = true
+specdeck-diag.workspace = true
+specdeck-local.workspace = true
+specdeck-protocol.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "signal"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+specdeck-server = { path = "../server" }

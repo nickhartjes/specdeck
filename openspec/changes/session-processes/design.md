@@ -68,10 +68,12 @@ The app passes its detected `Environment` in the start message (`Environment` ga
 - **Handshake**: the first frame names the protocol version, which is the release's minor version. The app accepts its own and the previous one. Differences from the previous version are handled in one adapter module in the app, deleted a release later.
 - **Older sessions**: they are listed in the tray with only End session. Ending is a frame that every version understands (`end`, frozen from the first release), and the process's pid file is the fallback.
 - **One app at a time**: an attach replaces the previous app connection, as `attach_generation` does today for windows.
+- **Starting**: the app starts `specdeck-session --id <n> --run-dir <dir> --endpoint <socket or pipe> --log-dir <dir>`. The app picks the endpoint, so the length fallback of decision 4 stays in one place. The process serves its endpoint at once and waits for `start`; without one within 60 s it exits. Debug builds also take `--grace-secs` and `--loopback`, for tests.
+- **Web viewer check**: the app asks the sharing service whether it serves the web viewer and sends the answer (`web-viewer`). That keeps an HTTP client, `reqwest` with TLS, out of the session binary.
 
 ### 4. Discovery and reopening
 
-Next to its socket, each session writes `<run dir>/<session id>.json`: version, protocol, pid, start time, agent, folder name. It is removed when the session ends.
+Next to its socket, each session writes `<run dir>/<session id>.json`: version, protocol, pid, start time, agent, folder name and endpoint. It is written once the agent runs and removed when the session ends.
 
 At start, the app reads the run folder. For each entry whose process is alive and whose socket answers, it opens a session window attached to it (`open_session_window(.., attach)` from `multiple-windows`). Entries whose process is gone are removed.
 
