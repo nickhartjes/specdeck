@@ -38,7 +38,16 @@ The web viewer is different from the app in one way: a browser loads its code fr
 So watching in a browser means trusting the people who run the sharing service, as well as the host:
 
 - **On your own service**, that is your team. The page comes only from your server: its security policy lets the browser load and connect to nothing else, and each page joins only sessions on its own service.
-- **Building the image yourself** from the repository, as the guides below do, lets you read the exact code your viewers run.
+- **The published image** is signed by SpecDeck's release workflow. Check that the image you run was built by that workflow from a release tag, and not changed since:
+
+  ```sh
+  cosign verify ghcr.io/nickhartjes/specdeck-signalling:1.0.0 \
+    --certificate-identity-regexp '^https://github\.com/nickhartjes/specdeck/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  ```
+
+  [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) checks the signature against Sigstore's public log; no key from us is involved.
+- **Building the image yourself** from the repository, as both guides describe, lets you read the exact code your viewers run.
 - **Viewers who use the app** do not depend on the page at all.
 
 The page needs nothing extra to deploy: it is built into the signalling image.

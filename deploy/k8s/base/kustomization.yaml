@@ -4,6 +4,11 @@ kind: Kustomization
 resources:
   - signalling.yaml
   - coturn.yaml
+# The signed release image. `1` follows the newest 1.x release on each pull; pin an exact version
+# (newTag: 1.6.0) or a digest in your overlay for production. See deploy/k8s/README.md.
+images:
+  - name: ghcr.io/nickhartjes/specdeck-signalling
+    newTag: "1"
 # Shared TURN secret; create turn-secret.env (not committed) with a line TURN_SECRET=<random value>.
 secretGenerator:
   - name: specdeck-turn
