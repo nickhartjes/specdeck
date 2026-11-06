@@ -1,6 +1,7 @@
 # SpecDeck's sharing service on one server: the signalling service behind Caddy, which gets the
 # TLS certificate, and coturn as the TURN relay. Copy .env.example to .env, fill it in, then run
-# `docker compose up -d --build`. Guide: https://nickhartjes.github.io/specdeck/self-host/docker-compose/
+# `docker compose up -d`, which pulls the signed release image. `docker compose up -d --build`
+# builds it from source instead. Guide: https://nickhartjes.github.io/specdeck/self-host/docker-compose/
 name: specdeck
 
 services:
@@ -8,7 +9,7 @@ services:
     build:
       context: ../..
       dockerfile: docker/signalling.Dockerfile
-    image: specdeck-signalling:local
+    image: ghcr.io/nickhartjes/specdeck-signalling:${SPECDECK_VERSION:?Set SPECDECK_VERSION in .env}
     restart: unless-stopped
     environment:
       SPECDECK_LISTEN: 0.0.0.0:8080

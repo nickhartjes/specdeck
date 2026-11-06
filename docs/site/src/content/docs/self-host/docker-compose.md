@@ -7,7 +7,7 @@ The repository's [`deploy/compose`](https://github.com/nickhartjes/specdeck/tree
 
 | Service | What it does |
 |---|---|
-| `signalling` | The signalling service, built from the repository |
+| `signalling` | The signalling service, from the signed release image (or built from the repository) |
 | `caddy` | Gets a TLS certificate for the signalling domain and passes connections through |
 | `coturn` | The TURN relay, on the host's network |
 
@@ -48,6 +48,7 @@ Fill in `.env`:
 
 | Setting | Value |
 |---|---|
+| `SPECDECK_VERSION` | The release to run, such as `1.0.0`: the same version you checked out |
 | `SPECDECK_DOMAIN` | The signalling domain, such as `specdeck.example.com` |
 | `TURN_DOMAIN` | The TURN domain, such as `turn.example.com` |
 | `TURN_EXTERNAL_IP` | The server's public IPv4 address |
@@ -59,10 +60,18 @@ Keep `.env` private: anyone with `TURN_SECRET` can use your relay.
 ## 4. Start
 
 ```sh
+docker compose up -d
+```
+
+This pulls the signalling image for `SPECDECK_VERSION` from `ghcr.io/nickhartjes/specdeck-signalling`, with the [web viewer](/specdeck/guide/join/#watch-in-a-browser) built in. Every release publishes it for amd64 and arm64 servers, signed by the release workflow; to check the signature before you start, see [the web viewer's code](/specdeck/self-host/overview/#the-web-viewers-code). Caddy gets its certificate as soon as the DNS records resolve to the server.
+
+### Or build it from source
+
+```sh
 docker compose up -d --build
 ```
 
-The first start builds the signalling service from source, with the [web viewer](/specdeck/guide/join/#watch-in-a-browser) built in, which takes a few minutes. The build downloads from crates.io, the npm registry (`registry.npmjs.org`) and Docker Hub, so the server needs to reach them. If your network only allows a company npm registry, build the image once with your npm config as a build secret, which is not stored in the image: `docker build --secret id=npmrc,src=$HOME/.npmrc -f docker/signalling.Dockerfile -t specdeck-signalling:local ../..`, then start without `--build`. Caddy gets its certificate as soon as the DNS records resolve to the server.
+This builds the image from the checked-out release instead, under the same name, which takes a few minutes. The build downloads from crates.io, the npm registry (`registry.npmjs.org`) and Docker Hub, so the server needs to reach them. If your network only allows a company npm registry, build the image once with your npm config as a build secret, which is not stored in the image: `docker build --secret id=npmrc,src=$HOME/.npmrc -f docker/signalling.Dockerfile -t ghcr.io/nickhartjes/specdeck-signalling:<SPECDECK_VERSION> ../..`, then start without `--build`.
 
 Once it runs, `https://<SPECDECK_DOMAIN>/` is the web viewer, and hosts on this service copy join links that open there.
 
@@ -79,8 +88,12 @@ Then [connect the apps](/specdeck/self-host/connect-apps/).
 
 ```sh
 git fetch --tags && git checkout v1.1.0    # the new release
-docker compose up -d --build
+# set SPECDECK_VERSION=1.1.0 in .env
+docker compose pull
+docker compose up -d
 ```
+
+If you build from source, run `docker compose up -d --build` after the checkout instead of pulling.
 
 Restarting the signalling service does not end sessions that are already connected; new viewers can join again once it is back.
 

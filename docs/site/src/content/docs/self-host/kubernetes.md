@@ -7,7 +7,15 @@ The repository's [`deploy/k8s/base`](https://github.com/nickhartjes/specdeck/tre
 
 ## What to provide
 
-- **The signalling image.** Build it from the repository root and push it to a registry the cluster can pull from, then set the image in a Kustomize overlay:
+- **The signalling image version.** `base` runs the signed release image `ghcr.io/nickhartjes/specdeck-signalling` at tag `1`, the newest 1.x release. Pin a version (or a digest) in your overlay so pods do not change when they restart:
+
+  ```yaml
+  images:
+    - name: ghcr.io/nickhartjes/specdeck-signalling
+      newTag: 1.0.0
+  ```
+
+  To run your own build instead, build it from the repository root, push it to a registry the cluster can pull from, and set `newName` and `newTag` to it:
 
   ```sh
   docker build -f docker/signalling.Dockerfile -t registry.example.com/specdeck-signalling:1.0.0 .

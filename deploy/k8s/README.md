@@ -7,6 +7,18 @@ SpecDeck's server side: the signalling service (matchmaking and TURN credentials
 | [`base`](base) | The deployment for a real cluster |
 | [`local`](local) | Overlay for Colima's local k3s, used by `just local-up` and `just local-test` |
 
+## Image
+
+`base` runs the signalling image published with every release, `ghcr.io/nickhartjes/specdeck-signalling`, at tag `1` (the newest 1.x release). For production, pin a version in your overlay so pods do not change on a restart:
+
+```yaml
+images:
+  - name: ghcr.io/nickhartjes/specdeck-signalling
+    newTag: 1.6.0        # or: digest: sha256:...
+```
+
+Each image is signed by the release workflow; check it with `cosign verify` as in the [self-hosting overview](https://nickhartjes.github.io/specdeck/self-host/overview/#the-web-viewers-code). To run an image you built yourself, push it to your registry and set `newName` and `newTag` there instead.
+
 ## Secrets
 
 Both services share one TURN secret: the signalling service signs short-lived TURN credentials with it, and coturn checks them (TURN REST API, `use-auth-secret`).
