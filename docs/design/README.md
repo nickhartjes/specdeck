@@ -63,6 +63,7 @@ These came out of exploring the panels idea (the session that made the first ver
 | Sharing settings (the sliders button): which code viewers can open, suggestions, adding files and notes, saving a recap | #51, #56, #57, #64 | The defaults. |
 | *Joined late*: a "so far" card, and earlier prompts folded to their outcome | #58 | Who writes the summary: the app from the timeline, or the agent? |
 | Notifications: pop-ups inside the window, and in the concept a bell with a list and switches for each kind | #59 | Which kinds are on by default? |
+| Light and dark: both designs have a light and a dark palette; the app gets a *Light / Dark / System* choice | #65 | The agent's colours are chosen for the host's terminal background: what a viewer with another theme sees. |
 | *End the session*: the recap with prompts and outcomes, plans and documents, decisions and changed files, and *Save recap* | #57 | Who may keep what; where it is saved. |
 
 #51 is the channel from viewers to the host that #52, #53, #54, #61, #62 and #64 need, with the host in control. #60 is a bug (a rare crash in the WebRTC library on macOS) that is best fixed before the larger work.
@@ -72,4 +73,5 @@ These came out of exploring the panels idea (the session that made the first ver
 1. **#63, the window layout:** the three panels, tabs in the middle and layouts per kind of person. Apart from sending the full text of touched files, it needs no protocol change, and #55, #56 and the request row depend on it.
 2. **#51**, the viewer-to-host channel, then #52, #53, #54, #61 and #62 on it.
 3. **#56, #55, #58, #59 and #57**, as each one is needed.
-4. **#64**, browsing the whole project, only after a security review.
+4. **#65**, the theme choice, with or after #63, which needs both palettes anyway.
+5. **#64**, browsing the whole project, only after a security review.
