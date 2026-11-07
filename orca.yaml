@@ -1,0 +1,8 @@
+# Orca (stablyai/orca): runs for every new worktree. Reuses the main checkout's Rust build output
+# (copy-on-write, so fast and no extra space) and installs packages offline, because the public npm
+# registry is blocked on this network.
+scripts:
+  setup: |
+    main="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+    mkdir -p target && cp -cR "$main/target/debug" target/debug
+    mise exec node@24.22.2 -- pnpm install --offline --frozen-lockfile
