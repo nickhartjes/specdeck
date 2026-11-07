@@ -11,9 +11,12 @@ use crate::sessions::SessionId;
 #[cfg(target_os = "macos")]
 mod webkit;
 
-/// Labels of browser windows. No capability names them, so their pages get no IPC.
+/// Labels of browser windows. No capability names them, so their pages get no IPC. Only the macOS
+/// browser makes windows; the tests check the labels everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const LABEL_PREFIX: &str = "browser-";
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn label(id: SessionId) -> String {
     format!("{LABEL_PREFIX}{id}")
 }

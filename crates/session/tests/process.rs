@@ -311,6 +311,7 @@ async fn a_sent_suggestion_is_typed_as_one_prompt() {
         signalling_url,
         environment,
         verbose,
+        browser: false,
     };
     let mut terminal = String::new();
     app.send(&start).await;
