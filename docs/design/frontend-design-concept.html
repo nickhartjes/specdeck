@@ -135,6 +135,7 @@ svg { flex: none; }
 .clock small { font-size: 12px; color: var(--ink-2); }
 .deck { display: flex; gap: 5px; flex-wrap: wrap; }
 .card { width: 34px; height: 46px; border-radius: 5px; border: 1px solid var(--rule-strong); background: var(--sheet); font-size: 15px; font-weight: 700; display: grid; place-items: center; }
+.card.wide { width: auto; min-width: 34px; padding: 0 8px; }
 .card:hover { border-color: var(--accent); }
 .card[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); transform: translateY(-3px); }
 .spread { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; align-items: center; min-width: 220px; flex: 1; max-width: 380px; }
@@ -609,7 +610,7 @@ const S = {
     { id: 3, from: 'Sanne', text: 'Write a short note in the docs on what viewers see when the host\'s laptop sleeps.', status: 'kept', when: '15 min ago' },
   ],
   extra: [], termExtra: [], events: [], read: null, estimate: null, pop: null, editing: null, nextId: 10,
-  notes: [], notify: { waiting: true, request: true, suggestion: true, shared: false, ended: true },
+  lastDeck: 'fibonacci', notes: [], notify: { waiting: true, request: true, suggestion: true, shared: false, ended: true },
 };
 const me = () => PEOPLE[S.who];
 const isHost = () => S.who === 'host';
@@ -1079,14 +1080,18 @@ function readStrip() {
 }
 
 /* ---------- Estimate ---------- */
-const DECK = ['1', '2', '3', '5', '8', '13', '?', '☕'];
-function startEstimate(task) {
-  const e = S.estimate = { task, votes: {}, revealed: false };
-  let delay = 3000;
-  for (const [who, v] of Object.entries({ Sanne: '5', Mo: '8', Nick: '5' })) {
-    if (who === me()) continue;
-    setTimeout(() => { if (S.estimate === e && !e.revealed) { e.votes[who] = v; renderStandby(); autoReveal(); } }, delay); delay += 2500;
-  }
+/* Card sets: the numbers or sizes in order, then the two cards that say something else. */
+const DECKS = {
+  fibonacci: { name: 'Story points', cards: ['1', '2', '3', '5', '8', '13'], unit: ' points' },
+  tshirt: { name: 'T-shirt sizes', cards: ['XS', 'S', 'M', 'L', 'XL'], unit: '' },
+};
+const EXTRA = ['?', '☕'];
+/* What the others vote, per card set; they vote at their own pace, never before you see the cards. */
+const OTHERS = { fibonacci: { Sanne: '5', Mo: '8', Nick: '5' }, tshirt: { Sanne: 'M', Mo: 'L', Nick: 'M' } };
+function startEstimate(task, deck) {
+  const e = S.estimate = { task, deck, votes: {}, revealed: false };
+  const others = Object.entries(OTHERS[deck]).filter(([who]) => who !== me());
+  others.forEach(([who, v], i) => setTimeout(() => { if (S.estimate === e && !e.revealed) { e.votes[who] = v; renderStandby(); autoReveal(); } }, 9000 + i * 7000));
   renderStandby();
 }
 function autoReveal() {
@@ -1095,23 +1100,26 @@ function autoReveal() {
 }
 function estimateStrip() {
   const e = S.estimate, names = ['Nick', 'Sanne', 'Mo'], mine = e.votes[me()], n = Object.keys(e.votes).length;
-  const what = h('div', { class: 'what' }, h('b', null, `How big is this? ${e.task}`), h('span', null, e.revealed ? 'Votes revealed.' : `${n} of 3 voted. Votes stay hidden until Nick reveals them.`));
+  const deck = DECKS[e.deck], cards = deck.cards.concat(EXTRA);
+  const what = h('div', { class: 'what' }, h('b', null, `How big is this? ${e.task}`), h('span', null, e.revealed ? `Votes revealed, in ${deck.name.toLowerCase()}.` : `${n} of 3 voted, in ${deck.name.toLowerCase()}. Votes stay hidden until Nick reveals them.`));
   if (!e.revealed) return h('div', { class: 'req' }, what,
-    h('div', { class: 'deck', role: 'group', 'aria-label': 'Your vote' }, ...DECK.map((c) => h('button', { type: 'button', class: 'card', 'aria-pressed': mine === c, 'aria-label': c === '☕' ? 'I need a break' : c === '?' ? 'No idea' : c + ' points', onclick: () => { e.votes[me()] = c; renderStandby(); autoReveal(); } }, c))),
+    h('div', { class: 'deck', role: 'group', 'aria-label': 'Your vote' }, ...cards.map((c) => h('button', { type: 'button', class: 'card' + (c.length > 2 ? ' wide' : ''), 'aria-pressed': mine === c, 'aria-label': c === '☕' ? 'I need a break' : c === '?' ? 'No idea' : c + deck.unit, onclick: () => { e.votes[me()] = c; renderStandby(); autoReveal(); } }, c))),
     h('div', { class: 'roll' }, ...names.map((p) => h('span', { class: e.votes[p] ? 'done' : '' }, av(p), e.votes[p] ? `${p}, voted` : p))),
     isHost() && h('button', { type: 'button', class: 'btn primary small', disabled: !n, onclick: () => { e.revealed = true; renderStandby(); } }, 'Reveal votes'),
     isHost() && h('button', { type: 'button', class: 'btn quiet small', onclick: () => { S.estimate = null; renderStandby(); } }, 'Stop voting'));
   const counts = {}; for (const [p, v] of Object.entries(e.votes)) (counts[v] = counts[v] || []).push(p);
   const max = Math.max(...Object.values(counts).map((x) => x.length));
   const top = Object.entries(counts).sort((a, b) => b[1].length - a[1].length)[0][0];
-  const nums = Object.values(e.votes).filter((v) => /^\d+$/.test(v)).map(Number);
-  const agree = !nums.length || Math.min(...nums) === Math.max(...nums);
+  // The spread in the set's own order, so it works for sizes as well as numbers.
+  const ranks = Object.values(e.votes).map((v) => deck.cards.indexOf(v)).filter((i) => i >= 0);
+  const low = deck.cards[Math.min(...ranks)], high = deck.cards[Math.max(...ranks)];
+  const agree = !ranks.length || low === high;
   return h('div', { class: 'req' }, what,
     h('div', { class: 'spread', role: 'img', 'aria-label': Object.entries(counts).map(([v, p]) => `${v}: ${p.join(' and ')}`).join('; ') },
-      ...DECK.filter((c) => counts[c]).flatMap((c) => [h('b', null, c), h('div', { class: 'row' }, h('i', { style: `width:${(counts[c].length / max) * 60}%` }), counts[c].join(', '))])),
-    h('span', { style: 'color:var(--ink-2);font-size:12px;max-width:26ch' }, agree ? 'Everyone agrees.' : `The votes run from ${Math.min(...nums)} to ${Math.max(...nums)}. Talk it through, then vote again.`),
-    isHost() && h('button', { type: 'button', class: 'btn small', onclick: () => startEstimate(e.task) }, 'Vote again'),
-    isHost() && h('button', { type: 'button', class: 'btn primary small', onclick: () => { S.events.push({ title: 'Estimated:', text: `${e.task}, ${top} points.` }); S.estimate = null; renderStandby(); renderCues(); } }, `Keep ${top} points`),
+      ...cards.filter((c) => counts[c]).flatMap((c) => [h('b', null, c), h('div', { class: 'row' }, h('i', { style: `width:${(counts[c].length / max) * 60}%` }), counts[c].join(', '))])),
+    h('span', { style: 'color:var(--ink-2);font-size:12px;max-width:26ch' }, agree ? 'Everyone agrees.' : `The votes run from ${low} to ${high}. Talk it through, then vote again.`),
+    isHost() && h('button', { type: 'button', class: 'btn small', onclick: () => startEstimate(e.task, e.deck) }, 'Vote again'),
+    isHost() && h('button', { type: 'button', class: 'btn primary small', onclick: () => { S.events.push({ title: 'Estimated:', text: `${e.task}, ${top}${deck.unit}.` }); S.estimate = null; renderStandby(); renderCues(); } }, `Keep ${top}${deck.unit}`),
     !isHost() && h('span', { style: 'color:var(--ink-2);font-size:12px' }, 'Nick decides what to keep.'));
 }
 function renderStandby() {
@@ -1139,8 +1147,9 @@ function openPop(kind) {
   } else if (kind === 'estimate') {
     title = 'Ask how big a task is';
     const ta = h('textarea', { id: 'estTask', rows: 2, 'aria-label': 'Task' }, 'Task 3.1: show "unreachable" after three missed heartbeats');
-    body = [ta, h('p', null, 'Everyone votes with cards. Votes stay hidden until you reveal them.'),
-      h('div', { class: 'end' }, cancel, h('button', { type: 'button', class: 'btn primary small', id: 'estGo', onclick: () => { startEstimate(ta.value.trim() || 'This task'); closePop(); } }, 'Start voting'))];
+    const deckSel = h('select', { id: 'estDeck' }, ...Object.entries(DECKS).map(([k, d]) => h('option', { value: k, selected: k === S.lastDeck }, `${d.name}: ${d.cards.join(', ')}`)));
+    body = [ta, h('label', { class: 'f' }, 'Cards', deckSel), h('p', null, 'Everyone votes with cards, also ? and a break. Votes stay hidden until you reveal them.'),
+      h('div', { class: 'end' }, cancel, h('button', { type: 'button', class: 'btn primary small', id: 'estGo', onclick: () => { S.lastDeck = deckSel.value; startEstimate(ta.value.trim() || 'This task', deckSel.value); closePop(); } }, 'Start voting'))];
   } else if (kind === 'add') {
     title = 'Add files or a note';
     const input = h('input', { type: 'file', id: 'upFiles', multiple: true, 'aria-label': 'Files to add' });

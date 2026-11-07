@@ -57,7 +57,7 @@ These came out of exploring the panels idea (the session that made the first ver
 | *Add files or a note*: one dialog for all three, with a file picker, dropping files, or a note | #55, #61, #62 | |
 | *Prompts* tab: viewers suggest; the host sends (or edits first), keeps for later, or declines | #52 (on #51) | Who sees pending suggestions? Do kept suggestions outlive the session? |
 | *Ask to read*: a document and a time limit; a banner with who is reading or ready and a countdown | #53 (on #51) | "Not ready, I have a question"? Shown in the timeline afterwards? |
-| *Estimate*: hidden votes on cards, reveal, spread, vote again, keep the result in the timeline | #54 (on #51) | Does the host vote? Which card sets? Starting the vote was reported broken once and not reproduced. |
+| *Estimate*: hidden votes on cards (story points or T-shirt sizes), reveal, spread, vote again, keep the result in the timeline | #54 (on #51) | Does the host vote? Starting the vote was reported broken once in the mockup and not reproduced. |
 | Sharing settings (the sliders button): which code viewers can open, suggestions, sharing files, saving a recap | #51, #56, #57 | The defaults. |
 | *Joined late*: a "so far" card, and earlier prompts folded to their outcome | #58 | Who writes the summary: the app from the timeline, or the agent? |
 | Notifications (shown inside the window in the mockup) | #59 | Which kinds are on by default? |
