@@ -569,3 +569,56 @@ async fn terminal_session_status_ends_when_the_shell_is_back_in_front() {
     next_matching(&mut events, |e| *e == SessionEvent::Status(AgentStatus::Unknown)).await;
     session.close();
 }
+
+/// A fake Claude Code that lists its arguments and, given an MCP config, calls the browser's
+/// screenshot tool with the token from its environment.
+const BROWSING_CLAUDE: &str = r#"echo "args:$*"
+while [ $# -gt 0 ]; do [ "$1" = "--mcp-config" ] && mcp="$2"; shift; done
+if [ -n "$mcp" ]; then
+  url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$mcp" | head -n 1)
+  curl -s -X POST -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"screenshot","arguments":{}}}' "$url"
+  echo
+fi
+echo done
+read wait"#;
+
+#[tokio::test]
+async fn claude_code_gets_the_browser_tools_when_given_a_browser() {
+    use specdeck_core::browser::{BrowserHandler, BrowserResult};
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    fake_agent(bin.path(), "claude", BROWSING_CLAUDE);
+    let browser: BrowserHandler =
+        std::sync::Arc::new(|_| Box::pin(async { BrowserResult::text("taken from the browser") }));
+
+    let (session, mut events) = HostSession::start_with_browser(
+        config(AgentId::ClaudeCode, bin.path(), data.path()),
+        &env(bin.path()),
+        Some(browser),
+    )
+    .await
+    .unwrap();
+    wait_for_output(&session, &mut events, "done").await;
+    let output = output_text(&session);
+    assert!(output.contains("--mcp-config"), "{output}");
+    assert!(output.contains("taken from the browser"), "{output}");
+    session.close();
+}
+
+#[tokio::test]
+async fn claude_code_gets_no_browser_by_default() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    fake_agent(bin.path(), "claude", BROWSING_CLAUDE);
+
+    let (session, mut events) =
+        HostSession::start(config(AgentId::ClaudeCode, bin.path(), data.path()), &env(bin.path()))
+            .await
+            .unwrap();
+    wait_for_output(&session, &mut events, "done").await;
+    let output = output_text(&session);
+    assert!(output.contains("args:--settings"), "{output}");
+    assert!(!output.contains("--mcp-config"), "{output}");
+    session.close();
+}

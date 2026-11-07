@@ -18,6 +18,7 @@ use tempfile::NamedTempFile;
 use tokio::sync::{mpsc, watch};
 
 use crate::activity::{Activity, Change};
+use crate::browser::BrowserHandler;
 use crate::documents::{self, DocumentText};
 use crate::environment::Environment;
 use crate::hooks::{self, HookEndpoint, HookPayload};
@@ -155,7 +156,8 @@ pub struct HostSession {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     host_entered: Arc<Mutex<Option<Instant>>>,
     /// The endpoint, the settings file and the status-line relay script.
-    _hooks: Option<(HookEndpoint, NamedTempFile, NamedTempFile)>,
+    /// The endpoint, the hook settings, the status-line relay and, with a browser, the MCP config.
+    _hooks: Option<(HookEndpoint, NamedTempFile, NamedTempFile, Option<NamedTempFile>)>,
 }
 
 impl HostSession {
@@ -163,6 +165,16 @@ impl HostSession {
     pub async fn start(
         config: HostConfig,
         env: &Environment,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<SessionEvent>), LaunchError> {
+        Self::start_with_browser(config, env, None).await
+    }
+
+    /// As [`start`](Self::start); a Claude Code session also gets `browser` as the tools of an
+    /// MCP server on its hook endpoint (`agent-browser`).
+    pub async fn start_with_browser(
+        config: HostConfig,
+        env: &Environment,
+        browser: Option<BrowserHandler>,
     ) -> Result<(Self, mpsc::UnboundedReceiver<SessionEvent>), LaunchError> {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let io_error = |e: std::io::Error| LaunchError::Pty(e.to_string());
@@ -177,17 +189,24 @@ impl HostSession {
             extra_env: Vec::new(),
         };
         let hooks = if config.agent.has_timeline() {
+            let endpoint_serves_browser = browser.is_some();
             std::fs::create_dir_all(&config.data_dir).map_err(io_error)?;
             let sender = commands.clone();
             let shell_changes = ShellChanges::new(&config.folder, &config.data_dir, env);
             let folder = SessionFolder::from_environment(&config.folder, env);
-            let endpoint = HookEndpoint::start(move |payload| {
-                let mut changes = shell_changes.as_ref().and_then(|shell| shell.observe(&payload));
-                let mut texts: Vec<DocumentText> =
-                    changes.as_mut().map(|c| std::mem::take(&mut c.documents)).unwrap_or_default();
-                texts.extend(documents::from_file_tool(&payload, &folder));
-                let _ = sender.send(Command::Hook(payload, changes, texts));
-            })
+            let endpoint = HookEndpoint::start_with_browser(
+                move |payload| {
+                    let mut changes =
+                        shell_changes.as_ref().and_then(|shell| shell.observe(&payload));
+                    let mut texts: Vec<DocumentText> = changes
+                        .as_mut()
+                        .map(|c| std::mem::take(&mut c.documents))
+                        .unwrap_or_default();
+                    texts.extend(documents::from_file_tool(&payload, &folder));
+                    let _ = sender.send(Command::Hook(payload, changes, texts));
+                },
+                browser,
+            )
             .await
             .map_err(io_error)?;
             // The status line is relayed to SpecDeck and then shown as the host set it up.
@@ -199,10 +218,18 @@ impl HostSession {
                 hooks::write_hook_settings(&config.data_dir, &endpoint.url, Some(status_line))
                     .map_err(io_error)?;
             (options.extra_args, options.extra_env) = endpoint.launch_additions(settings.path());
+            let mcp = if endpoint_serves_browser {
+                let mcp = hooks::write_mcp_config(&config.data_dir, &endpoint.mcp_url)
+                    .map_err(io_error)?;
+                options.extra_args.extend(hooks::mcp_launch_args(mcp.path()));
+                Some(mcp)
+            } else {
+                None
+            };
             if let Some(command) = host_line.as_ref().and_then(status::host_command) {
                 options.extra_env.push((status::HOST_STATUS_LINE_ENV.into(), command.into()));
             }
-            Some((endpoint, settings, relay))
+            Some((endpoint, settings, relay, mcp))
         } else {
             None
         };

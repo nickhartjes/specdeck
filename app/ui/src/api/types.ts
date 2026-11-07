@@ -109,6 +109,8 @@ export interface Profile {
   screenReader: boolean;
   /** The diagnostic log records traffic too. */
   verboseLogging: boolean;
+  /** New Claude Code sessions get SpecDeck's own browser; only on macOS. */
+  browser: boolean;
 }
 
 /** Where a new release is: being looked for, downloaded, or ready to install on restart. */

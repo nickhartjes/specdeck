@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
+use specdeck_core::browser::{BrowserHandler, BrowserResult};
 use specdeck_local::{Compat, Frame, Frozen, Protocol, compat};
 use specdeck_protocol::AgentId;
 use specdeck_session::messages::{Command, Event, SuggestionAnswer};
@@ -205,10 +206,12 @@ impl SessionClient {
 }
 
 /// Connects to the session process at `endpoint`.
+/// `browser` runs the session's browser actions (`agent-browser`); without one they fail.
 pub async fn connect(
     endpoint: &str,
     agent: AgentId,
     observer: Observer,
+    browser: Option<BrowserHandler>,
     on_ended: OnEnded,
 ) -> std::io::Result<Arc<SessionClient>> {
     #[cfg(unix)]
@@ -238,9 +241,10 @@ pub async fn connect(
     });
     let state = Arc::new(Mutex::new(ClientState::default()));
     let read_state = state.clone();
+    let answers = outgoing.clone();
     tokio::spawn(async move {
         while let Ok(Some(frame)) = reader.recv().await {
-            if !receive(peer, frame, &read_state, &observer) {
+            if !receive(peer, frame, &read_state, &observer, &browser, &answers) {
                 break;
             }
         }
@@ -262,7 +266,14 @@ pub async fn connect(
 }
 
 /// Handles one frame from the session; false once the session has ended.
-fn receive(peer: Protocol, frame: Frame, state: &Mutex<ClientState>, observer: &Observer) -> bool {
+fn receive(
+    peer: Protocol,
+    frame: Frame,
+    state: &Mutex<ClientState>,
+    observer: &Observer,
+    browser: &Option<BrowserHandler>,
+    answers: &mpsc::UnboundedSender<Frame>,
+) -> bool {
     let event = match frame {
         Frame::Data(records) => {
             let terminal = state.lock().unwrap().terminal.clone();
@@ -306,6 +317,21 @@ fn receive(peer: Protocol, frame: Frame, state: &Mutex<ClientState>, observer: &
                 let _ = status.send(ProcessStatus { sharing, events });
             }
         }
+        // Run while further frames come in: a page may take a while to load.
+        Event::Browser { id, action } => {
+            let browser = browser.clone();
+            let answers = answers.clone();
+            tokio::spawn(async move {
+                let result = match browser {
+                    Some(browser) => browser(action).await,
+                    None => BrowserResult::error("This SpecDeck has no browser."),
+                };
+                if let Some(frame) = adapter::command(peer, &Command::BrowserResult { id, result })
+                {
+                    let _ = answers.send(frame);
+                }
+            });
+        }
         Event::Ended => return false,
     }
     true
@@ -325,6 +351,8 @@ pub struct Launch {
     pub signalling_url: String,
     pub environment: specdeck_core::environment::Environment,
     pub verbose: bool,
+    /// Runs the agent's browser actions; `None` gives the agent no browser.
+    pub browser: Option<BrowserHandler>,
 }
 
 /// Starts session `id` as a process of its own and starts its agent.
@@ -368,7 +396,10 @@ pub async fn launch(
             Err(error) => return Err(failed(error)),
         }
     }
-    let client = connect(&endpoint, launch.agent, observer, on_ended).await.map_err(failed)?;
+    let browser = launch.browser.is_some();
+    let client = connect(&endpoint, launch.agent, observer, launch.browser, on_ended)
+        .await
+        .map_err(failed)?;
     client
         .start(&Command::Start {
             agent: launch.agent,
@@ -380,6 +411,7 @@ pub async fn launch(
             signalling_url: launch.signalling_url,
             environment: launch.environment,
             verbose: launch.verbose,
+            browser,
         })
         .await?;
     Ok(client)

@@ -12,6 +12,12 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.node } },
   },
   {
+    // What runs inside Claude's browser: one expression the app evaluates in the page.
+    files: ['app/src-tauri/src/browser/browser.js'],
+    languageOptions: { globals: { ...globals.browser } },
+    rules: { '@typescript-eslint/no-unused-expressions': 'off' },
+  },
+  {
     files: ['app/ui/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { 'react-hooks': reactHooks },
