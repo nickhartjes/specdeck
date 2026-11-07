@@ -26,7 +26,7 @@ for app in "$bundle_dir"/macos/*.app; do
   check "$app" specdeck-session ls "$app/Contents/MacOS"
 done
 for deb in "$bundle_dir"/deb/*.deb; do
-  check "$deb" './usr/bin/specdeck-session$' dpkg-deb --contents "$deb"
+  check "$deb" ' \(\./\)\{0,1\}usr/bin/specdeck-session$' dpkg-deb --contents "$deb"
 done
 for image in "$bundle_dir"/appimage/*.AppImage; do
   # Extracting needs no FUSE; into a temporary folder, as it writes squashfs-root/.
