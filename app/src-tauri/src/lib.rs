@@ -48,7 +48,7 @@ use crate::diagnostics::{Diagnostics, ExportHeader, Heartbeat, SessionStatus, Te
 use crate::host::{HostNotice, SharingState, Summary};
 use crate::services::{ServiceCheck, Services};
 use crate::sessions::{MAIN_WINDOW, Session, SessionId, Sessions, is_session_window};
-use crate::settings::{Settings, View, ZOOM_DEFAULT, zoom_in, zoom_out};
+use crate::settings::{Appearance, Settings, View, ZOOM_DEFAULT, zoom_in, zoom_out};
 use crate::updates::{GitHubFeed, Outcome, UpdateState, Updates};
 use crate::viewer::{EndReason, ViewEvent, ViewerRuntime};
 
@@ -170,6 +170,8 @@ struct Profile {
     verbose_logging: bool,
     /// New Claude Code sessions get SpecDeck's own browser.
     browser: bool,
+    /// Light, dark or the OS's appearance.
+    appearance: Appearance,
 }
 
 /// The agents to choose from, in display order: the coding agents, then Terminal.
@@ -230,6 +232,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
         screen_reader: settings.screen_reader,
         verbose_logging: settings.verbose_logging,
         browser: settings.browser,
+        appearance: settings.appearance,
     }
 }
 
@@ -350,6 +353,17 @@ async fn set_screen_reader(
         state.save(&settings);
     }
     settings_changed(&app);
+    Ok(profile(&state, window.label()))
+}
+
+#[tauri::command]
+async fn set_appearance(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    appearance: Appearance,
+) -> Result<Profile, String> {
+    change_appearance(&app, appearance);
     Ok(profile(&state, window.label()))
 }
 
@@ -1430,7 +1444,9 @@ fn open_session_window(app: &AppHandle, label: &str, attach: Option<SessionId>) 
         // It has a window again: start screens stop listing it.
         running_changed(app);
     }
+    let appearance = state.settings.lock().unwrap().appearance;
     let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::default())
+        .initialization_script(appearance_script(appearance))
         .title(session_window_title(name.as_deref()))
         .inner_size(1200.0, 800.0)
         .min_inner_size(720.0, 480.0);
@@ -1507,7 +1523,9 @@ fn refresh_menu(app: &AppHandle) {
     let recent = state.settings.lock().unwrap().existing_recent();
     let hosting = state.hosting();
     let updates = state.updates.state() != UpdateState::Disabled;
-    if let Ok(menu) = menu::build(app, &menu::MenuState { recent: &recent, hosting, updates }) {
+    let appearance = state.settings.lock().unwrap().appearance;
+    let menu_state = menu::MenuState { recent: &recent, hosting, updates, appearance };
+    if let Ok(menu) = menu::build(app, &menu_state) {
         let _ = app.set_menu(menu);
     }
 }
@@ -1538,6 +1556,9 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         menu::ids::ZOOM_OUT => return change_zoom(app, zoom_out),
         menu::ids::ZOOM_RESET => return change_zoom(app, |_| ZOOM_DEFAULT),
         menu::ids::CHECK_UPDATES => return check_for_updates(app),
+        _ if let Some(appearance) = menu::appearance(id) => {
+            return change_appearance(app, appearance);
+        }
         menu::ids::EXPORT_DIAGNOSTICS => return export_diagnostics_from_menu(app),
         _ => {}
     }
@@ -1594,6 +1615,42 @@ fn change_zoom(app: &AppHandle, step: impl FnOnce(u16) -> u16) {
             apply_zoom(&window, level);
         }
     }
+}
+
+/// Saves the appearance and shows it everywhere at once (`appearance-setting` design decision 5).
+fn change_appearance(app: &AppHandle, appearance: Appearance) {
+    let state = app.state::<AppState>();
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.appearance = appearance;
+        state.save(&settings);
+    }
+    // The window chrome, menus and dialogs, in every window.
+    app.set_theme(appearance.theme());
+    // The page's own colours, which the webview may not take from the window.
+    for label in session_windows(app).into_iter().chain(["settings".to_owned()]) {
+        let _ = app.emit_to(&label, "appearance", appearance);
+    }
+    // Settings shows a change made from the menu; the menu checks the new one.
+    let _ =
+        app.emit_to("settings", "menu", MenuCommand { id: "profile-changed".into(), path: None });
+    refresh_menu(app);
+}
+
+/// Sets the page's appearance before its first paint, so a dark window never shows light.
+fn appearance_script(appearance: Appearance) -> String {
+    let theme = match appearance {
+        Appearance::System => return String::new(),
+        Appearance::Light => "light",
+        Appearance::Dark => "dark",
+    };
+    // At document start `<html>` may not exist yet.
+    format!(
+        "(function(){{var set=function(){{document.documentElement.dataset.theme='{theme}'}};\
+         if(document.documentElement)return set();\
+         new MutationObserver(function(_,o){{if(document.documentElement){{set();o.disconnect()}}}})\
+         .observe(document,{{childList:true}})}})();"
+    )
 }
 
 fn apply_zoom(window: &tauri::WebviewWindow, level: u16) {
@@ -1791,11 +1848,13 @@ fn open_settings_window(app: &AppHandle) {
         return;
     }
     let title = if cfg!(target_os = "macos") { "Settings" } else { "SpecDeck Settings" };
+    let appearance = app.state::<AppState>().settings.lock().unwrap().appearance;
     let _ = WebviewWindowBuilder::new(
         app,
         "settings",
         WebviewUrl::App("index.html?window=settings".into()),
     )
+    .initialization_script(appearance_script(appearance))
     .title(title)
     .inner_size(460.0, 420.0)
     .resizable(false)
@@ -1894,6 +1953,8 @@ pub fn run() {
             ));
             let settings = Settings::load(&settings_path);
             diagnostics.set_verbose(settings.verbose_logging);
+            // Before the first window, so it opens in the chosen appearance.
+            app.handle().set_theme(settings.appearance.theme());
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 settings_path,
@@ -2003,6 +2064,7 @@ pub fn run() {
             set_notifications,
             set_check_updates,
             set_screen_reader,
+            set_appearance,
             set_verbose_logging,
             set_browser,
             diagnostics_status,

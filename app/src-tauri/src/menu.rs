@@ -9,8 +9,12 @@
 
 use std::path::PathBuf;
 
-use tauri::menu::{AboutMetadata, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{
+    AboutMetadata, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
+};
 use tauri::{AppHandle, Runtime};
+
+use crate::settings::Appearance;
 
 /// Menu items whose id starts with this open a recent folder; the rest is its index.
 pub const RECENT_PREFIX: &str = "recent:";
@@ -22,6 +26,19 @@ const PANELS: [(&str, &str, &str); 3] = [
     (ids::TERMINAL, "Terminal", "CmdOrCtrl+2"),
     (ids::TIMELINE, "Timeline", "CmdOrCtrl+3"),
 ];
+
+/// View > Appearance, in menu order (`appearance-setting` design decision 6). No keys: the
+/// terminal keeps them.
+const APPEARANCES: [(Appearance, &str, &str); 3] = [
+    (Appearance::System, "appearance:system", "System"),
+    (Appearance::Light, "appearance:light", "Light"),
+    (Appearance::Dark, "appearance:dark", "Dark"),
+];
+
+/// The appearance a View > Appearance item chooses; handled in Rust.
+pub fn appearance(id: &str) -> Option<Appearance> {
+    APPEARANCES.iter().find(|(_, item, _)| *item == id).map(|(appearance, _, _)| *appearance)
+}
 
 /// Ids the UI handles, as sent in the `menu` event.
 pub mod ids {
@@ -61,6 +78,8 @@ pub struct MenuState<'a> {
     pub hosting: bool,
     /// This install updates itself.
     pub updates: bool,
+    /// Checked in View > Appearance.
+    pub appearance: Appearance,
 }
 
 /// The menu that offers Check for Updates…, if any (auto-update design decision 5): the
@@ -162,11 +181,20 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     for (id, label, accelerator) in PANELS {
         view = view.item(&item(app, id, label, Some(accelerator), true)?);
     }
+    let mut appearance = SubmenuBuilder::new(app, "Appearance");
+    for (value, id, label) in APPEARANCES {
+        appearance = appearance.item(
+            &CheckMenuItemBuilder::with_id(id, label)
+                .checked(value == state.appearance)
+                .build(app)?,
+        );
+    }
     let mut view = view
         .separator()
         .item(&item(app, ids::ZOOM_IN, "Zoom In", Some("CmdOrCtrl+="), true)?)
         .item(&item(app, ids::ZOOM_OUT, "Zoom Out", Some("CmdOrCtrl+-"), true)?)
         .item(&item(app, ids::ZOOM_RESET, "Actual Size", Some("CmdOrCtrl+0"), true)?)
+        .item(&appearance.build()?)
         .separator()
         .item(&item(app, ids::JUMP_TO_LIVE, "Jump to Live", keys("Cmd+Down", None), true)?);
     if mac {
@@ -240,6 +268,15 @@ mod tests {
             ]
         );
         assert!(PANELS.iter().all(|(_, _, key)| *key != "CmdOrCtrl+0"));
+    }
+
+    #[test]
+    fn each_appearance_item_chooses_its_appearance() {
+        assert_eq!(appearance("appearance:system"), Some(Appearance::System));
+        assert_eq!(appearance("appearance:light"), Some(Appearance::Light));
+        assert_eq!(appearance("appearance:dark"), Some(Appearance::Dark));
+        assert_eq!(appearance("zoom-in"), None);
+        assert!(APPEARANCES.iter().all(|(_, id, _)| !id.starts_with(RECENT_PREFIX)));
     }
 
     #[test]

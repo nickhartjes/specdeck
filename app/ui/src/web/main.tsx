@@ -4,8 +4,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import init, { WebViewer, parseJoinLink } from 'specdeck-web-wasm';
 import { BridgeContext } from '../api/bridge';
+import { applyAppearance } from '../appearance';
 import '../styles.css';
-import { webBridge } from './bridge';
+import { storedAppearance, webBridge } from './bridge';
 import type { ControlUpdate, Request, StreamUpdate, ViewerCore } from './connection';
 import { WebApp, takeHashCode } from './WebApp';
 
@@ -43,9 +44,12 @@ function storage(): Storage | null {
 
 const initialCode = takeHashCode();
 document.documentElement.dataset.platform = 'web';
+// Before anything renders, so the page does not switch after loading.
+applyAppearance(storedAppearance(storage()));
 void init().then(() => {
   const service = ownService();
   const bridge = webBridge({ service, core, parseJoinLink, storage: storage() });
+  bridge.onAppearance(applyAppearance);
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <BridgeContext.Provider value={bridge}>

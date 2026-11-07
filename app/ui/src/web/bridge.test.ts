@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ViewerCore } from './connection';
-import { STORAGE_KEYS, webBridge, type WebBridgeOptions } from './bridge';
+import { STORAGE_KEYS, storedAppearance, webBridge, type WebBridgeOptions } from './bridge';
 import { choose } from '../model/layout';
 
 const SERVICE = 'wss://specdeck.example.com/signal';
@@ -58,6 +58,27 @@ describe('web bridge', () => {
     expect(await page.getProfile()).toMatchObject({ username: null, view: null, layout: null });
     expect((await page.setUsername('anna')).username).toBe('anna');
     expect(await bridge({ storage: blockedStorage }).getProfile()).toMatchObject({ username: null });
+  });
+
+  it('follows the browser until an appearance is chosen, and keeps it', async () => {
+    const storage = memoryStorage();
+    const first = bridge({ storage });
+    expect((await first.getProfile()).appearance).toBe('system');
+    const handler = vi.fn();
+    first.onAppearance(handler);
+    expect((await first.setAppearance('dark')).appearance).toBe('dark');
+    expect(handler).toHaveBeenCalledWith('dark');
+    expect(storedAppearance(storage)).toBe('dark');
+    expect((await bridge({ storage }).getProfile()).appearance).toBe('dark');
+    storage.setItem(STORAGE_KEYS.appearance, 'sepia');
+    expect(storedAppearance(storage)).toBe('system');
+  });
+
+  it('keeps the appearance for the page when the browser keeps nothing', async () => {
+    const page = bridge({ storage: blockedStorage });
+    expect((await page.setAppearance('dark')).appearance).toBe('dark');
+    expect(storedAppearance(blockedStorage)).toBe('system');
+    expect((await bridge({ storage: blockedStorage }).getProfile()).appearance).toBe('system');
   });
 
   it('gives the view of earlier versions, to make the first layout from', async () => {
