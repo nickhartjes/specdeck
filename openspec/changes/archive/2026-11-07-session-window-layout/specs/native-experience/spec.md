@@ -34,7 +34,7 @@ Menu actions SHALL use the platform's modifier key (Cmd on macOS, Ctrl on Window
 - **THEN** the terminal tab is shown with the focus in the terminal
 
 ### Requirement: Follow the OS appearance
-The app SHALL follow the OS light or dark appearance and switch live when it changes, and SHALL NOT offer a theme setting of its own. Window chrome, dialogs and menus SHALL be the platform's own. The app's content SHALL use the type shipped with the app, never fonts from another address. The terminal SHALL be dark in both appearances and SHALL draw ordinary text in the platform's own monospace font. The bundled Nerd Font symbol font SHALL be used only for characters the platform's fonts do not draw, and SHALL NOT change how any other text looks.
+The app SHALL follow the OS light or dark appearance and switch live when it changes, and SHALL NOT offer a theme setting of its own. Window chrome, dialogs and menus SHALL be the platform's own; content SHALL use the type shipped with the app. The terminal SHALL be dark in both appearances and draw ordinary text in the platform's own monospace font. The bundled Nerd Font symbol font SHALL be used only for characters the platform's fonts do not draw.
 
 #### Scenario: OS switches to dark mode
 - **WHEN** the user switches the OS to dark mode while the app is open

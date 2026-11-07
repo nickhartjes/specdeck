@@ -113,35 +113,16 @@ For a Claude Code session the status bar SHALL also show the model with its cont
 - **WHEN** Claude Code has not reported rate limits, for example before its first answer or on an account without them
 - **THEN** the status bar leaves the rate limits out
 
-### Requirement: View settings per person
-Each participant SHALL choose how a session is shown with two settings: whether the terminal is shown, and whether steps are shown as a plain-language summary or with technical details. The settings SHALL be remembered per user for every later session, SHALL take effect immediately, and SHALL NOT change what any other participant sees. The status bar SHALL be shown with either choice.
-
-#### Scenario: Viewer hides the terminal
-- **WHEN** a viewer turns the terminal off during a live session
-- **THEN** the conversation fills the window, the viewer stays connected, and nobody else's view changes
-
-#### Scenario: Terminal back without waiting
-- **WHEN** a viewer who had the terminal off for an hour turns it back on
-- **THEN** the terminal shows the current screen and full scrollback at once, without replaying the session
-
-#### Scenario: Settings remembered
-- **WHEN** a viewer chooses summary steps without the terminal, closes the app and joins another session the next day
-- **THEN** that session opens without the terminal and with summary steps
-
-#### Scenario: Host keeps the terminal
-- **WHEN** the host opens the view settings
-- **THEN** the host can choose summary or details for the steps, and the terminal stays shown, since the host types into it
-
 ### Requirement: First-join question
-The first time a user joins a session as a viewer, the app SHALL ask how they want to follow sessions: Overview (terminal off, summary steps) or Developer (terminal on, details). The answer SHALL set both view settings, be remembered, and the question SHALL say that it can be changed later. It SHALL NOT be asked again unless the user asks for it.
+The first time a user joins a session as a viewer, the app SHALL ask how they want to follow sessions: Overview (documents and steps in plain words, no terminal) or Developer (code, the terminal and every step). The answer SHALL choose their starting layout preset, be remembered, and the question SHALL say that the layout can be changed later. It SHALL NOT be asked again unless the user asks for it.
 
 #### Scenario: Product owner joins for the first time
 - **WHEN** a user who never joined a session joins one and chooses Overview
-- **THEN** the session shows the conversation without the terminal, with summary steps, and the next session opens the same way without asking
+- **THEN** the session opens in the Overview preset, without a terminal tab and with steps in plain words, and the next session opens the same way without asking
 
 #### Scenario: Asked again on request
-- **WHEN** the user chooses to see the question again from the view settings
-- **THEN** the question is shown, and their answer replaces both settings
+- **WHEN** the user chooses to see the question again
+- **THEN** the question is shown, and their answer replaces their layout with the chosen preset
 
 ### Requirement: Live line
 When the terminal is not shown, the conversation SHALL end with a line saying what the agent is doing right now and for how long, such as the description of the command it runs, or what it waits for when it waits for the host.
@@ -170,11 +151,11 @@ With summary steps, what the agent did for a prompt SHALL be shown in plain lang
 - **THEN** the summary line says that a command ran, with its outcome, and the command itself only when the step is opened
 
 ### Requirement: Views without a timeline
-For a session without a timeline, the terminal SHALL stay shown whatever the view settings are, with a short note that this session can only be followed in the terminal. The settings themselves SHALL stay unchanged for later sessions.
+For a session without a timeline, the terminal tab SHALL be shown whatever the participant's layout is, with a short note that this session can only be followed in the terminal. The layout itself SHALL stay unchanged for later sessions.
 
 #### Scenario: Overview viewer joins an OpenCode session
-- **WHEN** a viewer whose terminal setting is off joins an OpenCode session
-- **THEN** the terminal is shown with a note why, and their next Claude Code session opens without the terminal again
+- **WHEN** a viewer in the Overview preset joins an OpenCode session
+- **THEN** the terminal tab is shown with a note why, and their next Claude Code session opens in Overview without the terminal tab again
 
 ### Requirement: Request shown with the status
 While the agent waits on a request for the host, a session without a timeline SHALL show the request's message with the status, until the agent stops waiting. A session with a timeline SHALL show the request in the timeline only.
@@ -233,3 +214,14 @@ A helper's step SHALL open to what the helper reported back, as formatted Markdo
 #### Scenario: Helper report shown
 - **WHEN** a summary viewer opens "Asked a helper: Review the API changes" after the helper finished
 - **THEN** they see the helper's report formatted
+
+### Requirement: Step detail
+Each participant, the host included, SHALL switch the timeline between steps in plain words and every step in detail from the timeline panel's header. The choice SHALL take effect immediately, be remembered as part of their layout, and SHALL NOT change what any other participant sees.
+
+#### Scenario: Developer switches to plain words
+- **WHEN** a developer switches the timeline to plain words during a session
+- **THEN** their timeline shows summary steps at once, and nobody else's timeline changes
+
+#### Scenario: Host chooses the detail
+- **WHEN** the host switches the timeline to every step
+- **THEN** the host's timeline lists every tool call, and the terminal tab stays

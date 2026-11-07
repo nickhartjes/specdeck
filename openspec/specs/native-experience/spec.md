@@ -34,7 +34,7 @@ The app SHALL provide a native menu following each platform's conventions: the a
 - **THEN** it offers New Window, and the host's terminal keeps every key it had before
 
 ### Requirement: Platform keyboard shortcuts
-Menu actions SHALL use the platform's modifier key (Cmd on macOS, Ctrl on Windows and Linux) and standard shortcuts where one exists. Shortcuts SHALL NOT be taken while the host's terminal has focus, if the terminal needs that key.
+Menu actions SHALL use the platform's modifier key (Cmd on macOS, Ctrl on Windows and Linux) and standard shortcuts where one exists. Shortcuts SHALL NOT be taken while the host's terminal has focus, if the terminal needs that key. The session window's panels SHALL be numbered from left to right: Cmd/Ctrl+1 for the files panel, Cmd/Ctrl+2 for the terminal tab and Cmd/Ctrl+3 for the timeline panel, offered in the View menu.
 
 #### Scenario: Find
 - **WHEN** a viewer presses Cmd+F on macOS or Ctrl+F on Windows or Linux
@@ -55,6 +55,14 @@ Menu actions SHALL use the platform's modifier key (Cmd on macOS, Ctrl on Window
 #### Scenario: Undo in the host terminal
 - **WHEN** the host presses Ctrl+Shift+`-` (Ctrl+`_`) on Windows or Linux while the terminal has focus
 - **THEN** the key reaches the agent and the zoom is unchanged
+
+#### Scenario: Panels by number
+- **WHEN** a participant presses Cmd/Ctrl+1, then Cmd/Ctrl+3
+- **THEN** the files panel opens or closes, then the timeline panel opens or closes
+
+#### Scenario: Back to the terminal
+- **WHEN** the host reads a document and presses Cmd/Ctrl+2
+- **THEN** the terminal tab is shown with the focus in the terminal
 
 ### Requirement: Tray or menu-bar presence while hosting
 While a session is hosted, the app SHALL show one icon in the macOS menu bar or the Windows and Linux system tray, also when several sessions are hosted. Its menu SHALL show each hosted session's folder, state and viewer count, and offer open window, copy invite code and close session for each.
@@ -103,11 +111,15 @@ The app SHALL send OS notifications for events that need attention while the win
 - **THEN** the host gets a notification naming `api`, and clicking it brings the `api` window to the front
 
 ### Requirement: Follow the OS appearance
-The app SHALL follow the OS light or dark appearance and switch live when it changes, and SHALL NOT offer a theme setting of its own. Window chrome, dialogs, menus and system fonts SHALL be the platform's own. The bundled Nerd Font symbol font SHALL be used only for characters the platform's fonts do not draw, and SHALL NOT change how any other text looks.
+The app SHALL follow the OS light or dark appearance and switch live when it changes, and SHALL NOT offer a theme setting of its own. Window chrome, dialogs and menus SHALL be the platform's own; content SHALL use the type shipped with the app. The terminal SHALL be dark in both appearances and draw ordinary text in the platform's own monospace font. The bundled Nerd Font symbol font SHALL be used only for characters the platform's fonts do not draw.
 
 #### Scenario: OS switches to dark mode
 - **WHEN** the user switches the OS to dark mode while the app is open
-- **THEN** the app switches to its dark appearance, including the terminal, without restarting
+- **THEN** the app switches to its dark appearance without restarting, and the terminal stays dark
+
+#### Scenario: Terminal in light mode
+- **WHEN** the OS is in light mode
+- **THEN** the app uses its light appearance and the terminal is dark, so the agent's colours look the same to every participant
 
 #### Scenario: Native dialogs
 - **WHEN** the host chooses a folder or confirms closing a session
@@ -116,6 +128,10 @@ The app SHALL follow the OS light or dark appearance and switch live when it cha
 #### Scenario: Ordinary text keeps the platform font
 - **WHEN** the terminal shows letters, digits and box-drawing characters
 - **THEN** they are drawn in the platform's own monospace font
+
+#### Scenario: App type without a network
+- **WHEN** the app starts on a computer without a network connection
+- **THEN** the interface and documents are shown in the app's own type
 
 ### Requirement: Window state
 The app SHALL remember the first window's size, position and pane sizes and restore them on the next start, unless that position is no longer on any screen. Further windows SHALL open with the same size, offset from the window they were opened from.

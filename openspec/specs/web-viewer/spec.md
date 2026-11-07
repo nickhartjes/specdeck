@@ -17,15 +17,15 @@ A sharing service SHALL serve a web page where a viewer joins a session with its
 - **THEN** the page offers joining a session and nothing else
 
 ### Requirement: Same session view as the app
-The web viewer SHALL show a session as the app's viewer does: the terminal, the timeline, files, people and the status bar, following and free scrolling, search, copy, jumping to prompts, and the Overview and Developer views. Each viewer's navigation SHALL stay local to their page.
+The web viewer SHALL show a session as the app's viewer does: the files, tabs and timeline panels, the people in the title bar and the status bar, following and free scrolling, search, copy, jumping to prompts, and the Overview, Developer and Present presets. Each viewer's navigation SHALL stay local to their page. The app's type SHALL come from the sharing service the page was loaded from.
 
 #### Scenario: Late join
 - **WHEN** a viewer joins in a browser after the session has been running for a while
 - **THEN** they see the terminal output and timeline from the start of the session, as in the app
 
 #### Scenario: Developer view
-- **WHEN** a browser viewer switches to the Developer view
-- **THEN** the terminal is shown next to the timeline with every step listed, as in the app
+- **WHEN** a browser viewer chooses the Developer preset
+- **THEN** the terminal tab is shown between the files and the timeline, with every step listed, as in the app
 
 ### Requirement: Served by the session's own service
 The web viewer SHALL be part of the sharing service, so every service, the public one or a self-hosted one, serves its own copy with no separate deployment. The page SHALL load nothing from any other address.
@@ -64,11 +64,11 @@ A browser viewer SHALL verify the host and every piece of session data as the ap
 - **THEN** the page discards it and requests it again
 
 ### Requirement: Name and settings stay in the browser
-The web viewer SHALL ask for the viewer's name on their first join and SHALL keep it and their view settings only in that browser, with no account. When the browser cannot keep them, the page SHALL still work and ask again next time.
+The web viewer SHALL ask for the viewer's name on their first join and SHALL keep it and their layout only in that browser, with no account. When the browser cannot keep them, the page SHALL still work and ask again next time.
 
 #### Scenario: Second visit
 - **WHEN** a viewer who joined before opens the web viewer again in the same browser
-- **THEN** their name and view are already set
+- **THEN** their name and layout are already set
 
 #### Scenario: Private window
 - **WHEN** a viewer uses a private window that keeps nothing
