@@ -1,11 +1,9 @@
-# The how-to videos are their own workspace with their own lockfile, so their dependencies stay out
-# of the app's (and out of the pnpm dependency hash in nix/package.nix).
 packages:
   - .
 # As in the app's workspace: skip versions published less than a day ago (in minutes).
 minimumReleaseAge: 1440
 overrides:
   # hyperframes pins undici 7.25.0, which has known vulnerabilities; 7.30.1 fixes them all.
-  undici: ^7.30.1
+  undici: ^8.0.0
 allowBuilds:
   esbuild: true
