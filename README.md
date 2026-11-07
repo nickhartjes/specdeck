@@ -88,7 +88,7 @@ See [`deploy/k8s/README.md`](deploy/k8s/README.md) for ports, secrets and the di
 
 [`ci.yml`](.github/workflows/ci.yml) runs `just check` and `just package` on macOS, Windows and Ubuntu, and fails when an installer is larger than 25 MB ([`scripts/check-installer-size.sh`](scripts/check-installer-size.sh)). In between it runs `just capacity` on its own and reports the result without failing on it: on Ubuntu runners the 20-viewer measurement still varies too much from run to run.
 [`nix.yml`](.github/workflows/nix.yml) builds the Nix flake on every push to main, and on pull requests that change what the Nix build depends on (lockfiles, manifests, `nix/`). Rust caches are saved from main only; pull requests reuse them.
-[Renovate](renovate.json) keeps dependencies up to date, and on Monday mornings also refreshes the indirect ones in `Cargo.lock` and `pnpm-lock.yaml`. When it changes the npm dependencies, [`renovate-nix-hash.yml`](.github/workflows/renovate-nix-hash.yml) updates their hash in `nix/package.nix` on its branch and starts CI and Nix for that commit.
+[Renovate](renovate.json) keeps dependencies up to date, and on Monday mornings also refreshes the indirect ones in `Cargo.lock` and `pnpm-lock.yaml`. When it changes the npm dependencies, [`renovate-nix-hash.yml`](.github/workflows/renovate-nix-hash.yml) updates their hash in `nix/package.nix` on its branch. It pushes that commit with `RENOVATE_NIX_HASH_TOKEN`, a fine-grained personal access token for this repository with Contents read and write only, so CI and Nix run for it on the pull request; the token expires and has to be renewed. Without that secret the workflow starts CI and Nix by hand, and the pull request's own checks for the commit need approval.
 
 ## Releases
 
