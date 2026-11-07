@@ -14,7 +14,9 @@ use specdeck_core::environment::Environment;
 use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession, SessionEvent};
-use specdeck_core::sharing::{MAX_VIEWERS, Sharing, SharingConfig, SharingEvent, SharingStatus};
+use specdeck_core::sharing::{
+    Answer, HostSuggestion, MAX_VIEWERS, Sharing, SharingConfig, SharingEvent, SharingStatus,
+};
 use specdeck_protocol::control::{Participant, Role};
 use specdeck_protocol::timeline::{Entry, TimelineEvent};
 use specdeck_protocol::{AgentId, AgentStatus};
@@ -55,6 +57,11 @@ pub enum HostEvent {
         viewer_limit: u8,
         exited: Option<u32>,
         timeline: Vec<TimelineEvent>,
+        /// False for terminal sessions, which never take suggestions.
+        suggestions_possible: bool,
+        suggestions_allowed: bool,
+        /// Every suggestion in the session, oldest first.
+        suggestions: Vec<HostSuggestion>,
     },
     Sharing {
         state: SharingState,
@@ -75,6 +82,14 @@ pub enum HostEvent {
     },
     Exited {
         code: u32,
+    },
+    /// What viewers may send, after the host changed it.
+    Allowed {
+        suggestions: bool,
+    },
+    /// Every suggestion in the session, oldest first, on every change.
+    Suggestions {
+        suggestions: Vec<HostSuggestion>,
     },
 }
 
@@ -98,6 +113,21 @@ pub enum HostNotice {
     AgentWaiting {
         message: Option<String>,
     },
+    /// A viewer suggested a prompt; the viewer's name.
+    Suggestion(String),
+}
+
+/// Between typing a sent suggestion and submitting it.
+const SUBMIT_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// A prompt as typed into an agent: line breaks as LF, which every supported agent takes as a new
+/// line in its prompt, and no carriage return, which would submit early. Other control
+/// characters are dropped: the host's edit could carry them, a viewer's text cannot.
+fn typed_prompt(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect()
 }
 
 /// Hears about changes the app shows outside the window.
@@ -139,6 +169,8 @@ struct Ui {
     status: AgentStatus,
     /// The sharing service serves the web viewer (`services::web_viewer`).
     web_viewer: bool,
+    suggestions_allowed: bool,
+    suggestions: Vec<HostSuggestion>,
     events: Option<EventSink>,
     observer: Observer,
     last_summary: Option<Summary>,
@@ -243,6 +275,9 @@ impl HostRuntime {
             exited: None,
             status: session.status(),
             web_viewer: false,
+            // As sharing starts them: on, except in terminal sessions.
+            suggestions_allowed: options.agent != AgentId::Terminal,
+            suggestions: Vec::new(),
             events: None,
             observer,
             last_summary: None,
@@ -308,6 +343,25 @@ impl HostRuntime {
                             drop(ui);
                             notice.tell();
                         }
+                        Some(SharingEvent::Allowed { suggestions }) => {
+                            let mut ui = shared.lock().unwrap();
+                            ui.suggestions_allowed = suggestions;
+                            ui.send(HostEvent::Allowed { suggestions });
+                        }
+                        Some(SharingEvent::Suggestions(suggestions)) => {
+                            let mut ui = shared.lock().unwrap();
+                            // A new one is always added at the end.
+                            if suggestions.len() > ui.suggestions.len()
+                                && let Some(new) = suggestions.last()
+                            {
+                                ui.pending.push(HostNotice::Suggestion(new.from.clone()));
+                            }
+                            ui.suggestions = suggestions.clone();
+                            ui.send(HostEvent::Suggestions { suggestions });
+                            let notice = ui.observe();
+                            drop(ui);
+                            notice.tell();
+                        }
                         Some(SharingEvent::Participants(participants)) => {
                             let mut ui = shared.lock().unwrap();
                             let changes = viewer_changes(&ui.participants, &participants);
@@ -368,6 +422,9 @@ impl HostRuntime {
                 viewer_limit: ui.viewer_limit,
                 exited: ui.exited,
                 timeline: view.timeline_from(0),
+                suggestions_possible: self.agent != AgentId::Terminal,
+                suggestions_allowed: ui.suggestions_allowed,
+                suggestions: ui.suggestions.clone(),
             };
             ui.events = Some(events);
             ui.send(snapshot);
@@ -461,6 +518,36 @@ impl HostRuntime {
         self.sharing.set_viewer_limit(limit);
     }
 
+    /// Lets viewers suggest prompts, or stops them; terminal sessions never allow it.
+    pub fn allow_suggestions(&self, on: bool) {
+        self.sharing.allow_suggestions(on);
+    }
+
+    /// Declines a waiting suggestion, or types `text` into the agent's prompt and submits it. A
+    /// suggestion that is not waiting, for example one already sent, is not typed again.
+    pub async fn answer_suggestion(
+        &self,
+        viewer: u32,
+        id: u32,
+        text: Option<String>,
+    ) -> Result<(), String> {
+        let answer = match &text {
+            Some(text) => Answer::Sent { text: text.clone() },
+            None => Answer::Declined,
+        };
+        let waiting = self.sharing.answer_suggestion(viewer, id, answer).await.unwrap_or(false);
+        if !waiting {
+            return Err("That suggestion has already been answered.".into());
+        }
+        if let Some(text) = text {
+            self.input(&typed_prompt(&text))?;
+            // Apart from the text, so an agent that takes fast input as a paste still submits.
+            tokio::time::sleep(SUBMIT_DELAY).await;
+            self.input("\r")?;
+        }
+        Ok(())
+    }
+
     /// Ends sharing and the agent. The session's files are deleted when the runtime is dropped,
     /// right after the app lets go of the ended session.
     pub fn close(&self) {
@@ -476,6 +563,13 @@ mod tests {
 
     fn person(id: u32, role: Role, label: &str) -> Participant {
         Participant { id, username: label.into(), role, label: label.into() }
+    }
+
+    #[test]
+    fn a_prompt_is_typed_with_line_feeds_and_without_returns() {
+        assert_eq!(typed_prompt("one\r\ntwo\nthree"), "one\ntwo\nthree");
+        assert_eq!(typed_prompt("go\r\u{1b}[2J"), "go[2J");
+        assert_eq!(typed_prompt("tab\there"), "tab\there");
     }
 
     #[test]

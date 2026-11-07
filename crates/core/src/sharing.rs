@@ -11,16 +11,18 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use serde::Serialize;
-use specdeck_protocol::AgentStatus;
 use specdeck_protocol::control::{
-    self, HostMessage, PROTOCOL_VERSION, Participant, RefusalReason, Role, ViewerMessage,
+    self, HostMessage, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
+    REQUESTS_PROTOCOL_VERSION, RefusalReason, Role, Suggestion, SuggestionState, ViewerMessage,
+    ViewerRequest,
 };
 use specdeck_protocol::frames::{Frame, MAX_FRAME_BYTES, Record, SessionKey};
 use specdeck_protocol::invite::{InviteCode, InviteKeys};
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
 use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage, SignalPayload};
+use specdeck_protocol::{AgentId, AgentStatus};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 
 use crate::diag::{self, LeaveReason};
 use crate::ice::turn_url_with_credentials;
@@ -40,6 +42,12 @@ const CREDENTIALS_MARGIN: Duration = Duration::from_secs(10 * 60);
 /// Records read per step; a step behind by more than one record goes as one compressed batch.
 /// Well under `MAX_FRAME_BYTES`, so even incompressible output fits in one frame.
 const READ_BYTES: usize = 192 * 1024;
+
+/// Requests a viewer may send at once, before the rate limit applies.
+const REQUEST_BURST: f64 = 3.0;
+
+/// After the burst, one request per this long.
+const REQUEST_REFILL: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug)]
 pub struct SharingConfig {
@@ -62,6 +70,35 @@ pub enum SharingEvent {
     /// service is retried.
     Unavailable,
     Participants(Vec<Participant>),
+    /// What viewers may send, after the host changed it.
+    Allowed {
+        suggestions: bool,
+    },
+    /// Every suggestion in the session, oldest first, on every change.
+    Suggestions(Vec<HostSuggestion>),
+}
+
+/// A viewer's suggestion as the host sees it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSuggestion {
+    pub viewer: u32,
+    /// The viewer's own id for it.
+    pub id: u32,
+    /// The viewer's name as the participant list showed it when the suggestion arrived.
+    pub from: String,
+    pub text: String,
+    pub state: SuggestionState,
+}
+
+/// What the host did with a suggestion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// Sent to the agent as `text`, which the host may have edited.
+    Sent {
+        text: String,
+    },
+    Declined,
 }
 
 /// What the host's side of sharing is doing, for the Connection status panel. Times are Unix
@@ -118,6 +155,8 @@ enum Command {
     NewCode,
     Remove(u32),
     SetLimit(u8),
+    AllowSuggestions(bool),
+    Answer { viewer: u32, id: u32, answer: Answer, done: oneshot::Sender<bool> },
     Close,
 }
 
@@ -162,6 +201,26 @@ impl Sharing {
         let _ = self.commands.send(Command::SetLimit(limit.clamp(1, MAX_VIEWERS)));
     }
 
+    /// Lets viewers suggest prompts, or stops them. Suggestions already waiting stay. Terminal
+    /// sessions never allow it: every line typed into a shell runs.
+    pub fn allow_suggestions(&self, on: bool) {
+        let _ = self.commands.send(Command::AllowSuggestions(on));
+    }
+
+    /// Records the host's answer to a waiting suggestion and tells its viewer. Resolves to
+    /// whether the suggestion was waiting; only then may the caller type a sent one into the
+    /// session, so a double click cannot send it twice. Sharing itself never types anything.
+    pub fn answer_suggestion(
+        &self,
+        viewer: u32,
+        id: u32,
+        answer: Answer,
+    ) -> oneshot::Receiver<bool> {
+        let (done, receiver) = oneshot::channel();
+        let _ = self.commands.send(Command::Answer { viewer, id, answer, done });
+        receiver
+    }
+
     /// Tells every viewer the session ended and closes the room and all connections.
     pub fn close(&self) {
         let _ = self.commands.send(Command::Close);
@@ -202,6 +261,8 @@ enum Auth {
 struct Admitted {
     id: u32,
     resume_token: [u8; 32],
+    /// The protocol version the viewer joined with; decides which messages it can read.
+    protocol: u32,
     /// Next record to send.
     record_cursor: u64,
     /// Next timeline event to send.
@@ -239,6 +300,131 @@ struct Host {
     service_down: bool,
     last_departure: Option<Departure>,
     traffic: diag::Traffic,
+    requests: Requests,
+}
+
+/// What viewers may send and what they sent: the switches, each viewer's rate limit and the
+/// suggestions of the session. Holds no reference to the agent.
+struct Requests {
+    /// False for terminal sessions, where every line typed into the shell runs.
+    possible: bool,
+    suggestions_on: bool,
+    /// By viewer id, so reconnecting does not refill it.
+    buckets: HashMap<u32, Bucket>,
+    /// Oldest first; kept for the session, also of viewers who left or were removed.
+    suggestions: Vec<HostSuggestion>,
+}
+
+impl Requests {
+    fn new(agent: AgentId) -> Self {
+        Self {
+            possible: agent != AgentId::Terminal,
+            // On from the start where they are possible; the host can turn them off.
+            suggestions_on: agent != AgentId::Terminal,
+            buckets: HashMap::new(),
+            suggestions: Vec::new(),
+        }
+    }
+
+    fn suggestions_allowed(&self) -> bool {
+        self.suggestions_on
+    }
+
+    /// Returns whether the switch changed.
+    fn allow_suggestions(&mut self, on: bool) -> bool {
+        let on = on && self.possible;
+        if on == self.suggestions_on {
+            return false;
+        }
+        self.suggestions_on = on;
+        diag::host_requests_allowed(on);
+        true
+    }
+
+    /// Decides on a request; also returns whether it added a suggestion. A request the host
+    /// already has is answered again without counting against the limit.
+    fn receive(
+        &mut self,
+        viewer: u32,
+        id: u32,
+        request: ViewerRequest,
+        from: String,
+        now: Instant,
+    ) -> (Outcome, bool) {
+        let kind = request.kind();
+        let ViewerRequest::Suggest { text } = request;
+        let bytes = text.len();
+        let (outcome, name) = if self.suggestions.iter().any(|s| s.viewer == viewer && s.id == id) {
+            (Outcome::Received, "duplicate")
+        } else if !self.suggestions_on {
+            (Outcome::Off, "off")
+        } else if !self.buckets.entry(viewer).or_insert_with(|| Bucket::new(now)).take(now) {
+            (Outcome::RateLimited, "limited")
+        } else {
+            let state = SuggestionState::Waiting;
+            self.suggestions.push(HostSuggestion { viewer, id, from, text, state });
+            (Outcome::Received, "accepted")
+        };
+        diag::host_viewer_request(viewer, kind, bytes, name);
+        (outcome, name == "accepted")
+    }
+
+    /// Records the host's answer; false when the suggestion is not waiting.
+    fn answer(&mut self, viewer: u32, id: u32, answer: &Answer) -> bool {
+        let Some(suggestion) = self
+            .suggestions
+            .iter_mut()
+            .find(|s| s.viewer == viewer && s.id == id && s.state == SuggestionState::Waiting)
+        else {
+            return false;
+        };
+        suggestion.state = match answer {
+            Answer::Sent { text } => {
+                let edited = *text != suggestion.text;
+                diag::host_suggestion_answered(viewer, "sent", edited);
+                SuggestionState::Sent { edited }
+            }
+            Answer::Declined => {
+                diag::host_suggestion_answered(viewer, "declined", false);
+                SuggestionState::Declined
+            }
+        };
+        true
+    }
+
+    /// One viewer's suggestions, as that viewer sees them.
+    fn mine(&self, viewer: u32) -> Vec<Suggestion> {
+        self.suggestions
+            .iter()
+            .filter(|s| s.viewer == viewer)
+            .map(|s| Suggestion { id: s.id, text: s.text.clone(), state: s.state })
+            .collect()
+    }
+}
+
+/// A viewer's rate limit: [`REQUEST_BURST`] requests at once, then one per [`REQUEST_REFILL`].
+struct Bucket {
+    tokens: f64,
+    at: Instant,
+}
+
+impl Bucket {
+    fn new(now: Instant) -> Self {
+        Self { tokens: REQUEST_BURST, at: now }
+    }
+
+    fn take(&mut self, now: Instant) -> bool {
+        let refilled =
+            now.saturating_duration_since(self.at).as_secs_f64() / REQUEST_REFILL.as_secs_f64();
+        self.tokens = (self.tokens + refilled).min(REQUEST_BURST);
+        self.at = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Host {
@@ -251,6 +437,7 @@ impl Host {
         let code = InviteCode::generate();
         let keys = code.keys();
         let ice_servers = config.peer.ice_servers.clone();
+        let requests = Requests::new(view.agent());
         let mut rejoin_room = [0u8; 16];
         getrandom::fill(&mut rejoin_room).expect("no random source");
         Self {
@@ -273,6 +460,7 @@ impl Host {
             service_down: false,
             last_departure: None,
             traffic: diag::Traffic::default(),
+            requests,
         }
     }
 
@@ -295,6 +483,10 @@ impl Host {
                     Some(Command::NewCode) => self.rotate_code(),
                     Some(Command::Remove(id)) => self.remove(id),
                     Some(Command::SetLimit(limit)) => self.config.viewer_limit = limit,
+                    Some(Command::AllowSuggestions(on)) => self.allow_suggestions(on),
+                    Some(Command::Answer { viewer, id, answer, done }) => {
+                        let _ = done.send(self.answer(viewer, id, answer));
+                    }
                     Some(Command::Close) | None => break,
                 },
                 message = recv_or_pending(&mut server_rx) => match message {
@@ -555,7 +747,11 @@ impl Host {
                 last_event_seq,
                 resume_token,
             } => {
-                if let Err(reason) = control::check_version(PROTOCOL_VERSION, protocol_version) {
+                if let Err(reason) = control::check_version(
+                    MIN_VIEWER_PROTOCOL_VERSION,
+                    PROTOCOL_VERSION,
+                    protocol_version,
+                ) {
                     return self.refuse(connection, reason);
                 }
                 // Through the rejoin room, only the viewer whose token signed the offer.
@@ -605,7 +801,7 @@ impl Host {
 
                 let (cols, rows) = self.view.size();
                 let welcome = HostMessage::Welcome {
-                    protocol_version: PROTOCOL_VERSION,
+                    protocol_version: protocol_version.min(PROTOCOL_VERSION),
                     viewer_id: identity.id,
                     session_public_key: self.key.public_key(),
                     cols,
@@ -621,6 +817,7 @@ impl Host {
                 slot.admitted = Some(Admitted {
                     id: identity.id,
                     resume_token: token,
+                    protocol: protocol_version,
                     record_cursor: last_output_seq.map_or(0, |seq| seq + 1),
                     event_cursor: last_event_seq.map_or(0, |seq| seq as usize + 1),
                     last_status: None,
@@ -631,6 +828,10 @@ impl Host {
                     bytes_sent: 0,
                 });
                 let _ = slot.peer.send(Channel::Control, &control::encode(&welcome));
+                let allowed =
+                    HostMessage::Allowed { suggestions: self.requests.suggestions_allowed() };
+                send_newer(slot, &allowed);
+                self.send_mine(identity.id);
                 self.broadcast_participants();
             }
             ViewerMessage::Resend { from_output_seq } => {
@@ -641,7 +842,72 @@ impl Host {
                 }
             }
             ViewerMessage::Leave => self.disconnect(connection, LeaveReason::Left),
+            ViewerMessage::Send { id, request } => self.handle_request(connection, id, request),
         }
+    }
+
+    /// The gate: a request reaches the host's window only when its kind is on and the viewer is
+    /// within its rate limit. Nothing here reaches the agent.
+    fn handle_request(&mut self, connection: &str, id: u32, request: ViewerRequest) {
+        let Some(admitted) = self.slots.get(connection).and_then(|slot| slot.admitted.as_ref())
+        else {
+            // Before admission there is nothing to ask.
+            return self.disconnect(connection, LeaveReason::Malformed);
+        };
+        let viewer = admitted.id;
+        if admitted.protocol < REQUESTS_PROTOCOL_VERSION {
+            // It said it speaks a version without requests.
+            return self.disconnect(connection, LeaveReason::Malformed);
+        }
+        let from = self
+            .participants()
+            .into_iter()
+            .find(|p| p.id == viewer && p.role == Role::Viewer)
+            .map_or_else(String::new, |p| p.label);
+        let (outcome, added) = self.requests.receive(viewer, id, request, from, Instant::now());
+        if let Some(slot) = self.slots.get_mut(connection) {
+            send_newer(slot, &HostMessage::Reply { id, outcome });
+        }
+        if added {
+            self.send_mine(viewer);
+            self.publish_suggestions();
+        }
+    }
+
+    fn allow_suggestions(&mut self, on: bool) {
+        if !self.requests.allow_suggestions(on) {
+            return;
+        }
+        let on = self.requests.suggestions_allowed();
+        let allowed = HostMessage::Allowed { suggestions: on };
+        for slot in self.slots.values_mut() {
+            send_newer(slot, &allowed);
+        }
+        let _ = self.events.send(SharingEvent::Allowed { suggestions: on });
+    }
+
+    /// Whether the suggestion was waiting; only then is the answer recorded.
+    fn answer(&mut self, viewer: u32, id: u32, answer: Answer) -> bool {
+        if !self.requests.answer(viewer, id, &answer) {
+            return false;
+        }
+        self.send_mine(viewer);
+        self.publish_suggestions();
+        true
+    }
+
+    /// Sends a viewer its own suggestions, wherever it is connected now.
+    fn send_mine(&mut self, viewer: u32) {
+        let message = HostMessage::Suggestions { mine: self.requests.mine(viewer) };
+        for slot in self.slots.values_mut() {
+            if slot.admitted.as_ref().is_some_and(|a| a.id == viewer) {
+                send_newer(slot, &message);
+            }
+        }
+    }
+
+    fn publish_suggestions(&self) {
+        let _ = self.events.send(SharingEvent::Suggestions(self.requests.suggestions.clone()));
     }
 
     fn refuse(&mut self, connection: &str, reason: RefusalReason) {
@@ -810,6 +1076,15 @@ impl Host {
     }
 }
 
+/// Sends a message added in protocol version 3 to an admitted viewer that can read it. Every
+/// such message goes through here: a version 2 viewer that got one could not decode it and
+/// would reconnect over and over.
+fn send_newer(slot: &mut Slot, message: &HostMessage) {
+    if slot.admitted.as_ref().is_some_and(|a| a.protocol >= REQUESTS_PROTOCOL_VERSION) {
+        let _ = slot.peer.send(Channel::Control, &control::encode(message));
+    }
+}
+
 /// Sends one viewer records and timeline events from its cursors while its channel has room.
 fn pump(
     view: &SessionView,
@@ -884,7 +1159,6 @@ async fn recv_or_pending<T>(receiver: &mut Option<UnboundedReceiver<T>>) -> Opti
 mod tests {
     use std::sync::Arc;
 
-    use specdeck_protocol::AgentId;
     use specdeck_protocol::frames::FrameVerifier;
 
     use super::*;
@@ -932,6 +1206,7 @@ mod tests {
         Admitted {
             id: 1,
             resume_token: [0; 32],
+            protocol: PROTOCOL_VERSION,
             record_cursor: 0,
             event_cursor: 0,
             last_status: None,
@@ -1048,6 +1323,84 @@ mod tests {
         let sum: u64 =
             events.iter().map(|e| e.field("messages").unwrap().parse::<u64>().unwrap()).sum();
         assert_eq!(sum, 200, "every record counted once");
+    }
+
+    #[test]
+    fn the_rate_limit_allows_a_burst_then_one_per_ten_seconds() {
+        let start = Instant::now();
+        let mut bucket = Bucket::new(start);
+        assert!((0..3).all(|_| bucket.take(start)));
+        assert!(!bucket.take(start));
+        assert!(!bucket.take(start + Duration::from_secs(9)));
+        assert!(bucket.take(start + Duration::from_secs(10)));
+        assert!(!bucket.take(start + Duration::from_secs(11)));
+        // A long pause refills only up to the burst.
+        let later = start + Duration::from_secs(600);
+        assert!((0..3).all(|_| bucket.take(later)));
+        assert!(!bucket.take(later));
+    }
+
+    fn suggest(text: &str) -> ViewerRequest {
+        ViewerRequest::Suggest { text: text.into() }
+    }
+
+    #[test]
+    fn requests_need_the_switch_and_respect_the_limit() {
+        let now = Instant::now();
+        let mut requests = Requests::new(AgentId::ClaudeCode);
+        let from = || "anna".to_owned();
+        assert!(requests.suggestions_allowed(), "on when the session starts");
+        assert!(!requests.allow_suggestions(true), "no change");
+        assert!(requests.allow_suggestions(false));
+        assert_eq!(requests.receive(1, 1, suggest("a"), from(), now), (Outcome::Off, false));
+        assert!(requests.allow_suggestions(true));
+        for id in 2..5 {
+            assert_eq!(
+                requests.receive(1, id, suggest("a"), from(), now),
+                (Outcome::Received, true)
+            );
+        }
+        assert_eq!(
+            requests.receive(1, 5, suggest("a"), from(), now),
+            (Outcome::RateLimited, false)
+        );
+        // Another viewer has its own limit.
+        assert_eq!(requests.receive(2, 1, suggest("b"), from(), now), (Outcome::Received, true));
+        // A resent request is answered again, without counting or adding it twice.
+        assert_eq!(requests.receive(1, 3, suggest("a"), from(), now), (Outcome::Received, false));
+        assert_eq!(requests.mine(1).len(), 3);
+        // Turned off: waiting suggestions stay.
+        assert!(requests.allow_suggestions(false));
+        assert_eq!(requests.receive(2, 2, suggest("b"), from(), now), (Outcome::Off, false));
+        assert_eq!(requests.suggestions.len(), 4);
+    }
+
+    #[test]
+    fn terminal_sessions_never_allow_suggestions() {
+        let mut requests = Requests::new(AgentId::Terminal);
+        assert!(!requests.allow_suggestions(true));
+        assert!(!requests.suggestions_allowed());
+    }
+
+    #[test]
+    fn a_suggestion_is_answered_once() {
+        let now = Instant::now();
+        let mut requests = Requests::new(AgentId::ClaudeCode);
+        requests.receive(1, 1, suggest("Add a test"), "anna".into(), now);
+        requests.receive(1, 2, suggest("Fix it"), "anna".into(), now);
+        let sent = Answer::Sent { text: "Add a test".into() };
+        assert!(requests.answer(1, 1, &sent));
+        assert!(!requests.answer(1, 1, &sent), "already sent");
+        assert!(!requests.answer(2, 1, &sent), "another viewer's id");
+        assert!(requests.answer(1, 2, &Answer::Sent { text: "Fix it, please".into() }));
+        let states: Vec<_> = requests.mine(1).iter().map(|s| s.state).collect();
+        assert_eq!(
+            states,
+            [SuggestionState::Sent { edited: false }, SuggestionState::Sent { edited: true }]
+        );
+        requests.receive(1, 3, suggest("Never mind"), "anna".into(), now);
+        assert!(requests.answer(1, 3, &Answer::Declined));
+        assert_eq!(requests.mine(1)[2].state, SuggestionState::Declined);
     }
 
     #[tokio::test(start_paused = true)]

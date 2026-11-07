@@ -2,7 +2,12 @@
 
 The wire protocol between a host and its viewers. Both sides use this crate; it does no I/O. Design background: decisions 7 and 8 in [`design.md`](../../openspec/changes/archive/2026-10-31-native-shared-session-mvp/design.md).
 
-Current version: `PROTOCOL_VERSION = 2` ([`src/control.rs`](src/control.rs)). Version 2 added Codex, Grok and pi to the agents; postcard encodes the agent by its index, so apps that speak version 1 cannot read a `Welcome` for them. Not compatible with SpecDeck 0.x.
+Current version: `PROTOCOL_VERSION = 3` ([`src/control.rs`](src/control.rs)). Hosts admit viewers from `MIN_VIEWER_PROTOCOL_VERSION = 2` up to their own version.
+
+- Version 3 added requests from viewers to the host (`Send`) and the host's answers (`Allowed`, `Reply`, `Suggestions`). Version 2 viewers are admitted and watch read-only: the host never sends them a version 3 message, which they could not decode and would answer by reconnecting.
+- Version 2 added Codex, Grok and pi to the agents; postcard encodes the agent by its index, so apps that speak version 1 cannot read a `Welcome` for them.
+
+Not compatible with SpecDeck 0.x.
 
 ## Connecting
 
@@ -18,20 +23,21 @@ Each viewer has one WebRTC peer connection to the host with two reliable, ordere
 
 | Channel | Content | Encoding |
 |---|---|---|
-| `control` | Handshake, participants, status, session end | postcard ([`src/control.rs`](src/control.rs)) |
+| `control` | Handshake, participants, status, session end, viewers' requests | postcard ([`src/control.rs`](src/control.rs)) |
 | `stream` | Terminal records, history, timeline events | Signed binary frames ([`src/frames.rs`](src/frames.rs)) |
 
 ## Control messages
 
 ### Viewer to host
 
-Viewer messages come from untrusted peers. `decode_viewer` rejects messages over 1 KB, unknown variants, truncated messages and trailing bytes, and usernames that are empty, longer than 64 characters or contain control characters. There is deliberately **no message that carries terminal input**.
+Viewer messages come from untrusted peers. `decode_viewer` rejects messages over 1 KB (`Send` up to 4 KB plus 64 bytes), unknown variants, truncated messages and trailing bytes, usernames that are empty, longer than 64 characters or contain control characters, and suggestions that are blank, longer than 4096 bytes or contain control characters other than line breaks and tabs. A viewer that sends anything malformed is disconnected. There is deliberately **no message that carries terminal input**: a suggestion reaches the agent only when the host sends it from their own window.
 
 | Message | Fields | Meaning |
 |---|---|---|
 | `Hello` | `protocol_version`, `username`, `last_output_seq?`, `last_event_seq?`, `resume_token?` | First message on a connection. When reconnecting, the `last_*` fields say where the viewer left off and `resume_token` lets it take its old place |
 | `Resend` | `from_output_seq` | Send records again from this sequence, after a gap or a failed verification |
 | `Leave` | | The viewer is leaving |
+| `Send` (v3) | `id`, `request` | A request to the host. `request` is `Suggest { text }`. `id` is the viewer's own and unique among its requests; a repeated id is answered again without taking the request twice, so a viewer resends unanswered requests after reconnecting |
 
 ### Host to viewer
 
@@ -42,6 +48,11 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `Participants` | `participants[]` (`id`, `username`, `role`, `label`) | Everyone in the session, on every change. `label` adds a suffix when usernames collide |
 | `Status` | `status` | `Starting`, `Working`, `Waiting`, `Exited` or `Unknown` (agents whose events are not captured) |
 | `SessionEnded` | | The host closed the session |
+| `Allowed` (v3) | `suggestions` | What viewers may send; on admission and on every change |
+| `Reply` (v3) | `id`, `outcome` | To the sender only: `Received`, `Off` (the host has turned that kind off) or `RateLimited` (3 at once, then 1 every 10 seconds per viewer, not reset by reconnecting) |
+| `Suggestions` (v3) | `mine[]` (`id`, `text`, `state`) | To one viewer: their own suggestions in this session, `Waiting`, `Sent { edited }` or `Declined`; on admission and on every change |
+
+Messages marked v3 are sent only to viewers admitted with version 3 or later.
 
 ### Handshake
 
@@ -53,11 +64,12 @@ viewer                                      host
   |  or                                        |
   | <-- Welcome {..., session_public_key} ----  |
   | <-- Participants, Status -----------------  |
+  | <-- Allowed, Suggestions (v3 viewers) ----  |
   | <== history, then live records and ======  |
   |     timeline events on `stream`             |
 ```
 
-`check_version(host, viewer)` accepts only equal versions; otherwise the refusal says which side has to update. `Welcome`, including the signing key, is trusted only because the connection itself was authenticated with the invite code.
+`check_version(host_min, host, viewer)` accepts viewer versions from `host_min` to `host`; otherwise the refusal says which side has to update. `Welcome.protocol_version` is the version agreed with that viewer, the lower of the two. `Welcome`, including the signing key, is trusted only because the connection itself was authenticated with the invite code.
 
 ## Stream frames
 

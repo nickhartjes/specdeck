@@ -210,6 +210,30 @@ export type TimelineEvent = Stamp &
 
 export type SharingState = 'connecting' | 'ready' | 'unavailable';
 
+/** What became of a suggestion; `SuggestionState` in crates/protocol. */
+export type SuggestionState = 'Waiting' | { Sent: { edited: boolean } } | 'Declined';
+
+/** A viewer's own suggestion, as that viewer sees it. */
+export interface Suggestion {
+  id: number;
+  text: string;
+  state: SuggestionState;
+}
+
+/** A viewer's suggestion as the host sees it. */
+export interface HostSuggestion extends Suggestion {
+  /** The viewer's number; with `id` it names the suggestion. */
+  viewer: number;
+  /** The viewer's name as the participant list showed it when the suggestion arrived. */
+  from: string;
+}
+
+/** Whether a request got through to the host; `Outcome` in crates/protocol. */
+export type RequestOutcome = 'Received' | 'Off' | 'RateLimited';
+
+/** The longest suggestion, in bytes of UTF-8; `MAX_SUGGESTION_BYTES` in crates/protocol. */
+export const MAX_SUGGESTION_BYTES = 4096;
+
 export type HostEvent =
   | {
       type: 'snapshot';
@@ -227,8 +251,16 @@ export type HostEvent =
       viewerLimit: number;
       exited: number | null;
       timeline: TimelineEvent[];
+      /** False for terminal sessions; absent from sessions of the previous release, which take no suggestions. */
+      suggestionsPossible?: boolean;
+      suggestionsAllowed?: boolean;
+      suggestions?: HostSuggestion[];
     }
   | { type: 'sharing'; state: SharingState; code: string | null }
+  /** What viewers may send, after the host changed it. */
+  | { type: 'allowed'; suggestions: boolean }
+  /** Every suggestion in the session, oldest first, on every change. */
+  | { type: 'suggestions'; suggestions: HostSuggestion[] }
   /** Whether the sharing service serves the web viewer, once checked. */
   | { type: 'web-viewer'; available: boolean }
   | { type: 'participants'; participants: Participant[] }
@@ -258,6 +290,14 @@ export type ViewEvent =
   | { type: 'timeline'; event: TimelineEvent }
   | { type: 'participants'; participants: Participant[] }
   | { type: 'status'; status: AgentStatus }
+  /** What the host lets viewers send. */
+  | { type: 'allowed'; suggestions: boolean }
+  /** A request was numbered; its reply carries this id. */
+  | { type: 'request-sent'; id: number }
+  /** Whether a request got through to the host. */
+  | { type: 'reply'; id: number; outcome: RequestOutcome }
+  /** This viewer's suggestions and what became of each. */
+  | { type: 'suggestions'; mine: Suggestion[] }
   | { type: 'ended'; reason: EndReason };
 
 /** The terminal's state for diagnostics: enums and numbers only, never its content. */

@@ -57,7 +57,7 @@ These came out of exploring the panels idea (the session that made the first ver
 | *Shared* tab, *Braindump for Claude*: everyone adds notes and files; the host gives them to Claude with an editable prompt | #61 (on #51) | Limits; does the braindump outlive the session? Can people remove their own items? |
 | *Shared* tab, *Files for the project*: a developer offers a file at a path; the host adds or declines it | #62 (on #51) | Never outside the session folder, never overwriting without the host confirming. |
 | *Add files or a note*: one dialog for all three, with a file picker, dropping files, or a note | #55, #61, #62 | |
-| *Prompts* tab: viewers suggest; the host sends (or edits first), keeps for later, or declines | #52 (on #51) | Who sees pending suggestions? Do kept suggestions outlive the session? |
+| *Prompts* tab: viewers suggest; the host sends (or edits first), keeps for later, or declines | #52 (on #51) | Sending, editing and declining come with #51 (`viewer-to-host-channel`): only the host and the viewer who suggested it see a suggestion. Still open: keeping for later, whether kept suggestions outlive the session, and marking a sent prompt as suggested in the timeline. |
 | *Ask to read*: a document and a time limit; a banner with who is reading or ready and a countdown | #53 (on #51) | "Not ready, I have a question"? Shown in the timeline afterwards? |
 | *Estimate*: hidden votes on cards (story points or T-shirt sizes), reveal, spread, vote again, keep the result in the timeline | #54 (on #51) | Does the host vote? Starting the vote was reported broken once in the mockup and not reproduced. |
 | Sharing settings (the sliders button): which code viewers can open, suggestions, adding files and notes, saving a recap | #51, #56, #57, #64 | The defaults. |
@@ -69,7 +69,7 @@ These came out of exploring the panels idea (the session that made the first ver
 | Bar and sharing settings (concept only): *Let viewers open localhost:5173*, a marker with *Stop*, *Open Nick's app* for viewers, each with their own page | #68 | The web viewer can't open a local port; only after a security review. |
 | *End the session*: the recap with prompts and outcomes, plans and documents, decisions and changed files, and *Save recap* | #57 | Who may keep what; where it is saved. |
 
-#51 is the channel from viewers to the host that #52, #53, #54, #61, #62 and #64 need (and #66 when viewers share links), with the host in control. #60 is a bug (a rare crash in the WebRTC library on macOS) that is best fixed before the larger work.
+#51 is the channel from viewers to the host that #52, #53, #54, #61, #62 and #64 need (and #66 when viewers share links), with the host in control. Its change, `viewer-to-host-channel`, also brings the core of #52 (suggest, then send, edit or decline) as the channel's first user, in the app and the web viewer. Hosts on it admit viewers one protocol version older, read-only, so each feature on the channel can add its own message without locking older apps out. #60 is a bug (a rare crash in the WebRTC library on macOS) that is best fixed before the larger work.
 
 ## Order
 

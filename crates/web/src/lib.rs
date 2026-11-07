@@ -7,7 +7,8 @@
 
 use serde::Serialize;
 use specdeck_protocol::control::{
-    self, PROTOCOL_VERSION, Participant, RefusalReason, ViewerMessage,
+    self, Outcome, PROTOCOL_VERSION, Participant, RefusalReason, Suggestion, ViewerMessage,
+    ViewerRequest, valid_suggestion,
 };
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
@@ -47,7 +48,25 @@ enum Control {
         reason: RefusalReason,
     },
     Ended,
+    Allowed {
+        suggestions: bool,
+    },
+    Reply {
+        id: u32,
+        outcome: Outcome,
+    },
+    Suggestions {
+        mine: Vec<Suggestion>,
+    },
     Retry,
+}
+
+/// A numbered request, ready to send on the control channel.
+#[derive(Serialize)]
+struct Request {
+    id: u32,
+    #[serde(with = "serde_bytes_opt")]
+    message: Option<Vec<u8>>,
 }
 
 /// What a stream frame adds, as the page receives it. Every field is optional.
@@ -136,8 +155,38 @@ impl WebViewer {
         control::encode(&ViewerMessage::Leave)
     }
 
+    /// A suggested prompt for the host: `{ id, message }`, `message` to send on the control
+    /// channel once admitted. Refused when the host would refuse it, so a slip in the page never
+    /// costs the viewer its connection.
+    pub fn suggest(&mut self, text: &str) -> Result<JsValue, JsError> {
+        let text = text.replace("\r\n", "\n");
+        if !valid_suggestion(&text) {
+            return Err(JsError::new("A suggestion is 1 to 4096 bytes of text."));
+        }
+        let (id, message) = self.state.send_request(ViewerRequest::Suggest { text });
+        Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
+    }
+
+    /// The requests the host has not answered, `[{ id, message }]`, to send once admitted:
+    /// ones made before joining and ones a dropped connection left unanswered.
+    #[wasm_bindgen(js_name = unansweredRequests)]
+    pub fn unanswered_requests(&self) -> JsValue {
+        let requests: Vec<Request> = self
+            .state
+            .unanswered_requests()
+            .into_iter()
+            .filter_map(|message| match &message {
+                ViewerMessage::Send { id, .. } => {
+                    Some(Request { id: *id, message: Some(control::encode(&message)) })
+                }
+                _ => None,
+            })
+            .collect();
+        to_js(&requests)
+    }
+
     /// What a message on the control channel means: `{ type: "welcome" | "participants" |
-    /// "status" | "refused" | "ended" | "retry", ... }`.
+    /// "status" | "refused" | "ended" | "allowed" | "reply" | "suggestions" | "retry", ... }`.
     #[wasm_bindgen(js_name = onControl)]
     pub fn on_control(&mut self, bytes: &[u8]) -> JsValue {
         to_js(&match self.state.on_control(bytes) {
@@ -153,6 +202,9 @@ impl WebViewer {
             ControlUpdate::Status(status) => Control::Status { status },
             ControlUpdate::Refused(reason) => Control::Refused { reason },
             ControlUpdate::Ended => Control::Ended,
+            ControlUpdate::Allowed { suggestions } => Control::Allowed { suggestions },
+            ControlUpdate::Reply { id, outcome } => Control::Reply { id, outcome },
+            ControlUpdate::Suggestions(mine) => Control::Suggestions { mine },
             ControlUpdate::Retry => Control::Retry,
         })
     }

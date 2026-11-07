@@ -329,6 +329,22 @@ pub fn host_viewer_left(viewer: Option<u32>, peer: u32, reason: LeaveReason) {
     }
 }
 
+/// A viewer's request reached the host: its kind, size and what the gate decided (`accepted`,
+/// `off`, `limited` or `duplicate`). Never its text.
+pub fn host_viewer_request(viewer: u32, kind: &'static str, bytes: usize, outcome: &'static str) {
+    info!(viewer, kind, bytes, outcome, "host.viewer_request");
+}
+
+/// The host answered a viewer's suggestion: `sent` or `declined`, and whether they edited it.
+pub fn host_suggestion_answered(viewer: u32, answer: &'static str, edited: bool) {
+    info!(viewer, answer, edited, "host.suggestion_answered");
+}
+
+/// The host changed what viewers may send.
+pub fn host_requests_allowed(suggestions: bool) {
+    info!(suggestions, "host.requests_allowed");
+}
+
 /// Stream traffic of the last second, summed over all viewers. Verbose only.
 fn host_traffic(messages: u64, bytes: u64, max_queued: u64) {
     debug!(messages, bytes, max_queued, "host.traffic");
@@ -455,6 +471,16 @@ pub fn viewer_attempt_ended(attempt: u32, reason: AttemptEnd, connected: Duratio
 /// The viewer asked the host to send again from record `from`.
 pub fn viewer_resend(from: u64) {
     info!(from, "viewer.resend");
+}
+
+/// The viewer sent the host a request of `kind`, `bytes` long; never its text.
+pub fn viewer_request_sent(kind: &'static str, bytes: usize) {
+    info!(kind, bytes, "viewer.request_sent");
+}
+
+/// The host answered one of this viewer's requests.
+pub fn viewer_request_reply(outcome: &'static str) {
+    info!(outcome, "viewer.request_reply");
 }
 
 /// The signalling service closed after the peer connection was up; the session goes on.

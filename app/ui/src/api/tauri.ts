@@ -69,10 +69,13 @@ export const tauriBridge: Bridge = {
   hostNewCode: () => invoke('host_new_code'),
   hostRemoveViewer: (viewerId) => invoke('host_remove_viewer', { viewerId }),
   hostSetViewerLimit: (limit) => invoke('host_set_viewer_limit', { limit }),
+  hostAllowSuggestions: (on) => invoke('host_allow_suggestions', { on }),
+  hostAnswerSuggestion: (viewerId, id, text) => invoke('host_answer_suggestion', { viewerId, id, text }),
   hostClose: () => invoke('host_close'),
   joinSession: (code, server, terminal, events) =>
     invoke('join_session', { code, server, terminal: bytesChannel(terminal), events: channel<ViewEvent>(events) }),
   leaveSession: () => invoke('leave_session'),
+  suggestPrompt: (text) => invoke('suggest_prompt', { text }),
   takeJoinLink: () => invoke<JoinLink | null>('take_join_link'),
   takeStartCommand: () => invoke<MenuCommand | null>('take_start_command'),
   setSessionTitle: (name) => invoke('set_session_title', { name }),

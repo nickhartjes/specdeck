@@ -13,6 +13,8 @@ declare module 'specdeck-web-wasm' {
     hello(username: string): Uint8Array;
     onControl(bytes: Uint8Array): unknown;
     onStream(bytes: Uint8Array): unknown;
+    suggest(text: string): unknown;
+    unansweredRequests(): unknown;
   }
   export function parseJoinLink(link: string): { code: string; service?: string } | undefined;
 }

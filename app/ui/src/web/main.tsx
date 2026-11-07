@@ -6,7 +6,7 @@ import init, { WebViewer, parseJoinLink } from 'specdeck-web-wasm';
 import { BridgeContext } from '../api/bridge';
 import '../styles.css';
 import { webBridge } from './bridge';
-import type { ControlUpdate, StreamUpdate, ViewerCore } from './connection';
+import type { ControlUpdate, Request, StreamUpdate, ViewerCore } from './connection';
 import { WebApp, takeHashCode } from './WebApp';
 
 /** This page's own sharing service: `signal` next to the page, over WebSocket. */
@@ -28,6 +28,8 @@ function core(code: string): ViewerCore {
     onControl: (bytes) => viewer.onControl(bytes) as ControlUpdate,
     onStream: (bytes) => viewer.onStream(bytes) as StreamUpdate,
     admittedOnce: () => viewer.admittedOnce(),
+    suggest: (text) => viewer.suggest(text) as Request,
+    unansweredRequests: () => viewer.unansweredRequests() as Request[],
   };
 }
 

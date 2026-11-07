@@ -4,7 +4,7 @@
 // RTCPeerConnection. What each message means is decided by `ViewerCore`, the shared Rust code
 // compiled to WebAssembly (crates/web), so verification and ordering match the app.
 
-import type { AgentId, AgentStatus, EndReason, Participant, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, Suggestion, TimelineEvent, ViewEvent } from '../api/types';
 
 /** How long joining may take, and one reconnection attempt; as `CONNECT_TIMEOUT` in the app. */
 export const CONNECT_TIMEOUT_MS = 20_000;
@@ -20,7 +20,16 @@ export type ControlUpdate =
   | { type: 'status'; status: AgentStatus }
   | { type: 'refused'; reason: Refusal }
   | { type: 'ended' }
+  | { type: 'allowed'; suggestions: boolean }
+  | { type: 'reply'; id: number; outcome: RequestOutcome }
+  | { type: 'suggestions'; mine: Suggestion[] }
   | { type: 'retry' };
+
+/** A numbered request and the control message that carries it. */
+export interface Request {
+  id: number;
+  message: Uint8Array | number[];
+}
 
 export interface StreamUpdate {
   /** Terminal records in the format of src/terminal/stream.ts. */
@@ -40,6 +49,10 @@ export interface ViewerCore {
   onControl(bytes: Uint8Array): ControlUpdate;
   onStream(bytes: Uint8Array): StreamUpdate;
   admittedOnce(): boolean;
+  /** Throws for text the host would refuse. */
+  suggest(text: string): Request;
+  /** Requests the host has not answered, to send once admitted. */
+  unansweredRequests(): Request[];
 }
 
 /** The browser APIs used, so tests can pass fakes. */
@@ -112,11 +125,23 @@ export class Connection {
   private stop: (() => void) | null = null;
   private wake: (() => void) | null = null;
   private left = false;
+  /** Sends on the control channel while this connection is admitted; null otherwise. */
+  private sendControl: ((bytes: Uint8Array<ArrayBuffer>) => void) | null = null;
 
   constructor(private readonly options: ConnectionOptions) {
     this.platform = options.platform ?? browserPlatform;
     this.timeoutMs = options.timeoutMs ?? CONNECT_TIMEOUT_MS;
     void this.run();
+  }
+
+  /**
+   * Suggests a prompt to the host: sent now when admitted, or once admitted again. Throws for
+   * text the host would refuse.
+   */
+  suggest(text: string) {
+    const request = this.options.core.suggest(text.replace(/\r\n/g, '\n'));
+    this.options.onEvent({ type: 'request-sent', id: request.id });
+    this.sendControl?.(new Uint8Array(request.message));
   }
 
   /** Leaves the session: tells the host if connected, and closes everything. */
@@ -192,6 +217,7 @@ export class Connection {
         done = true;
         clearTimeout(timer);
         this.stop = null;
+        this.sendControl = null;
         socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
         try {
           socket.close();
@@ -246,8 +272,23 @@ export class Connection {
             case 'welcome': {
               const { viewerId, agent, timelineSupported, cols, rows, reconnected } = update;
               onEvent(reconnected ? { type: 'reconnected' } : { type: 'joined', viewerId, agent, timelineSupported, cols, rows });
+              const channel = control!;
+              this.sendControl = (bytes) => {
+                if (channel.readyState === 'open') channel.send(bytes);
+              };
+              // Requests made while away, and ones a dropped connection left unanswered.
+              for (const request of core.unansweredRequests()) this.sendControl(new Uint8Array(request.message));
               break;
             }
+            case 'allowed':
+              onEvent({ type: 'allowed', suggestions: update.suggestions });
+              break;
+            case 'reply':
+              onEvent({ type: 'reply', id: update.id, outcome: update.outcome });
+              break;
+            case 'suggestions':
+              onEvent({ type: 'suggestions', mine: update.mine });
+              break;
             case 'participants':
               onEvent({ type: 'participants', participants: update.participants });
               break;

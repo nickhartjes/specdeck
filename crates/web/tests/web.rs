@@ -41,6 +41,32 @@ fn accepts_only_the_answer_made_with_the_sessions_code_for_this_connection() {
 }
 
 #[wasm_bindgen_test]
+fn suggestions_are_numbered_and_checked_before_sending() {
+    let mut viewer = WebViewer::new(CODE).unwrap();
+    let first = viewer.suggest("Add a test\r\nfor the heartbeat").unwrap();
+    assert_eq!(js_sys_get(&first, "id").as_f64(), Some(1.0));
+    let second = viewer.suggest("Fix it").unwrap();
+    assert_eq!(js_sys_get(&second, "id").as_f64(), Some(2.0));
+    // Unanswered until the host replies, so they go out once admitted.
+    let unanswered = viewer.unanswered_requests();
+    assert_eq!(js_sys_get(&unanswered, "length").as_f64(), Some(2.0));
+    assert!(viewer.suggest("   ").is_err());
+    assert!(viewer.suggest(&"x".repeat(4097)).is_err());
+    assert!(viewer.suggest("run\u{1b}[2J").is_err());
+
+    let reply =
+        specdeck_protocol::control::encode(&specdeck_protocol::control::HostMessage::Reply {
+            id: 1,
+            outcome: specdeck_protocol::control::Outcome::Received,
+        });
+    let update = viewer.on_control(&reply);
+    assert_eq!(js_sys_get(&update, "type").as_string().as_deref(), Some("reply"));
+    assert_eq!(js_sys_get(&update, "outcome").as_string().as_deref(), Some("Received"));
+    let unanswered = viewer.unanswered_requests();
+    assert_eq!(js_sys_get(&unanswered, "length").as_f64(), Some(1.0));
+}
+
+#[wasm_bindgen_test]
 fn refuses_what_is_not_a_code() {
     assert!(WebViewer::new("not a code").is_err());
 }

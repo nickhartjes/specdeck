@@ -2,7 +2,7 @@
 // open /?demo=start, /?demo=host or /?demo=viewer) and for component tests. Never used by the app.
 
 import type { Bridge, TerminalSink } from './bridge';
-import type { DiagnosticsStatus, HostEvent, Participant, Profile, TimelineEvent, ViewEvent } from './types';
+import type { DiagnosticsStatus, HostEvent, HostSuggestion, Participant, Profile, Suggestion, TimelineEvent, ViewEvent } from './types';
 import { formatCode } from '../model/code';
 
 const t0 = Date.UTC(2026, 9, 31, 13, 2);
@@ -60,6 +60,13 @@ export const demoParticipants: Participant[] = [
   { id: 1, username: 'Anna de Vries', role: 'Viewer', label: 'Anna de Vries' },
   { id: 2, username: 'Bram', role: 'Viewer', label: 'Bram' },
   { id: 3, username: 'Anna de Vries', role: 'Viewer', label: 'Anna de Vries (2)' },
+];
+
+/** Suggestions waiting for the host in the demo, and one already sent. */
+export const demoSuggestions: HostSuggestion[] = [
+  { viewer: 1, id: 1, from: 'Anna de Vries', text: 'Can the health check also report the database latency?', state: { Sent: { edited: false } } },
+  { viewer: 2, id: 1, from: 'Bram', text: 'Add a test for the 503 when the database is down.', state: 'Waiting' },
+  { viewer: 1, id: 2, from: 'Anna de Vries', text: 'Please explain the retry policy in the README,\nwith an example.', state: 'Waiting' },
 ];
 
 let seq = 0;
@@ -299,6 +306,12 @@ export function demoBridge(screen: string): Bridge {
   const profile = { ...demoProfile, hosting: screen === 'host', hostedSessions: screen === 'host' ? 1 : 0 };
   // Like the engine, the demo sends each resize of the host's terminal back as a record.
   let hostTerminal: TerminalSink | null = null;
+  // Suggestions: the host's side and one viewer's side of the same demo.
+  let hostEvents: ((event: HostEvent) => void) | null = null;
+  let hostSuggestions: HostSuggestion[] = demoSuggestions.map((suggestion) => ({ ...suggestion }));
+  let viewerEvents: ((event: ViewEvent) => void) | null = null;
+  const mine: Suggestion[] = [];
+  let nextRequest = 1;
   return {
     getProfile: async () => profile,
     agentVersions: async () => [
@@ -340,7 +353,11 @@ export function demoBridge(screen: string): Bridge {
         viewerLimit: 20,
         exited: null,
         timeline: demoTimeline,
+        suggestionsPossible: true,
+        suggestionsAllowed: true,
+        suggestions: hostSuggestions,
       });
+      hostEvents = events;
       setTimeout(() => terminal(terminalStream()), 50);
     },
     hostInput: async () => {},
@@ -351,6 +368,17 @@ export function demoBridge(screen: string): Bridge {
     hostNewCode: async () => {},
     hostRemoveViewer: async () => {},
     hostSetViewerLimit: async () => {},
+    hostAllowSuggestions: async (on) => {
+      hostEvents?.({ type: 'allowed', suggestions: on });
+    },
+    hostAnswerSuggestion: async (viewerId, id, text) => {
+      hostSuggestions = hostSuggestions.map((suggestion) =>
+        suggestion.viewer === viewerId && suggestion.id === id
+          ? { ...suggestion, state: text === null ? 'Declined' : { Sent: { edited: text !== suggestion.text } } }
+          : suggestion,
+      );
+      hostEvents?.({ type: 'suggestions', suggestions: hostSuggestions });
+    },
     hostClose: async () => {},
     joinSession: async (_code, _server, terminal: TerminalSink, events: (event: ViewEvent) => void) => {
       setTimeout(() => {
@@ -377,12 +405,29 @@ export function demoBridge(screen: string): Bridge {
           events({ type: 'status', status: 'working' });
           for (const event of demoTimeline) events({ type: 'timeline', event });
         }
+        viewerEvents = events;
+        events({ type: 'allowed', suggestions: params.get('suggestions') !== 'off' });
+        events({ type: 'suggestions', mine: [] });
         // A viewer takes the host's size from the stream's resize records, as from the engine.
         terminal(resizeRecord(cols, rows));
         terminal(terminalStream());
       }, 300);
     },
     leaveSession: async () => {},
+    suggestPrompt: async (text) => {
+      const id = nextRequest++;
+      viewerEvents?.({ type: 'request-sent', id });
+      mine.push({ id, text, state: 'Waiting' });
+      viewerEvents?.({ type: 'reply', id, outcome: 'Received' });
+      viewerEvents?.({ type: 'suggestions', mine: [...mine] });
+      // The demo host declines every other suggestion after a while.
+      setTimeout(() => {
+        const suggestion = mine.find((s) => s.id === id);
+        if (!suggestion) return;
+        suggestion.state = id % 2 ? { Sent: { edited: false } } : 'Declined';
+        viewerEvents?.({ type: 'suggestions', mine: mine.map((s) => ({ ...s })) });
+      }, 4000);
+    },
     takeJoinLink: async () => null,
     takeStartCommand: async () => null,
     setSessionTitle: async () => {},

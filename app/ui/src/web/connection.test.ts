@@ -89,6 +89,8 @@ interface FakeCore extends ViewerCore {
   /** What the next control messages mean. */
   controls: ControlUpdate[];
   answerValid: boolean;
+  /** Requests made and not answered, as the Rust core keeps them. */
+  unanswered: { id: number; message: Uint8Array }[];
   verifyAnswer: ReturnType<typeof vi.fn<ViewerCore['verifyAnswer']>>;
 }
 
@@ -110,6 +112,14 @@ function fakeCore(): FakeCore {
     },
     onStream: () => ({ records: new Uint8Array([7]) }),
     admittedOnce: () => admitted,
+    suggest: (text) => {
+      if (!text.trim()) throw new Error('A suggestion is 1 to 4096 bytes of text.');
+      const request = { id: core.unanswered.length + 1, message: new Uint8Array([3, core.unanswered.length + 1]) };
+      core.unanswered.push(request);
+      return request;
+    },
+    unansweredRequests: () => core.unanswered,
+    unanswered: [],
   };
   return core;
 }
@@ -178,6 +188,37 @@ describe('web viewer connection', () => {
     expect(peer.config.iceServers).toEqual([{ urls: 'turn:turn.example.com:3478?transport=udp', username: 'u', credential: 'c' }]);
     expect(peer.channels.map((channel) => channel.label)).toEqual(['control', 'stream']);
     expect(peer.remote).toEqual({ type: 'answer', sdp: 'answer-sdp' });
+  });
+
+  it('sends suggestions once admitted, and those left unanswered again after a reconnect', async () => {
+    const core = fakeCore();
+    core.controls.push(welcome, { type: 'allowed', suggestions: true }, { type: 'reply', id: 2, outcome: 'Received' }, { ...welcome, reconnected: true });
+    const { sockets, peers, events, connection } = setup(core);
+    // Made before the connection is admitted: kept for later.
+    connection.suggest('Add a test\r\nfor it');
+    expect(events).toEqual([{ type: 'request-sent', id: 1 }]);
+    const { peer } = await reachHost(sockets, peers);
+    const control = peer.channel('control');
+    control.open();
+    expect(control.sent).toEqual([new Uint8Array([1])]);
+    control.receive([0]);
+    expect(control.sent.at(-1)).toEqual(new Uint8Array([3, 1]));
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'allowed', suggestions: true });
+    // Admitted: sent at once.
+    connection.suggest('Fix it');
+    expect(control.sent.at(-1)).toEqual(new Uint8Array([3, 2]));
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'reply', id: 2, outcome: 'Received' });
+    expect(() => connection.suggest('  ')).toThrow();
+
+    peer.fail();
+    await vi.advanceTimersByTimeAsync(250);
+    const second = await reachHost(sockets, peers);
+    second.peer.channel('control').open();
+    second.peer.channel('control').receive([0]);
+    // The fake core never removed them, so both go again; the real one drops answered ones.
+    expect(second.peer.channel('control').sent.slice(1)).toEqual([new Uint8Array([3, 1]), new Uint8Array([3, 2])]);
   });
 
   it('says the code is invalid when its room does not exist', async () => {

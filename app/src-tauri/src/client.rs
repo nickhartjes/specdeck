@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use specdeck_local::{Compat, Frame, Frozen, Protocol, compat};
 use specdeck_protocol::AgentId;
-use specdeck_session::messages::{Command, Event};
+use specdeck_session::messages::{Command, Event, SuggestionAnswer};
 use specdeck_session::runtime::{HostNotice, Summary};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::sync::{mpsc, oneshot};
@@ -138,6 +138,20 @@ impl SessionClient {
 
     pub fn set_viewer_limit(&self, limit: u8) {
         self.send(&Command::ViewerLimit { limit });
+    }
+
+    pub fn allow_suggestions(&self, on: bool) {
+        self.send(&Command::AllowRequests { suggestions: on });
+    }
+
+    /// Sends a waiting suggestion as `text`, which the host may have edited, or declines it
+    /// (`None`).
+    pub fn answer_suggestion(&self, viewer_id: u32, id: u32, text: Option<String>) {
+        let answer = match text {
+            Some(text) => SuggestionAnswer::Send { text },
+            None => SuggestionAnswer::Decline,
+        };
+        self.send(&Command::AnswerSuggestion { viewer_id, id, answer });
     }
 
     pub fn set_web_viewer(&self, available: bool) {

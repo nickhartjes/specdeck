@@ -838,6 +838,14 @@ fn host_observer(app: &AppHandle, id: SessionId, agent: AgentId) -> client::Obse
         HostNotice::ViewerLeft(name) => {
             notify(&observed, id, &format!("{name} left"), &format!("{name} stopped watching."));
         }
+        HostNotice::Suggestion(name) => {
+            notify(
+                &observed,
+                id,
+                &format!("{name} suggests a prompt"),
+                "Open the session to send, edit or decline it.",
+            );
+        }
         HostNotice::AgentWaiting { message } => {
             let body =
                 message.unwrap_or_else(|| "It finished and waits for your next prompt.".into());
@@ -948,6 +956,41 @@ async fn host_set_viewer_limit(
     limit: u8,
 ) -> Result<(), String> {
     with_host(&state, &window, |host| host.set_viewer_limit(limit))
+}
+
+#[tauri::command]
+async fn host_allow_suggestions(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    on: bool,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.allow_suggestions(on))
+}
+
+/// Sends a waiting suggestion as `text` (edited or not), or declines it when `text` is absent.
+#[tauri::command]
+async fn host_answer_suggestion(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    viewer_id: u32,
+    id: u32,
+    text: Option<String>,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.answer_suggestion(viewer_id, id, text))
+}
+
+/// Suggests a prompt to the host of the session this window watches.
+#[tauri::command]
+async fn suggest_prompt(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<(), String> {
+    let session = state.sessions.lock().unwrap().of_window(window.label());
+    match session {
+        Some((_, Session::Viewer(viewer))) => viewer.suggest(text),
+        _ => Err("This window does not watch a session.".into()),
+    }
 }
 
 #[tauri::command]
@@ -1947,6 +1990,9 @@ pub fn run() {
             host_new_code,
             host_remove_viewer,
             host_set_viewer_limit,
+            host_allow_suggestions,
+            host_answer_suggestion,
+            suggest_prompt,
             host_close,
             join_session,
             leave_session,

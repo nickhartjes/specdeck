@@ -47,7 +47,7 @@ describe('accessibility', () => {
     app('host');
     await screen.findByText('7K2M-9QXH-4TPA');
     expect(await violations()).toEqual([]);
-    for (const tab of ['Files', 'People']) {
+    for (const tab of ['Files', 'Prompts', 'People']) {
       await userEvent.click(screen.getByRole('tab', { name: new RegExp(tab) }));
       expect(await violations()).toEqual([]);
     }
@@ -58,6 +58,8 @@ describe('accessibility', () => {
     await userEvent.type(await screen.findByLabelText('Invite code'), '7K2M9QXH4TPA');
     await userEvent.click(screen.getByRole('button', { name: /Join/ }));
     await waitFor(() => expect(screen.getByText(/Nick's session/)).toBeInTheDocument(), { timeout: 2000 });
+    expect(await violations()).toEqual([]);
+    await userEvent.click(screen.getByRole('tab', { name: /Prompts/ }));
     expect(await violations()).toEqual([]);
   });
 

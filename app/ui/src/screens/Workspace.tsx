@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown } from 'lucide-react';
 import type { Participant, TimelineEvent, Steps, TerminalSnapshot } from '../api/types';
 import { FilesPanel } from '../components/FilesPanel';
@@ -45,6 +45,10 @@ interface Props {
   onRemove?: (participant: Participant) => void;
   viewerLimit?: number;
   onViewerLimit?: (limit: number) => void;
+  /** Host only: whether viewers may suggest prompts, with its switch; absent where they cannot. */
+  suggestions?: { allowed: boolean; onChange: (on: boolean) => void };
+  /** The Prompts tab: the viewer's suggestions or the host's inbox; absent where there are none. */
+  prompts?: { badge?: number; content: ReactNode };
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
@@ -257,6 +261,7 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(function Workspace(p
         />
       ),
     },
+    ...(props.prompts ? [{ id: 'prompts', label: 'Prompts', badge: props.prompts.badge, content: props.prompts.content }] : []),
     {
       id: 'people',
       label: 'People',
@@ -268,6 +273,8 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(function Workspace(p
           onRemove={props.onRemove}
           viewerLimit={props.viewerLimit}
           onViewerLimit={props.onViewerLimit}
+          suggestions={props.suggestions}
+          agentName={props.agentName}
         />
       ),
     },
