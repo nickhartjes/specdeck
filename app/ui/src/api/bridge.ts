@@ -33,6 +33,7 @@ export interface Bridge {
   setScreenReader(enabled: boolean): Promise<Profile>;
   setVerboseLogging(enabled: boolean): Promise<Profile>;
   setBrowser(enabled: boolean): Promise<Profile>;
+  setScreenshots(enabled: boolean): Promise<Profile>;
   updateStatus(): Promise<UpdateState>;
   /** Calls `handler` whenever the update state changes; returns a function that stops listening. */
   onUpdate(handler: (state: UpdateState) => void): () => void;

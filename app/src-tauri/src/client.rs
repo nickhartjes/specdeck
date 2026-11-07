@@ -353,6 +353,8 @@ pub struct Launch {
     pub verbose: bool,
     /// Runs the agent's browser actions; `None` gives the agent no browser.
     pub browser: Option<BrowserHandler>,
+    /// Images from MCP tools go into the timeline.
+    pub screenshots: bool,
 }
 
 /// Starts session `id` as a process of its own and starts its agent.
@@ -412,6 +414,7 @@ pub async fn launch(
             environment: launch.environment,
             verbose: launch.verbose,
             browser,
+            screenshots: launch.screenshots,
         })
         .await?;
     Ok(client)

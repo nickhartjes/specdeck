@@ -111,6 +111,8 @@ export interface Profile {
   verboseLogging: boolean;
   /** New Claude Code sessions get SpecDeck's own browser; only on macOS. */
   browser: boolean;
+  /** New sessions show screenshots in the timeline. */
+  screenshots: boolean;
 }
 
 /** Where a new release is: being looked for, downloaded, or ready to install on restart. */
@@ -168,7 +170,28 @@ export interface Answer {
 export type ToolOutcome =
   | { kind: 'answers'; answers: Answer[] }
   | { kind: 'plan-decision'; approved: boolean }
-  | { kind: 'report'; text: string; truncated: boolean };
+  | { kind: 'report'; text: string; truncated: boolean }
+  | Screenshot;
+
+/** An image an MCP tool returned, such as a browser's screenshot; without `image` when it was left out. */
+export interface Screenshot {
+  kind: 'screenshot';
+  image?: ScreenshotImage;
+  /** The page shown, without its scheme; only from SpecDeck's own browser. */
+  address?: string;
+  leftOut?: LeftOut;
+}
+
+/** Base64 data of `mediaType`, `width` by `height` pixels. */
+export interface ScreenshotImage {
+  mediaType: string;
+  data: string;
+  width: number;
+  height: number;
+}
+
+/** Why a screenshot's image was left out: the host turned screenshots off, or it could not be sent. */
+export type LeftOut = 'turned-off' | 'too-large' | 'unreadable';
 
 /** Whether the host allowed a call Claude Code asked them about. */
 export type Permission = 'allowed' | 'denied';

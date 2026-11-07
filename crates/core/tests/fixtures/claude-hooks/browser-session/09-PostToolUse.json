@@ -1,0 +1,27 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 776,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "playwright",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "39e0c42e-6b7e-430d-b341-2bd473a97e8b",
+  "session_id": "4b600686-8a82-49ba-b59b-f2e496928a8f",
+  "tool_input": {
+    "url": "http://127.0.0.1:5179/"
+  },
+  "tool_name": "mcp__playwright__browser_navigate",
+  "tool_response": [
+    {
+      "text": "### Ran Playwright code\n```js\nawait page.goto('http://127.0.0.1:5179/');\n```\n### Page\n- Page URL: http://127.0.0.1:5179/\n- Page Title: Sign in\n- Console: 1 errors, 0 warnings\n### Snapshot\n- [Snapshot](.playwright-mcp/page-2026-11-07T20-20-40-521Z.yml)\n### Events\n- New console entries: .playwright-mcp/console-2026-11-07T20-20-40-473Z.log#L1",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01EGLkRDo7pP1EhGB2KmVwnz",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/4b600686-8a82-49ba-b59b-f2e496928a8f.jsonl"
+}

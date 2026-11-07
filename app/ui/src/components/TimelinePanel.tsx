@@ -2,12 +2,13 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, X } from 'lucide-react';
 import type { TimelineModel, ToolItem, Turn } from '../model/timeline';
 import { SHOWN_IN_PART, toolSummary } from '../model/timeline';
-import { liveLine, summarize, type Step, type SummaryEntry } from '../model/steps';
+import { liveLine, screenshotOf, summarize, type Step, type SummaryEntry } from '../model/steps';
 import type { Steps } from '../api/types';
 import { DiffView } from './DiffView';
 import { formatTokens } from '../model/statusbar';
 import { Markdown } from './Markdown';
 import { asksTheHost, interactionBody, PermissionBadge } from './HostInteractions';
+import { ScreenshotThumbnail } from './Screenshot';
 
 interface Props {
   model: TimelineModel;
@@ -31,14 +32,17 @@ interface Props {
   onStep?: (outputSeq: number) => void;
   /** Opens the diffs of a file a step changed, at that step's change. */
   onOpenChange?: (path: string, toolUseId: string) => void;
+  /** Opens a call's screenshot full size in a tab; kept rather than a preview with `keep`. */
+  onOpenScreenshot?: OpenScreenshot;
 }
 
 /** What selecting a step does: its first changed file in a tab, else the terminal at its line. */
 type Select = (item: ToolItem) => void;
+type OpenScreenshot = (item: ToolItem, keep: boolean) => void;
 
 const TIME = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 
-export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump, onStep, onOpenChange }: Props) {
+export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump, onStep, onOpenChange, onOpenScreenshot }: Props) {
   const select = useCallback<Select>(
     (item) => {
       const change = item.changes[0];
@@ -161,6 +165,7 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
               current={current === turn.promptId}
               onJump={onJump}
               onSelect={select}
+              onOpenScreenshot={onOpenScreenshot}
             />
           ))}
           {live && lastTurn && <LiveLine turn={lastTurn} plansBefore={plansBeforeLast} agentName={agentName} />}
@@ -195,7 +200,7 @@ function LiveLine({ turn, plansBefore, agentName }: { turn: Turn; plansBefore: S
 const OUTCOME_ICON = { running: Loader, succeeded: Check, failed: X, 'not-run': CircleSlash, denied: Ban } as const;
 
 /** One summary line; opens to the tool calls it stands for. A plan step also offers to read it. */
-function StepView({ step, onSelect, onReadPlan }: { step: Step; onSelect: Select; onReadPlan?: (change: string, paths: string[]) => void }) {
+function StepView({ step, onSelect, onReadPlan, onOpenScreenshot }: { step: Step; onSelect: Select; onReadPlan?: (change: string, paths: string[]) => void; onOpenScreenshot?: OpenScreenshot }) {
   const Icon = OUTCOME_ICON[step.outcome];
   const plan = step.plan;
   const details = (
@@ -214,12 +219,22 @@ function StepView({ step, onSelect, onReadPlan }: { step: Step; onSelect: Select
       {() => (
         <div className="step-body">
           {step.tools.map((item) => (
-            <ToolView key={item.id} item={item} showChanges onSelect={onSelect} />
+            <ToolView key={item.id} item={item} showChanges onSelect={onSelect} onOpenScreenshot={onOpenScreenshot} />
           ))}
         </div>
       )}
     </Disclosure>
   );
+  const shot = step.screenshot;
+  const screenshot = shot && screenshotOf(shot);
+  if (shot && screenshot) {
+    return (
+      <div className="with-screenshot">
+        {details}
+        <ScreenshotThumbnail screenshot={screenshot} onOpen={onOpenScreenshot && ((keep) => onOpenScreenshot(shot, keep))} />
+      </div>
+    );
+  }
   if (!plan || !onReadPlan) return details;
   const paths = [...new Set(step.tools.flatMap((item) => item.changes.map((change) => change.path)))];
   return (
@@ -245,6 +260,7 @@ interface TurnProps {
   current: boolean;
   onJump: (seq: number) => void;
   onSelect: Select;
+  onOpenScreenshot?: OpenScreenshot;
 }
 
 // Long sessions have hundreds of turns: render only the ones that changed. The model is rebuilt
@@ -257,7 +273,7 @@ const TurnView = memo(
     (Object.keys(next) as (keyof TurnProps)[]).every((key) => key === 'turn' || key === 'summary' || prev[key] === next[key]),
 );
 
-function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, onJump, onSelect }: TurnProps) {
+function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, onJump, onSelect, onOpenScreenshot }: TurnProps) {
   const texts = turn.items.filter((item) => item.kind === 'text');
   const showResponse = turn.response && !texts.some((item) => item.text.trim() === turn.response?.trim());
   return (
@@ -274,7 +290,7 @@ function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, o
       </button>
       {(summary ?? turn.items).map((item) =>
         item.kind === 'step' ? (
-          <StepView key={item.id} step={item} onSelect={onSelect} onReadPlan={onReadPlan} />
+          <StepView key={item.id} step={item} onSelect={onSelect} onReadPlan={onReadPlan} onOpenScreenshot={onOpenScreenshot} />
         ) : item.kind === 'text' ? (
           <Markdown key={item.id} text={item.text} />
         ) : item.kind === 'notice' ? (
@@ -282,7 +298,7 @@ function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, o
             <Hand aria-hidden /> {item.text}
           </p>
         ) : (
-          <ToolView key={item.id} item={item} showChanges={latest} onSelect={onSelect} />
+          <ToolView key={item.id} item={item} showChanges={latest} onSelect={onSelect} onOpenScreenshot={onOpenScreenshot} />
         ),
       )}
       {showResponse && <Markdown text={turn.response ?? ''} />}
@@ -293,9 +309,10 @@ function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, o
 const STATUS_TEXT = { running: 'Running', succeeded: 'Done', failed: 'Failed', 'not-run': 'Did not run', denied: 'Denied by the host' } as const;
 
 /** `showChanges`: opens a call that changed files, which costs a diff each, so only where they are wanted. */
-function ToolView({ item, showChanges, onSelect }: { item: ToolItem; showChanges: boolean; onSelect: Select }) {
+function ToolView({ item, showChanges, onSelect, onOpenScreenshot }: { item: ToolItem; showChanges: boolean; onSelect: Select; onOpenScreenshot?: OpenScreenshot }) {
   const Icon = { running: Loader, succeeded: Check, failed: X, 'not-run': CircleSlash }[item.status];
-  return (
+  const screenshot = screenshotOf(item);
+  const details = (
     <Disclosure
       className={`tool ${item.status}`}
       open={(showChanges && item.changes.length > 0) || asksTheHost(item)}
@@ -321,6 +338,13 @@ function ToolView({ item, showChanges, onSelect }: { item: ToolItem; showChanges
         </div>
       )}
     </Disclosure>
+  );
+  if (!screenshot) return details;
+  return (
+    <div className="with-screenshot">
+      {details}
+      <ScreenshotThumbnail screenshot={screenshot} onOpen={onOpenScreenshot && ((keep) => onOpenScreenshot(item, keep))} />
+    </div>
   );
 }
 

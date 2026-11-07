@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { liveLine, planChangeOf, summarize, type Step } from './steps';
+import type { Screenshot } from '../api/types';
+import { liveLine, planChangeOf, screenshotOf, summarize, type Step } from './steps';
 import type { FileChange, ToolItem, ToolStatus, Turn } from './timeline';
 
 let n = 0;
@@ -127,6 +128,34 @@ describe("Claude's browser", () => {
 
   it('keeps other MCP tools as they are', () => {
     expect(steps([tool('mcp__github__create_issue', {})])[0]!.label).toBe('Used mcp__github__create_issue');
+  });
+});
+
+describe('screenshots', () => {
+  const shot = (address: string): Screenshot => ({ kind: 'screenshot', image: { mediaType: 'image/jpeg', data: 'x', width: 8, height: 5 }, address });
+  const browser = (name: string, outcome?: Screenshot) => ({ ...tool(`mcp__specdeck__${name}`, {}), ...(outcome && { outcome }) });
+
+  it('gives a browser run its latest screenshot, and each call keeps its own', () => {
+    const first = browser('screenshot', shot('localhost:5173/login'));
+    const second = browser('screenshot', shot('localhost:5173/home'));
+    const [step] = steps([browser('navigate'), first, browser('click'), second]);
+    expect(step!.screenshot).toBe(second);
+    expect(step!.tools.map((t) => screenshotOf(t)?.address ?? null)).toEqual([null, 'localhost:5173/login', null, 'localhost:5173/home']);
+  });
+
+  it('gives a single call of another MCP server its screenshot', () => {
+    const playwright = { ...tool('mcp__playwright__browser_take_screenshot', {}), outcome: shot('') };
+    expect(steps([playwright])[0]!.screenshot).toBe(playwright);
+  });
+
+  it('keeps a screenshot that was left out, with its reason', () => {
+    const left: Screenshot = { kind: 'screenshot', leftOut: 'turned-off' };
+    const [step] = steps([browser('screenshot', left)]);
+    expect(screenshotOf(step!.screenshot!)).toEqual(left);
+  });
+
+  it('gives steps without a screenshot none', () => {
+    expect(steps([browser('navigate'), browser('click')])[0]!.screenshot).toBeUndefined();
   });
 });
 

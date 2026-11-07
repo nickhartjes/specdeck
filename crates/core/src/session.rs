@@ -41,6 +41,8 @@ pub struct HostConfig {
     pub rows: u16,
     /// Where the output log and hook settings live while the session runs.
     pub data_dir: PathBuf,
+    /// Images from MCP tools go into the timeline.
+    pub screenshots: bool,
 }
 
 /// Something participants need to hear about.
@@ -278,7 +280,8 @@ impl HostSession {
             responder: Responder::Mirror,
             writer: session.writer.clone(),
             activity: Activity::new(config.agent),
-            builder: TimelineBuilder::new(SessionFolder::from_environment(&config.folder, env)),
+            builder: TimelineBuilder::new(SessionFolder::from_environment(&config.folder, env))
+                .with_screenshots(config.screenshots),
             usage: config.agent.has_timeline().then(|| UsageReader::new(usage::projects_dir(env))),
             status_line: StatusLineReader::default(),
             git: None,

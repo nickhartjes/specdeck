@@ -1,0 +1,37 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 4,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "specdeck",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "39e0c42e-6b7e-430d-b341-2bd473a97e8b",
+  "session_id": "4b600686-8a82-49ba-b59b-f2e496928a8f",
+  "tool_input": {},
+  "tool_name": "mcp__specdeck__screenshot",
+  "tool_response": [
+    {
+      "text": "http://localhost:5173/login\nSign in\n\n[1] Email\n[2] Sign in",
+      "type": "text"
+    },
+    {
+      "source": {
+        "data": "/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAGKADAAQAAAABAAAAGAAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgAGAAYAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMAAgICAgICAwICAwUDAwMFBgUFBQUGCAYGBgYGCAoICAgICAgKCgoKCgoKCgwMDAwMDA4ODg4ODw8PDw8PDw8PD//bAEMBAgICBAQEBwQEBxALCQsQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEP/dAAQAAv/aAAwDAQACEQMRAD8A+RNU134uftqfHeDTJ9SE+r+Iri4Fhb3c7JZ2UEaPN5SABgipGh6LliMnJJNfQH/Drv8AaLzj+0dAB/6+5f8A4zXj37B67/2rfA6bBJuOpDaTgNnTrngnsD0zX7xfDiw+KXw9sNL8GavpcniS2kmaR9QW/j8rToJpCVtUE/8ApE6WyYAd/ncfgB72ZY2dGShTslb/ADODC0I1FzSP52/APxD+Jv7LPxemn0a+ks9S8O37Wuo2kUpNtdrbybZYZB910YAgEjI4YYIBr7x/4ey/En/oVbD83/xr4M/agt/s/wC0J4/4wJNXunH/AAKQ5/XNeD17FTCwk7zWpxRqyWkWf//Q+MPFvhH4xfsgfGUSBJtF1zQbiY6dqBhDQXMLBo/NiMiskiSRsQRzjJBwRivX5f8Agov+1E4/c65aRH1+wwN+PK19B/8ABWX/AJKT4V/68G/9DNfkpX2VGMakFOcU212T/M8WbcZOMWz3v4e/D34qftTfFWPT9Ngm1TU9XuQ9/fCPENtG75knmYDaqjJODyx4UEkCvvD/AIdNfEn/AKGqw/J/8KX/AIJNf8lI8V/9eC/+hiv3orhzDMKkKlkdGGw0ZRuz/9k=",
+        "media_type": "image/jpeg",
+        "type": "base64"
+      },
+      "type": "image"
+    },
+    {
+      "text": "[Image: source: /home/user/.claude/projects/-workspace-project/4b600686-8a82-49ba-b59b-f2e496928a8f/tool-results/mcp-specdeck-blob-1794082837486-tzxgkt.jpg]",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01NUY5VY2wF5uy9zWGin6FzL",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/4b600686-8a82-49ba-b59b-f2e496928a8f.jsonl"
+}
