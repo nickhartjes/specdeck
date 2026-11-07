@@ -38,7 +38,7 @@
 ## 6. Integration
 
 - [x] 6.1 In `just dev`, with a host on this build: an app viewer and a browser viewer suggest; the host sends one as written, edits and sends one, and declines one; each viewer sees only their own; the host closes and reopens the window and the waiting ones are still there. Verify by following the scenarios of `viewer-requests` and noting the result in the PR.
-- [ ] 6.2 With a web viewer page built from `main` before this change (protocol 2) served by a local sharing service, join this build's host. Verify the page watches the session without errors or reconnects while the host turns suggestions on and another viewer suggests.
+- [ ] 6.2 With a web viewer page built from `main` before this change (protocol 2) served by a local sharing service, join this build's host. Verify the page watches the session without errors or reconnects while the host turns suggestions on and another viewer suggests. *Not run by hand; covered by `an_older_viewer_watches_without_receiving_newer_messages` in `crates/core/tests/sharing.rs`, a protocol 2 viewer driven by the same viewer code the page compiles.*
 - [x] 6.3 Update `docs/design/README.md`: #51 and the core of #52 are proposed in `viewer-to-host-channel`, and the rest of #52 stays open. Verify the README's table matches the proposal's scope.
 
 ## Workflow follow-up

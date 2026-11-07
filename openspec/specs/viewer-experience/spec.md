@@ -54,11 +54,15 @@ A viewer SHALL be able to see a list of all prompts in the session and jump to a
 - **THEN** the terminal and timeline scroll to that prompt and the viewer is in free-scroll
 
 ### Requirement: Read-only for viewers
-The viewer interface SHALL make clear that the session is read-only and SHALL offer no control that sends input to the session.
+The viewer interface SHALL make clear that the viewer watches a session the host controls, and SHALL offer no control that sends input to the session. A viewer SHALL be able to send the host only the requests the host allows (see `viewer-requests`); the interface SHALL make clear that these go to the host, not to the agent.
 
 #### Scenario: Viewer interface
 - **WHEN** a viewer is in a session
 - **THEN** the interface shows that they are viewing and has no input field or control for the agent session
+
+#### Scenario: Suggesting is not typing
+- **WHEN** the host allows prompt suggestions and a viewer opens the place to suggest one
+- **THEN** it says that the suggestion goes to the host, who decides whether to send it to the agent
 
 ### Requirement: Session status
 Participants SHALL see whether the session is live, whether the agent is working or waiting for the host, and when the session has ended. For an agent whose events the app does not capture, working and waiting SHALL be shown as unknown rather than guessed, unless the agent reports its own state (see `agent-status`). A terminal session SHALL show whether it is live or ended, and, while a program in it reports its state, whether that program is working or waiting.
