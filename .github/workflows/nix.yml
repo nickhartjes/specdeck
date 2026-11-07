@@ -20,6 +20,8 @@ on:
       - package.json
       - app/ui/package.json
       - app/src-tauri/tauri.conf.json
+      - app/src-tauri/tauri.bundle.conf.json
+      - scripts/session-binary.mjs
       - .github/workflows/nix.yml
   workflow_dispatch:
 

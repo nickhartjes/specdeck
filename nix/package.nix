@@ -73,7 +73,17 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   buildAndTestSubdir = "app/src-tauri";
 
-  env = lib.optionalAttrs (signallingUrl != null) { SPECDECK_SIGNALLING_URL = signallingUrl; };
+  # Adds the session binary next to the app (scripts/session-binary.mjs), built with --target like
+  # the app, so the dependencies compile once.
+  tauriBuildFlags = [
+    "--config"
+    "tauri.bundle.conf.json"
+  ];
+
+  env = {
+    SESSION_BINARY_TARGET = "1";
+  }
+  // lib.optionalAttrs (signallingUrl != null) { SPECDECK_SIGNALLING_URL = signallingUrl; };
 
   # The tests need network access and a pty; they run in CI instead.
   doCheck = false;

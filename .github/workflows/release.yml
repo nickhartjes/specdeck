@@ -178,11 +178,16 @@ jobs:
           else
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; this release has no update files."
           fi
-          pnpm tauri build --bundles ${{ matrix.bundles }} "${configs[@]}"
+          # tauri.bundle.conf.json adds the session binary (session-processes design decision 1).
+          pnpm tauri build --bundles ${{ matrix.bundles }} --config app/src-tauri/tauri.bundle.conf.json "${configs[@]}"
 
       - name: Check installer size
         shell: bash
         run: scripts/check-installer-size.sh 25 100 target/release/bundle
+
+      - name: Check installers carry the session binary
+        shell: bash
+        run: scripts/check-session-binary.sh target/release/bundle
 
       - name: Upload to the draft under stable names
         shell: bash

@@ -53,9 +53,9 @@ capacity:
 fmt:
     cargo fmt --all
 
-# Build installers for this platform (target/release/bundle)
+# Build installers for this platform (target/release/bundle), with the session binary next to the app
 package:
-    pnpm tauri build
+    pnpm tauri build --config app/src-tauri/tauri.bundle.conf.json
 
 # Start the documentation site with live reload (http://localhost:4321/specdeck/)
 docs:

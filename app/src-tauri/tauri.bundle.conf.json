@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBuildCommand": "pnpm --filter @specdeck/ui build && pnpm --workspace-root run session-binary"
+  },
+  "bundle": {
+    "externalBin": ["binaries/specdeck-session"]
+  }
+}

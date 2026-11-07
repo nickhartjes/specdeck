@@ -61,6 +61,10 @@ jobs:
         shell: bash
         run: scripts/check-installer-size.sh 25 100 target/release/bundle
 
+      - name: Check installers carry the session binary
+        shell: bash
+        run: scripts/check-session-binary.sh target/release/bundle
+
       - uses: actions/upload-artifact@v7
         with:
           name: installers-${{ matrix.os }}

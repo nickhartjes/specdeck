@@ -21,3 +21,6 @@ deploy/compose/.env
 # The web viewer: WebAssembly package (just web-wasm) and page build (pnpm build:web)
 crates/web/pkg/
 dist-web/
+
+# The session binary for installer builds (scripts/session-binary.mjs)
+app/src-tauri/binaries/

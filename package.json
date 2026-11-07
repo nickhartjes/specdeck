@@ -7,7 +7,8 @@
     "tauri": "tauri",
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "session-binary": "node scripts/session-binary.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
