@@ -1,5 +1,5 @@
 // The web viewer's bridge (`web-viewer` design decision 4): watching only, through the sharing
-// service that served the page. The viewer's name and view stay in this browser's storage; host,
+// service that served the page. The viewer's name and layout stay in this browser's storage; host,
 // folder, agent and update calls are not part of the web viewer and fail.
 
 import type { Bridge } from '../api/bridge';
@@ -7,7 +7,7 @@ import type { JoinLink, Profile, View } from '../api/types';
 import { Connection, type Platform, type ViewerCore } from './connection';
 
 /** Keys in the browser's storage. */
-export const STORAGE_KEYS = { username: 'specdeck.username', view: 'specdeck.view' } as const;
+export const STORAGE_KEYS = { username: 'specdeck.username', view: 'specdeck.view', layout: 'specdeck.layout' } as const;
 
 export interface WebBridgeOptions {
   /** This page's sharing service, `wss://…/signal`; the only one it joins through. */
@@ -55,6 +55,17 @@ function readView(storage: Storage | null): View | null {
   }
 }
 
+/** The stored layout as is; `model/layout.ts` reads it. */
+function readLayout(storage: Storage | null): unknown {
+  const text = read(storage, STORAGE_KEYS.layout);
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 const notInTheWebViewer = () => Promise.reject(new Error('The web viewer can only watch sessions.'));
 
 export function webBridge(options: WebBridgeOptions): Bridge {
@@ -62,7 +73,9 @@ export function webBridge(options: WebBridgeOptions): Bridge {
   let connection: Connection | null = null;
   // Kept here as well, so a browser that stores nothing still remembers them until reload.
   let username = read(storage, STORAGE_KEYS.username);
-  let view = readView(storage);
+  // The view of earlier versions, to make the first layout from.
+  const view = readView(storage);
+  let layout = readLayout(storage);
 
   const profile = (): Profile => ({
     username,
@@ -74,6 +87,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     watchedSessions: connection !== null ? 1 : 0,
     notifications: false,
     view,
+    layout,
     translucent: false,
     platform: 'web',
     sharingService: null,
@@ -112,9 +126,9 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     updateStatus: () => Promise.resolve({ state: 'disabled' }),
     onUpdate: () => () => {},
     restartToUpdate: notInTheWebViewer,
-    setView: (next) => {
-      view = next;
-      write(storage, STORAGE_KEYS.view, JSON.stringify(next));
+    setLayout: (next) => {
+      layout = next;
+      write(storage, STORAGE_KEYS.layout, JSON.stringify(next));
       return Promise.resolve(profile());
     },
     setSharingService: notInTheWebViewer,

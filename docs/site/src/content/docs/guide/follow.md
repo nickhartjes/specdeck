@@ -3,22 +3,40 @@ title: Follow a session
 description: Choose what you see, scroll back, search and copy.
 ---
 
-<video class="video" controls preload="none" poster="/specdeck/video/following.jpg" src="/specdeck/video/following.mp4" aria-label="Following a session: Overview and Developer, the agent's steps and the host's decisions, View, search, Files and the status bar (1.5 minutes, narrated, with captions)"></video>
+<video class="video" controls preload="none" poster="/specdeck/video/following.jpg" src="/specdeck/video/following.mp4" aria-label="Following a session: Overview and Developer, the agent's steps and the host's decisions, the view settings, search, Files and the status bar (1.5 minutes, narrated, with captions; recorded before the window had panels and tabs)"></video>
 
-## Choose what you see
+## The window
 
-Select **View** at the top of the session to change how you follow it. Your choice is remembered, and nobody else's view changes.
+The session window has three parts:
 
-| Setting | What it does |
+- **Files**, on the left: the documents and the code the agent touched.
+- **Tabs**, in the middle: the terminal, and the documents and diffs you open.
+- **Timeline**, on the right: each prompt, and what the agent did for it.
+
+## Choose a layout
+
+The layout button at the top of the session sets up the window for how you follow it. Your layout is remembered for every session, and nobody else's window changes.
+
+| Layout | What you get |
 |---|---|
-| **Show terminal** | Shows or hides the host's terminal. Hidden, it keeps running out of sight, so it comes back at once with everything that happened |
-| **Steps: Summary** | Each thing the agent did as one line in plain words, such as *Ran the test suite* (in the agent's own words), *Looked at 3 files*, *Changed 2 files* or *Updated the plan*, marked as done, failed or running. Select a line to see the commands, files and diffs behind it |
-| **Steps: Details** | Every tool call with its input and outcome, and the diffs of changed files |
-| **Show the first-join question again** | Asks how you want to follow sessions once more |
+| **Overview** | Documents and the timeline in plain words, with the newest plan in front. No terminal tab |
+| **Developer** | The code, the terminal and every step |
+| **Present** | Only the middle, with both side panels closed, for sharing your screen |
 
-With the terminal hidden, a line at the bottom of the conversation says what the agent is doing right now and for how long, such as *Claude is running the test suite · 12 s*, or what it is waiting for when it needs the host.
+Change the window by hand as you like: close a panel with its **×** or the buttons next to the layout button, drag the line between two panels to make one wider (or focus it and use the arrow keys), and double-click that line to put the panel back at its usual width. SpecDeck remembers your changes and shows the layout as *adjusted*; choose it again to go back to it. Each layout keeps its own panel widths.
 
-The host's terminal is always shown, because the host types into it; the host can still choose summary or details for the steps. Sessions with OpenCode, omp, Codex, Grok, pi or a plain terminal have no steps to show, so the terminal stays shown there, with a note why.
+Switch the timeline between **Plain words** and **Every step** at its top:
+
+- **Plain words:** each thing the agent did as one line, such as *Ran the test suite* (in the agent's own words), *Looked at 3 files*, *Changed 2 files* or *Updated the plan*, marked as done, failed or running. Select a line to see the commands, files and diffs behind it.
+- **Every step:** every tool call with its input and outcome, and the diffs of changed files.
+
+**Show the first-join question again**, under the layout button, asks how you want to follow sessions once more.
+
+When the terminal is not shown, a line at the bottom of the timeline says what the agent is doing right now and for how long, such as *Claude is running the test suite · 12 s*, or what it is waiting for when it needs the host.
+
+The host always has the terminal tab, because the host types into it. Sessions with OpenCode, omp, Codex, Grok, pi or a plain terminal have no steps to show, so the terminal tab is always there, with a note why.
+
+On a narrow window, such as a browser on a phone, you see one part at a time and switch with **Files**, **Session** and **Timeline** at the top.
 
 ## When Claude asks the host
 
@@ -58,13 +76,15 @@ Agents report their state through the terminal (the [Program Status Protocol](ht
 |---|---|
 | Read earlier output | Scroll up in the terminal. New output keeps arriving without moving your view; select **Jump to live** to follow it again |
 | Find something | Press **⌘F** (macOS) or **Ctrl+F** (Windows, Linux) and type. **Enter** goes to the next match, **Shift+Enter** to the previous one. The search covers the terminal and the timeline. In the host's own terminal on Windows and Linux, use **Ctrl+Shift+F**, because Ctrl+F belongs to the terminal |
-| See what happened per prompt | Open **Timeline**. Each prompt shows the agent's answer, its tool calls (succeeded, failed or did not run) and the diffs of files it changed |
+| See what happened per prompt | Look at the **Timeline**. Each prompt is numbered, with the agent's answer and its steps (done, failed, running or did not run) on a line beside it |
 | Go to a prompt | Use **Jump to** at the top of the timeline, or select a prompt: the terminal scrolls to where it happened |
-| See which files changed | Open **Files**. Select a changed file to see all its diffs in order |
-| Switch between Timeline, Files and People | Select the tab, or press **⌘1**, **⌘2**, **⌘3** (macOS) or **Ctrl+1**, **Ctrl+2**, **Ctrl+3** (Windows, Linux) |
+| See a step's change | Select the step. A step that changed a file opens that file's diffs in a tab, at that change; any other step shows the terminal at its line, highlighted for a moment |
+| See which files changed | Look in **Files**, under **Documents** or **Code**. Each file says whether the agent created, changed or only read it. Select a changed file to see all its diffs in order; select a file it only read to see where in the terminal it read it |
+| Open a file for a while | A single click opens a file in a preview tab, in italics, which the next file you open replaces. Double-click the file or the tab to keep it open; scrolling or selecting text in a preview keeps it too |
+| Show or hide the files, the terminal or the timeline | Press **⌘1**, **⌘2**, **⌘3** (macOS) or **Ctrl+1**, **Ctrl+2**, **Ctrl+3** (Windows, Linux), from left to right. **⌘2** or **Ctrl+2** goes to the terminal tab, and adds it in Overview |
 | Copy | Select text in the terminal, the timeline or a diff and copy it: **⌘C** on macOS; on Windows and Linux **Ctrl+C** copies while text is selected (in your own terminal, without a selection it interrupts the agent, as in any terminal) and **Ctrl+Shift+C** always copies. Copying never sends anything to the session |
-| Make the side panel wider or narrower | Drag the line between the terminal and the side panel, or focus it and use the left and right arrow keys. SpecDeck remembers the width |
-| Read the terminal larger or smaller | The terminal keeps the host's size and scales its text to fill the width of your terminal pane, following the latest output. Give the pane more room (a wider window, a narrower side panel) for larger text. [Zoom](/specdeck/guide/keyboard/) makes the rest of the window larger; the terminal keeps filling its pane |
+| See who is in the session | Point at the avatars at the top; select them for the list |
+| Read the terminal larger or smaller | The terminal keeps the host's size and scales its text to fill the width of the tab area, following the latest output. Give it more room (a wider window, narrower or closed side panels) for larger text. [Zoom](/specdeck/guide/keyboard/) makes the rest of the window larger; the terminal keeps filling its tab |
 
 What you scroll, search or open only changes your own view.
 

@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Eye, LogOut, WifiOff } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, EndReason, Participant, TerminalSnapshot, TimelineEvent, View, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, EndReason, Participant, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
 import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
-import { DEVELOPER_VIEW, FirstJoinDialog, ViewMenu } from '../components/ViewMenu';
+import { FirstJoinDialog } from '../components/FirstJoinDialog';
+import { LayoutControls } from '../components/LayoutMenu';
+import { PeopleButton } from '../components/PeopleButton';
+import { choose, type Layout } from '../model/layout';
+import { useLayout } from './useLayout';
 import { statusBarInfo } from '../model/statusbar';
 import { nextRequest } from '../model/request';
 import { formatCode } from '../model/code';
@@ -93,9 +97,9 @@ export function viewerReducer(state: State, event: ViewEvent): State {
 
 interface Props {
   code: string;
-  /** How this person follows sessions; null until they answered the first-join question. */
-  view: View | null;
-  onView: (view: View) => void;
+  /** How this person arranges the window; null until they answered the first-join question. */
+  layout: Layout | null;
+  onLayout: (layout: Layout) => void;
   /** Screen readers read the terminal; the setting in Settings. */
   screenReader?: boolean;
   /** Back to the start screen; with the code and a message when the join did not work. */
@@ -107,11 +111,12 @@ interface Props {
 }
 
 /** Watching someone else's session, read-only. */
-export function ViewerScreen({ code, server, view, onView, screenReader = false, onLeave , update }: Props) {
+export function ViewerScreen({ code, server, layout: stored, onLayout, screenReader = false, onLeave, update }: Props) {
   const bridge = useBridge();
   const onTerminalState = useCallback((snapshot: TerminalSnapshot) => void bridge.reportTerminal(snapshot).catch(() => {}), [bridge]);
-  const [asking, setAsking] = useState(view === null);
-  const shown = view ?? DEVELOPER_VIEW;
+  const [layout, setLayout] = useLayout(stored, onLayout);
+  const [asking, setAsking] = useState(stored === null);
+  const shown = layout ?? choose('developer');
   const workspace = useRef<WorkspaceHandle>(null);
   const [state, dispatch] = useReducer(viewerReducer, initial);
   useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
@@ -184,13 +189,14 @@ export function ViewerScreen({ code, server, view, onView, screenReader = false,
         {state.phase === 'ended' && <span className="pill ended">Ended</span>}
         <div className="spacer" />
         {update}
-        <ViewMenu view={shown} onChange={onView} onAskAgain={() => setAsking(true)} />
+        {state.participants.length > 0 && <PeopleButton participants={state.participants} me={state.viewerId} />}
+        <LayoutControls layout={shown} onLayout={setLayout} onAskAgain={() => setAsking(true)} />
         <button className="btn" onClick={leave}>
           <LogOut aria-hidden /> Leave
         </button>
       </header>
       <div>
-        {!shown.terminal && state.phase !== 'joining' && !state.timelineSupported && (
+        {!shown.terminalTab && state.phase !== 'joining' && !state.timelineSupported && (
           <div className="banner info" role="status">
             This session can only be followed in the terminal: {terminal ? 'a terminal session has no steps to show.' : `${agentName} does not share its steps.`}
           </div>
@@ -214,12 +220,10 @@ export function ViewerScreen({ code, server, view, onView, screenReader = false,
           agentName={agentName}
           terminal={terminal}
           screenReader={screenReader}
-          steps={shown.steps}
-          terminalHidden={!shown.terminal && state.timelineSupported}
+          layout={shown}
+          onLayout={setLayout}
           timelineSupported={state.timelineSupported}
           timeline={state.timeline}
-          participants={state.participants}
-          me={state.viewerId}
         />
         {state.phase === 'joining' && (
           <div className="overlay" style={{ position: 'absolute', background: 'var(--window)' }}>
@@ -234,9 +238,9 @@ export function ViewerScreen({ code, server, view, onView, screenReader = false,
       <StatusBar info={statusBar} />
       {asking && (
         <FirstJoinDialog
-          onChoose={(chosen) => {
+          onChoose={(preset) => {
             setAsking(false);
-            onView(chosen);
+            setLayout(choose(preset, layout ?? undefined));
           }}
         />
       )}

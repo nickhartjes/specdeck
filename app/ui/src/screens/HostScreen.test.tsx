@@ -20,7 +20,7 @@ async function setup(overrides: Partial<Bridge> = {}, screenReader?: boolean) {
     await base(sink, events);
   });
   const onEnded = vi.fn();
-  renderWith(bridge, <HostScreen view={null} onView={vi.fn()} screenReader={screenReader} onEnded={onEnded} />);
+  renderWith(bridge, <HostScreen layout={null} onLayout={vi.fn()} screenReader={screenReader} onEnded={onEnded} />);
   await within(screen.getByRole('banner')).findByText('webshop');
   return { bridge, onEnded };
 }
@@ -98,7 +98,7 @@ describe('host screen', () => {
 
   it('removes a viewer after confirming', async () => {
     const { bridge } = await setup();
-    await userEvent.click(screen.getByRole('tab', { name: /People/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Remove Bram' }));
     expect(screen.getByRole('alertdialog')).toHaveTextContent('The invite code changes');
     await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
@@ -107,7 +107,7 @@ describe('host screen', () => {
 
   it('tells duplicate names apart and changes the viewer limit', async () => {
     const { bridge } = await setup();
-    await userEvent.click(screen.getByRole('tab', { name: /People/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
     expect(screen.getByText('Anna de Vries (2)')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Fewer viewers' }));
     expect(bridge.hostSetViewerLimit).toHaveBeenCalledWith(19);
@@ -185,12 +185,18 @@ describe('host screen', () => {
     expect(dialog).toHaveTextContent('The invite code stops working.');
   });
 
-  it('never asks the host how to follow, and offers only the step detail', async () => {
+  it('never asks the host how to follow, and starts as a developer with the terminal', async () => {
     await setup();
     expect(screen.queryByRole('dialog', { name: /How do you want to follow/ })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'View' }));
-    expect(screen.queryByLabelText('Show terminal')).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /Details/ })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Developer' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Terminal' })).toHaveAttribute('aria-selected', 'true');
+    await userEvent.click(screen.getByRole('button', { name: 'Developer' }));
+    expect(screen.queryByRole('button', { name: /first-join question/ })).not.toBeInTheDocument();
+  });
+
+  it('names who is in the session on the avatars', async () => {
+    await setup();
+    expect(screen.getByRole('button', { name: /^People:/ })).toHaveAttribute('title', expect.stringMatching(/\(host\), .* watching$/));
   });
 
   it('says when the agent has exited', async () => {

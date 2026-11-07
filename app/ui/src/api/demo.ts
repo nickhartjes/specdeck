@@ -17,6 +17,7 @@ export const demoProfile: Profile = {
   lastAgent: 'claude-code',
   notifications: true,
   view: null,
+  layout: null,
   translucent: false,
   agents: [
     {
@@ -315,7 +316,7 @@ export function demoBridge(screen: string): Bridge {
     updateStatus: async () => (screen === 'start' ? { state: 'ready', version: '1.2.1' } : { state: 'idle' }),
     onUpdate: () => () => {},
     restartToUpdate: async () => {},
-    setView: async (view) => ({ ...profile, view }),
+    setLayout: async (layout) => ({ ...profile, layout }),
     setSharingService: async (service) => {
       const url = service.trim() ? `wss://${service.trim()}/signal` : null;
       return { ...profile, sharingService: url, effectiveService: url ?? profile.builtInService };

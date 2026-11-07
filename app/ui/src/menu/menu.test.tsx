@@ -100,8 +100,10 @@ describe('menu commands', () => {
 
   it('View and Edit > Find act on the session', async () => {
     await setup('host');
-    act(() => menu({ id: 'tab:people' }));
-    expect(screen.getByRole('tab', { name: /People/ })).toHaveAttribute('aria-selected', 'true');
+    act(() => menu({ id: 'panel:files' }));
+    expect(screen.getByRole('button', { name: 'Files', pressed: false })).toBeInTheDocument();
+    act(() => menu({ id: 'panel:files' }));
+    expect(screen.getByRole('button', { name: 'Files', pressed: true })).toBeInTheDocument();
     act(() => menu({ id: 'find' }));
     expect(screen.getByLabelText('Find in session')).toHaveFocus();
     act(() => menu({ id: 'jump-to-live' }));

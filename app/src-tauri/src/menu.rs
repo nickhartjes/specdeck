@@ -15,6 +15,14 @@ use tauri::{AppHandle, Runtime};
 /// Menu items whose id starts with this open a recent folder; the rest is its index.
 pub const RECENT_PREFIX: &str = "recent:";
 
+/// The session window's panels in the View menu, numbered from left to right as they are
+/// shown (`session-window-layout` design decision 6). Cmd/Ctrl+0 stays Actual Size.
+const PANELS: [(&str, &str, &str); 3] = [
+    (ids::FILES, "Files", "CmdOrCtrl+1"),
+    (ids::TERMINAL, "Terminal", "CmdOrCtrl+2"),
+    (ids::TIMELINE, "Timeline", "CmdOrCtrl+3"),
+];
+
 /// Ids the UI handles, as sent in the `menu` event.
 pub mod ids {
     /// Handled in Rust: opens another session window with the start screen.
@@ -24,9 +32,10 @@ pub mod ids {
     pub const COPY_CODE: &str = "copy-code";
     pub const FIND: &str = "find";
     pub const SETTINGS: &str = "settings";
-    pub const TIMELINE: &str = "tab:timeline";
-    pub const FILES: &str = "tab:files";
-    pub const PEOPLE: &str = "tab:people";
+    /// Open or close the session window's panels, numbered from left to right.
+    pub const FILES: &str = "panel:files";
+    pub const TERMINAL: &str = "panel:terminal";
+    pub const TIMELINE: &str = "panel:timeline";
     pub const JUMP_TO_LIVE: &str = "jump-to-live";
     pub const SHORTCUTS: &str = "shortcuts";
     pub const CONNECTION_STATUS: &str = "connection-status";
@@ -149,10 +158,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item(app, ids::FIND, "Find…", keys("Cmd+F", None), true)?)
         .build()?;
 
-    let mut view = SubmenuBuilder::new(app, "View")
-        .item(&item(app, ids::TIMELINE, "Timeline", Some("CmdOrCtrl+1"), true)?)
-        .item(&item(app, ids::FILES, "Files", Some("CmdOrCtrl+2"), true)?)
-        .item(&item(app, ids::PEOPLE, "People", Some("CmdOrCtrl+3"), true)?)
+    let mut view = SubmenuBuilder::new(app, "View");
+    for (id, label, accelerator) in PANELS {
+        view = view.item(&item(app, id, label, Some(accelerator), true)?);
+    }
+    let mut view = view
         .separator()
         .item(&item(app, ids::ZOOM_IN, "Zoom In", Some("CmdOrCtrl+="), true)?)
         .item(&item(app, ids::ZOOM_OUT, "Zoom Out", Some("CmdOrCtrl+-"), true)?)
@@ -217,6 +227,20 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panels_are_numbered_from_left_to_right_and_leave_zero_to_zoom() {
+        let keys: Vec<_> = PANELS.iter().map(|(id, _, key)| (*id, *key)).collect();
+        assert_eq!(
+            keys,
+            [
+                ("panel:files", "CmdOrCtrl+1"),
+                ("panel:terminal", "CmdOrCtrl+2"),
+                ("panel:timeline", "CmdOrCtrl+3")
+            ]
+        );
+        assert!(PANELS.iter().all(|(_, _, key)| *key != "CmdOrCtrl+0"));
+    }
 
     #[test]
     fn check_for_updates_is_offered_only_where_the_install_updates_itself() {

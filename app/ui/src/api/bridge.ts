@@ -3,6 +3,7 @@
 
 import type { MenuCommand } from '../menu/menu';
 import type { Heartbeat } from '../model/heartbeat';
+import type { Layout } from '../model/layout';
 import { createContext, useContext } from 'react';
 import type {
   AgentId,
@@ -15,7 +16,6 @@ import type {
   ServiceCheck,
   TerminalSnapshot,
   UpdateState,
-  View,
   ViewEvent,
 } from './types';
 
@@ -37,7 +37,8 @@ export interface Bridge {
   onUpdate(handler: (state: UpdateState) => void): () => void;
   /** Ends or leaves the session, installs the ready update and restarts; fails if it cannot. */
   restartToUpdate(): Promise<void>;
-  setView(view: View): Promise<Profile>;
+  /** Remembers how the user arranges the session window. */
+  setLayout(layout: Layout): Promise<Profile>;
   /** A domain or URL; empty for the built-in service. Fails for what is not a service. */
   setSharingService(service: string): Promise<Profile>;
   checkSharingService(service: string): Promise<ServiceCheck>;

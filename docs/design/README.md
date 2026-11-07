@@ -11,7 +11,7 @@ Two clickable designs, both with the same features. Open them in a browser.
 
   It departs from the layout choices in places: the layout follows the person, and it has no layout presets. Its panels can be resized, per person. It is ahead of the mockup with the braindump, files for the project, the Markdown source view, shared links, Claude's browser and the host's app.
 
-Which look, and which of the concept's ideas, to take is still open.
+The window takes the concept's look and the mockup's layout presets: the OpenSpec change `session-window-layout` (#63) decided it, and its specs describe the behaviour. The terminal stays dark in both appearances and keeps the platform's own monospace font; the panels stay where they are for every person (the concept moves Sanne's timeline to the left).
 
 The details below describe `workspace-mockup.html`, except the braindump, files for the project, the Markdown source view, shared links, Claude's browser and the host's app, which are so far only in the concept. Both are clickable sketches; the mockup is one with made-up data, and it is not the app. Nothing in it is decided until a change is proposed for it (`/opsx:propose`), and the OpenSpec specs then describe the behaviour. This file lists what the mockup shows, which issue each part belongs to, and what is still open.
 
@@ -38,21 +38,22 @@ The layouts Overview, Developer and Present set these panels for each kind of pe
 
 These came out of exploring the panels idea (the session that made the first version of the mockup):
 
-- **An IDE layout.** Panels open and close from the toolbar, with ×, or by keyboard: Cmd/Ctrl+1 for files, Cmd/Ctrl+2 for the timeline, Cmd/Ctrl+0 for the terminal. The mockup uses Alt, because the browser takes Cmd+1. The dividers can be dragged, or moved with the arrow keys. On a narrow window the panels slide in over the tabs.
-- **Tabs like an editor's.** One click opens a preview tab, in italics, which the next click replaces. A double click keeps the tab open. The terminal tab can't be closed.
-- **The document reader becomes a tab** instead of the overlay it is today. *Read a document* (plan-documents) says reading must not interrupt the session, and a tab does that better.
+- **An IDE layout.** Panels open and close from the toolbar, with ×, or by keyboard, numbered from left to right: Cmd/Ctrl+1 for files, Cmd/Ctrl+2 for the terminal, Cmd/Ctrl+3 for the timeline. Cmd/Ctrl+0 stays Actual Size. The mockup uses Alt, because the browser takes Cmd+1, and so does the web viewer. The dividers can be dragged, or moved with the arrow keys. On a narrow window the panels slide in over the tabs.
+- **Tabs like an editor's.** One click opens a preview tab, in italics, which the next click replaces. A double click keeps the tab open, and so does scrolling or selecting in it. The terminal tab can't be closed. Preview tabs are for everyone, product owners too.
+- **The document reader becomes a tab** instead of the overlay it is today, one tab per document, with the plan's other documents linked at the top. *Read a document* (plan-documents) says reading must not interrupt the session, and a tab does that better.
 - **People moves to the avatars** in the title bar, so Files and Timeline no longer share one strip of tabs.
 - **A timeline step opens a tab** at the change, or switches to the terminal and highlights the line.
-- **The host's terminal keeps its size** while another tab is shown. The agent's terminal must not resize because the host is reading a file.
-- **Which files the tree shows:** option A first, the files the agent touched, with the full text of changed files sent the way documents already are. That's a small protocol change, and viewers see only what the session showed. Option B, the whole project, means the host exposes their working folder. It would be a change of its own: opt-in, respecting `.gitignore`, with a deny list for files like `.env`, and covered in the security docs. The mockup's *Touched files / Whole project* switch shows both.
+- **The host's terminal keeps its size** while another tab is shown. The agent's terminal must not resize because the host is reading a file, and it resizes once when a divider drag or a panel toggle ends.
+- **Layouts are presets** (Overview, Developer, Present) that replace the View menu; the first-join question picks one. The window is remembered as the person left it, and choosing the preset again restores it. In Overview a viewer has no terminal tab; the host always has one.
+- **Which files the tree shows:** option A first, the files the agent touched. A changed code file opens its diffs, and a file the agent only read opens the terminal where it was read. Sending the full text of changed code files moves to #56, together with the host's setting for it, so #63 needs no protocol change. Option B, the whole project, means the host exposes their working folder. It would be a change of its own: opt-in, respecting `.gitignore`, with a deny list for files like `.env`, and covered in the security docs. The mockup's *Touched files / Whole project* switch shows both.
 
 ## Parts and their issues
 
 | Part of the mockup | Issue | Open questions |
 |---|---|---|
-| The window: three panels, tabs in the middle, a row for requests, layouts for each kind of person, resizable panels, a Files / Session / Timeline switch on narrow windows, and the file tree of touched files (option A) | #63 | The look (current style or the concept); fixed layouts or the layout following the person; preview tabs for product owners? |
+| The window: three panels, tabs in the middle, a row for requests, layouts for each kind of person, resizable panels, a Files / Session / Timeline switch on narrow windows, and the file tree of touched files (option A) | #63 | Decided in `session-window-layout`: the concept's look, layout presets, preview tabs for everyone. |
 | *Whole project* in the files panel, with a deny list (`.env`), and the host's *Any file in the project* | #64 (on #51) | Off by default; respects `.gitignore`; a security review first. |
-| Files panel: *Documents*, *Code* and *Shared* tabs; a code file shows *Changes* or *Whole file, changes marked*; every Markdown file shows *Formatted* or *Source* | #56 | Whole-file view next to the diff or instead of it? Syntax highlighting, given the installer-size limit? |
+| Files panel: *Documents*, *Code* and *Shared* tabs; a code file shows *Changes* or *Whole file, changes marked*, with the full text of changed files sent the way documents already are (a protocol change), and the host's *Code viewers can open*; every Markdown file shows *Formatted* or *Source* | #56 | Whole-file view next to the diff or instead of it? Syntax highlighting, given the installer-size limit? |
 | *Shared* tab, *Shared with everyone*: files to look at together, and the host's *Put in the session folder* | #55 | Size and type limits; do files stay for late joiners? |
 | *Shared* tab, *Braindump for Claude*: everyone adds notes and files; the host gives them to Claude with an editable prompt | #61 (on #51) | Limits; does the braindump outlive the session? Can people remove their own items? |
 | *Shared* tab, *Files for the project*: a developer offers a file at a path; the host adds or declines it | #62 (on #51) | Never outside the session folder, never overwriting without the host confirming. |
@@ -63,7 +64,7 @@ These came out of exploring the panels idea (the session that made the first ver
 | Sharing settings (the sliders button): which code viewers can open, suggestions, adding files and notes, saving a recap | #51, #56, #57, #64 | The defaults. |
 | *Joined late*: a "so far" card, and earlier prompts folded to their outcome | #58 | Who writes the summary: the app from the timeline, or the agent? |
 | Notifications: pop-ups inside the window, and in the concept a bell with a list and switches for each kind | #59 | Which kinds are on by default? |
-| Light and dark: both designs have a light and a dark palette; the app gets a *Light / Dark / System* choice | #65 | The agent's colours are chosen for the host's terminal background: what a viewer with another theme sees. |
+| Light and dark: both designs have a light and a dark palette; the app gets a *Light / Dark / System* choice | #65 | Both palettes came with #63, following the OS. The terminal is dark in both, so the agent's colours look the same to every viewer. |
 | *Shared* tab, *Links* (concept only): a link card that opens in your own browser; an Excalidraw room to draw together, *for this session only* because its link holds the key; `localhost` refused | #66 | Should every link with a `#` part default to *for this session only*? |
 | Timeline (concept only): Claude's browser steps, with a screenshot that opens as a tab; *Viewers see Claude's browser* in the sharing settings | #67 | Which browser tools first; is the image always in the hook payload? |
 | Bar and sharing settings (concept only): *Let viewers open localhost:5173*, a marker with *Stop*, *Open Nick's app* for viewers, each with their own page | #68 | The web viewer can't open a local port; only after a security review. |
@@ -73,8 +74,8 @@ These came out of exploring the panels idea (the session that made the first ver
 
 ## Order
 
-1. **#63, the window layout:** the three panels, tabs in the middle and layouts per kind of person. Apart from sending the full text of touched files, it needs no protocol change, and #55, #56 and the request row depend on it.
+1. **#63, the window layout:** the three panels, tabs in the middle and layouts per kind of person. It needs no protocol change, and #55, #56 and the request row depend on it.
 2. **#51**, the viewer-to-host channel, then #52, #53, #54, #61 and #62 on it.
 3. **#56, #55, #66, #67, #58, #59 and #57**, as each one is needed. #66 (links) is small and can come early.
-4. **#65**, the theme choice, with or after #63, which needs both palettes anyway.
+4. **#65**, the theme choice, after #63, which brings both palettes.
 5. **#64** and **#68**, browsing the whole project and opening the host's dev server, only after a security review.

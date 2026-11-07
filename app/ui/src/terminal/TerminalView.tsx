@@ -26,7 +26,8 @@ export interface TerminalHandle {
   findPrevious(term: string): void;
   clearSearch(): void;
   /** Scrolls to where the output stood when record `seq` was the newest. */
-  scrollToSeq(seq: number): void;
+  /** Scrolls to where record `seq` was written; `highlight` marks that line for a moment. */
+  scrollToSeq(seq: number, highlight?: boolean): void;
   scrollToBottom(): void;
   focus(): void;
   /** Whether the terminal has keyboard focus. */
@@ -48,6 +49,11 @@ interface Props {
   screenReader?: boolean;
   onData?: (data: string) => void;
   onResize?: (cols: number, rows: number) => void;
+  /**
+   * The host's terminal keeps its size while true: while another tab is shown, or a divider is
+   * being dragged. It fits its pane once when let go, so the agent is resized at most once.
+   */
+  hold?: boolean;
   /** Whether the view follows the latest output. */
   onFollowChange?: (following: boolean) => void;
   /** Output arrived while the viewer was scrolled away from the latest. */
@@ -59,14 +65,16 @@ interface Props {
   onDiagnostics?: (snapshot: TerminalSnapshot) => void;
 }
 
-/** ANSI palettes tuned for the app's light and dark surfaces. */
-const PALETTE_LIGHT = {
-  black: '#1b1f27', red: '#c0392b', green: '#1d7a55', yellow: '#9a6700', blue: '#3d5a99', magenta: '#8e44ad', cyan: '#0e7490', white: '#d0d4da',
-  brightBlack: '#5d6573', brightRed: '#e0473a', brightGreen: '#2a9d6b', brightYellow: '#b7791f', brightBlue: '#4f6fb8', brightMagenta: '#a55bc4', brightCyan: '#1693ad', brightWhite: '#f4f5f7',
-};
-const PALETTE_DARK = {
-  black: '#1d2025', red: '#ff7b6b', green: '#5cc595', yellow: '#f0b14f', blue: '#8ea6e0', magenta: '#c49be8', cyan: '#5fc6d8', white: '#c9ced6',
-  brightBlack: '#6f7682', brightRed: '#ff9a8d', brightGreen: '#7fd8aa', brightYellow: '#f7c977', brightBlue: '#adc0ee', brightMagenta: '#d7b6f2', brightCyan: '#86d8e6', brightWhite: '#f2f4f7',
+/** The colour of a line a step points at, as the timeline's current cue. */
+const HIGHLIGHT = '#4d3a12';
+
+/**
+ * The ANSI palette of the stage: the terminal is dark in both appearances, so the agent picks
+ * its colours for a dark background and every participant sees the same terminal.
+ */
+const PALETTE_STAGE = {
+  black: '#183130', red: '#f4a68f', green: '#8fd3a6', yellow: '#f1b24a', blue: '#93adea', magenta: '#e6abd8', cyan: '#7fcfd6', white: '#c9d6d2',
+  brightBlack: '#6f8a85', brightRed: '#f8bfae', brightGreen: '#addfbe', brightYellow: '#f6c977', brightBlue: '#b3c6f1', brightMagenta: '#efc6e5', brightCyan: '#a3dde2', brightWhite: '#eef4f2',
 };
 
 const FONT_SIZE = 13;
@@ -77,16 +85,22 @@ function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-function currentTheme(): ITheme {
-  const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+/** The stage's colours, the same in the light and the dark appearance. */
+export function currentTheme(): ITheme {
+  const background = cssVar('--terminal-bg') || '#102221';
   return {
-    ...(dark ? PALETTE_DARK : PALETTE_LIGHT),
-    background: cssVar('--terminal-bg') || (dark ? '#121417' : '#fbfbfc'),
-    foreground: cssVar('--terminal-fg') || (dark ? '#dfe3e8' : '#1b1f27'),
-    cursor: cssVar('--terminal-cursor') || '#3d5a99',
-    cursorAccent: cssVar('--terminal-bg') || '#fbfbfc',
-    selectionBackground: cssVar('--terminal-selection') || 'rgba(61, 90, 153, 0.25)',
+    ...PALETTE_STAGE,
+    background,
+    foreground: cssVar('--terminal-fg') || '#d6e3df',
+    cursor: cssVar('--terminal-cursor') || '#f1b24a',
+    cursorAccent: background,
+    selectionBackground: cssVar('--terminal-selection') || 'rgba(241, 178, 74, 0.3)',
   };
+}
+
+/** The platform's own monospace font, with the Nerd Font symbols; never the app's type. */
+export function terminalFont(): string {
+  return cssVar('--terminal-font') || 'ui-monospace, Menlo, Consolas, "Symbols Nerd Font Mono", monospace';
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(props, ref) {
@@ -98,6 +112,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const following = useRef(true);
   const recordsWritten = useRef(0);
   const reportState = useRef<() => void>(() => {});
+  /** Fits the host's terminal to its pane now, unless it is held. */
+  const fitHost = useRef<() => void>(() => {});
   const callbacks = useRef(props);
   callbacks.current = props;
 
@@ -108,7 +124,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       allowProposedApi: true,
       cursorBlink: props.mode === 'host',
       disableStdin: props.mode === 'viewer',
-      fontFamily: cssVar('--mono') || 'Menlo, monospace',
+      fontFamily: terminalFont(),
       fontSize: FONT_SIZE,
       lineHeight: 1.15,
       scrollback: 100_000,
@@ -202,14 +218,21 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     let resizeObserver: ResizeObserver | undefined;
     if (props.mode === 'host') {
       let pending: number | undefined;
+      // The size the agent was last told, so the same size is never sent twice.
+      let told = '';
       const fitNow = () => {
+        if (callbacks.current.hold) return;
         try {
           fit.fit();
         } catch {
           return;
         }
+        const size = `${term.cols}x${term.rows}`;
+        if (size === told) return;
+        told = size;
         callbacks.current.onResize?.(term.cols, term.rows);
       };
+      fitHost.current = fitNow;
       resizeObserver = new ResizeObserver(() => {
         window.clearTimeout(pending);
         pending = window.setTimeout(fitNow, 60);
@@ -299,6 +322,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Let go: fit once to whatever the pane became meanwhile.
+  useEffect(() => {
+    if (!props.hold) fitHost.current();
+  }, [props.hold]);
+
   // Changed in the settings, also while a session is open.
   useEffect(() => {
     if (terminal.current) terminal.current.options.screenReaderMode = props.screenReader ?? false;
@@ -339,12 +367,21 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     clearSearch() {
       search.current?.clearDecorations();
     },
-    scrollToSeq(seq) {
+    scrollToSeq(seq, highlight = false) {
       const term = terminal.current;
       if (!term) return;
       const lines = lineAfter.current;
       const line = seq < 0 ? 0 : (lines[Math.min(seq, lines.length - 1)] ?? 0);
       term.scrollToLine(Math.max(0, line - 2));
+      if (!highlight) return;
+      // The line the step starts on: where the cursor was after that record.
+      const buffer = term.buffer.active;
+      const marker = term.registerMarker(line - (buffer.baseY + buffer.cursorY));
+      const decoration = marker && term.registerDecoration({ marker, width: term.cols, backgroundColor: HIGHLIGHT, layer: 'bottom' });
+      window.setTimeout(() => {
+        decoration?.dispose();
+        marker?.dispose();
+      }, 1600);
     },
     scrollToBottom() {
       terminal.current?.scrollToBottom();

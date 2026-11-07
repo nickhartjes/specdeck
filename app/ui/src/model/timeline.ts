@@ -79,6 +79,8 @@ export interface TouchedFile {
   /** Read but never changed. */
   readOnly: boolean;
   changes: FileChange[];
+  /** Where in the terminal the agent first read it, for a file it only read. */
+  readSeq?: number;
 }
 
 export interface TimelineModel {
@@ -202,9 +204,11 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
         file.changes.push(change);
         break;
       }
-      case 'file-read':
-        touched(event.path);
+      case 'file-read': {
+        const file = touched(event.path);
+        file.readSeq ??= tools.get(event.toolUseId)?.outputSeq ?? event.outputSeq;
         break;
+      }
       case 'timeline-unavailable':
         unavailable = event.reason;
         break;

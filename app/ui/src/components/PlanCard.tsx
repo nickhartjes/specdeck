@@ -1,6 +1,6 @@
 import { FileText } from 'lucide-react';
 import type { DocumentVersion, Plan } from '../model/documents';
-import type { ReaderDocument } from './DocumentReader';
+import type { ReaderDocument } from './DocumentTab';
 
 interface Props {
   plan: Plan;

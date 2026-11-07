@@ -144,8 +144,10 @@ struct Profile {
     hosted_sessions: usize,
     watched_sessions: usize,
     notifications: bool,
-    /// How the user follows sessions; `None` until they answered the first-join question.
+    /// How the user followed sessions before layouts, to make their first layout from.
     view: Option<View>,
+    /// How the user arranges the session window; `None` until they answered the first-join question.
+    layout: Option<serde_json::Value>,
     /// The window has a material behind it, so the UI may let it show through.
     translucent: bool,
     platform: &'static str,
@@ -212,6 +214,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
         watched_sessions,
         notifications: settings.notifications,
         view: settings.view,
+        layout: settings.layout,
         translucent: state.translucent.load(Ordering::Relaxed),
         platform: std::env::consts::OS,
         effective_service: state.services.effective(settings.sharing_service.as_deref()),
@@ -571,16 +574,17 @@ async fn end_all(app: &AppHandle) {
     leave_all_watched(app);
 }
 
+/// Remembers how the user arranges the session window, as the UI gives it.
 #[tauri::command]
-async fn set_view(
+async fn set_layout(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
-    view: View,
+    layout: serde_json::Value,
 ) -> Result<Profile, String> {
     {
         let mut settings = state.settings.lock().unwrap();
-        settings.view = Some(view);
+        settings.layout = Some(layout);
         state.save(&settings);
     }
     settings_changed(&app);
@@ -1934,7 +1938,7 @@ pub fn run() {
             open_install_page,
             update_status,
             restart_to_update,
-            set_view,
+            set_layout,
             set_sharing_service,
             check_sharing_service,
             read_join_link,

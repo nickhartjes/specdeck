@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Copy, Link2, Power, RefreshCw } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, HostEvent, Participant, SharingState, TerminalSnapshot, TimelineEvent, View } from '../api/types';
+import type { AgentId, AgentStatus, HostEvent, Participant, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
-import { DEVELOPER_VIEW, ViewMenu } from '../components/ViewMenu';
+import { LayoutControls } from '../components/LayoutMenu';
+import { PeopleButton } from '../components/PeopleButton';
+import { choose, type Layout } from '../model/layout';
+import { useLayout } from './useLayout';
 import { useMenu } from '../menu/menu';
 import { statusBarInfo } from '../model/statusbar';
 import { nextRequest, requestIn } from '../model/request';
@@ -92,9 +95,9 @@ export function endingText(running: string | null, viewers: number): string {
 
 /** The host's session: the agent's terminal, the invite code and everything viewers see. */
 interface Props {
-  /** How the host follows the session; the host's terminal is always shown. */
-  view: View | null;
-  onView: (view: View) => void;
+  /** How the host arranges the window; the host's terminal tab is always there. */
+  layout: Layout | null;
+  onLayout: (layout: Layout) => void;
   /** Screen readers read the terminal; the setting in Settings. */
   screenReader?: boolean;
   onEnded: () => void;
@@ -102,9 +105,12 @@ interface Props {
   update?: ReactNode;
 }
 
-export function HostScreen({ view, onView, screenReader = false, onEnded , update }: Props) {
+export function HostScreen({ layout: stored, onLayout, screenReader = false, onEnded, update }: Props) {
   const bridge = useBridge();
   const workspace = useRef<WorkspaceHandle>(null);
+  // The host is never asked the first-join question; they start as a developer.
+  const [layout, setLayout] = useLayout(stored, onLayout);
+  const shown = layout ?? choose('developer');
   const [state, dispatch] = useReducer(hostReducer, initial);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,7 +180,17 @@ export function HostScreen({ view, onView, screenReader = false, onEnded , updat
         <StatusPill status={state.status} agentName={agentName} terminal={terminal} request={state.timelineSupported ? null : state.request} />
         <div className="spacer" />
         {update}
-        <ViewMenu host view={view ?? DEVELOPER_VIEW} onChange={onView} />
+        <PeopleButton
+          participants={state.participants}
+          me={0}
+          onRemove={(p) => bridge.hostRemoveViewer(p.id)}
+          viewerLimit={state.viewerLimit}
+          onViewerLimit={(limit) => {
+            dispatch({ type: 'limit', limit });
+            void bridge.hostSetViewerLimit(limit);
+          }}
+        />
+        <LayoutControls host layout={shown} onLayout={setLayout} />
         <InviteCode
           sharing={state.sharing}
           code={state.code}
@@ -211,21 +227,14 @@ export function HostScreen({ view, onView, screenReader = false, onEnded , updat
         agentName={agentName}
         terminal={terminal}
         screenReader={screenReader}
-        steps={(view ?? DEVELOPER_VIEW).steps}
+        layout={shown}
+        onLayout={setLayout}
         timelineSupported={state.timelineSupported}
         timeline={state.timeline}
-        participants={state.participants}
-        me={0}
         onInput={onInput}
         onResize={onResize}
         onThemeColors={onThemeColors}
         onTerminalState={onTerminalState}
-        onRemove={(p) => bridge.hostRemoveViewer(p.id)}
-        viewerLimit={state.viewerLimit}
-        onViewerLimit={(limit) => {
-          dispatch({ type: 'limit', limit });
-          void bridge.hostSetViewerLimit(limit);
-        }}
       />
       <StatusBar info={statusBar} folder={folderName || undefined} />
       {confirmEnd && (

@@ -6,24 +6,25 @@ import { errorMessage, useBridge } from '../api/bridge';
 import type { Profile } from '../api/types';
 import { ShortcutsDialog } from '../components/ShortcutsDialog';
 import { dispatchMenu } from '../menu/menu';
+import { profileLayout } from '../model/layout';
 import { ViewerScreen } from '../screens/ViewerScreen';
 import { serviceName } from './bridge';
 
-const TABS: Record<string, string> = { Digit1: 'tab:timeline', Digit2: 'tab:files', Digit3: 'tab:people' };
+const PANELS: Record<string, string> = { Digit1: 'panel:files', Digit2: 'panel:terminal', Digit3: 'panel:timeline' };
 
 /**
- * The web viewer's own shortcuts, where the app has a native menu: Alt+1–3 for the side panel's
- * tabs (the browser keeps Ctrl+1–3) and ? for the list. Find (Ctrl+F or ⌘F) is the workspace's.
+ * The web viewer's own shortcuts, where the app has a native menu: Alt+1–3 for the files, the
+ * terminal and the timeline, as the app's Ctrl+1–3 (the browser keeps those) and ? for the list. Find (Ctrl+F or ⌘F) is the workspace's.
  */
 function useWebKeys(onShortcuts: () => void) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target?.closest?.('input, textarea, [contenteditable="true"], .xterm') != null;
-      const tab = TABS[event.code];
-      if (tab && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      const panel = PANELS[event.code];
+      if (panel && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
         event.preventDefault();
-        dispatchMenu({ id: tab });
+        dispatchMenu({ id: panel });
       } else if (event.key === '?' && !typing && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         onShortcuts();
@@ -93,8 +94,8 @@ export function WebApp({ service, initialCode }: Props) {
         <ViewerScreen
           key={screen.code}
           code={screen.code}
-          view={profile.view}
-          onView={(view) => void bridge.setView(view).then(setProfile)}
+          layout={profileLayout(profile)}
+          onLayout={(layout) => void bridge.setLayout(layout).then(setProfile)}
           onLeave={(retry) => setScreen({ kind: 'join', code: retry?.code ?? '', error: retry?.message })}
         />
       ) : (

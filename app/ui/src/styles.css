@@ -1,5 +1,61 @@
-/* SpecDeck: a native, quiet frame around the terminal. System fonts, OS light/dark, one accent
-   (the blue of the app icon), status colours only where something needs attention. */
+/* SpecDeck: a stage manager's prompt book (`session-window-layout` design decision 7, from
+   docs/design/frontend-design-concept.html). Paper and ink around a dark stage, the terminal,
+   where the agent acts. Plum belongs to the host: everything the host asks of viewers wears it.
+   The timeline is a cue rail, whose amber light is the same light as the session's state.
+   Type: Atkinson Hyperlegible Next for words, its Mono for code; the terminal keeps the
+   platform's own monospace font. */
+
+/* The app's type, shipped with it so it never comes from another address (native-experience
+   spec, Follow the OS appearance). Variable fonts: one file per script covers every weight, and
+   the browser loads Latin Extended only when a page needs it. Licenses: assets/fonts/LICENSE-atkinson-*. */
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("./assets/fonts/atkinson-hyperlegible-next-latin-wght-normal.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("./assets/fonts/atkinson-hyperlegible-next-latin-ext-wght-normal.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("./assets/fonts/atkinson-hyperlegible-next-latin-wght-italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 200 800;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("./assets/fonts/atkinson-hyperlegible-next-latin-ext-wght-italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 200 800;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  src: url("./assets/fonts/atkinson-hyperlegible-mono-latin-wght-normal.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  src: url("./assets/fonts/atkinson-hyperlegible-mono-latin-ext-wght-normal.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
 
 /* Nerd Font symbols (prompt, file and Powerline icons) for every viewer, with nothing installed.
    Last in --mono and limited to the Private Use Area, so the platform's font still draws all other
@@ -17,70 +73,85 @@
 
 :root {
   color-scheme: light;
-  --window: #f4f5f7;
-  --surface: #ffffff;
-  --surface-sunken: #eceef1;
-  --hover: rgba(24, 32, 48, 0.06);
-  --border: #dfe2e7;
-  --border-strong: #c7ccd4;
-  --text: #1b1f27;
-  --text-muted: #5d6573;
-  --text-faint: #8a919d;
-  --accent: #3d5a99;
-  --accent-hover: #34508a;
-  --accent-soft: #e6ecf8;
+  /* Paper and ink */
+  --window: #f8faf7;
+  --surface: #f8faf7;
+  --surface-sunken: #eef2ee;
+  --paper: #e6ebe6;
+  --hover: #e2e8e3;
+  --border: #cbd4cf;
+  --border-strong: #a7b4ae;
+  --text: #142b2a;
+  --text-muted: #4a5f5c;
+  --text-faint: #74878a;
+  /* Plum: the host's requests, and primary actions */
+  --accent: #6a2c5e;
+  --accent-hover: #58224d;
+  --accent-soft: #f2e5ef;
   --on-accent: #ffffff;
-  --working: #b26a00;
-  --working-soft: #fbf0dc;
-  --ok: #1d7a55;
-  --ok-soft: #e1f3ea;
-  --danger: #c0392b;
-  --danger-soft: #fbe7e4;
-  --added: #e6f4ea;
-  --added-text: #1d6b3a;
-  --removed: #fce8e8;
-  --removed-text: #a12a24;
-  --terminal-bg: #fbfbfc;
-  --terminal-fg: #1b1f27;
-  --terminal-cursor: #3d5a99;
-  --terminal-selection: rgba(61, 90, 153, 0.25);
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 16px rgba(16, 24, 40, 0.08);
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Ubuntu, Cantarell, "Noto Sans", sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Symbols Nerd Font Mono", monospace;
+  --focus: #3a5a9c;
+  /* The cue: what is happening now */
+  --working: #9a5b00;
+  --working-soft: #f7ebd5;
+  --cue-light: #e39b1b;
+  --glow: rgba(227, 155, 27, 0.35);
+  --ok: #2a6e4c;
+  --ok-soft: #dcefe3;
+  --danger: #b13e28;
+  --danger-soft: #f8e2dc;
+  --added: #dcefe2;
+  --added-text: #1d6237;
+  --removed: #f6e0dc;
+  --removed-text: #992d21;
+  /* The stage: the terminal, dark in both appearances */
+  --terminal-bg: #102221;
+  --terminal-fg: #d6e3df;
+  --terminal-cursor: #f1b24a;
+  --terminal-selection: rgba(241, 178, 74, 0.3);
+  --stage-rule: #2a4442;
+  --stage-cue: #f1b24a;
+  --shadow: 0 1px 2px rgba(20, 43, 42, 0.06), 0 12px 32px rgba(20, 43, 42, 0.14);
+  --font: "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Symbols Nerd Font Mono", monospace;
+  /* The terminal draws ordinary text in the platform's own monospace font (native-experience spec). */
+  --terminal-font: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Symbols Nerd Font Mono", monospace;
   --radius: 8px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --window: #16181c;
-    --surface: #1d2025;
-    --surface-sunken: #121417;
-    --hover: rgba(255, 255, 255, 0.06);
-    --border: #2b2f36;
-    --border-strong: #3a3f48;
-    --text: #e6e8ec;
-    --text-muted: #a0a7b2;
-    --text-faint: #6f7682;
-    --accent: #8ea6e0;
-    --accent-hover: #a5b8e8;
-    --accent-soft: #233150;
-    --on-accent: #10172a;
-    --working: #f0b14f;
-    --working-soft: #3a2c13;
-    --ok: #5cc595;
-    --ok-soft: #173326;
-    --danger: #ff7b6b;
-    --danger-soft: #3c1d1a;
-    --added: #16301f;
-    --added-text: #7fd89c;
-    --removed: #3a1c1c;
-    --removed-text: #ff9a90;
-    --terminal-bg: #121417;
-    --terminal-fg: #dfe3e8;
-    --terminal-cursor: #8ea6e0;
-    --terminal-selection: rgba(142, 166, 224, 0.3);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --window: #152322;
+    --surface: #152322;
+    --surface-sunken: #0c1615;
+    --paper: #0f1a1a;
+    --hover: #1c2e2d;
+    --border: #263a38;
+    --border-strong: #3a5350;
+    --text: #dce7e3;
+    --text-muted: #a0b2ae;
+    --text-faint: #6f8480;
+    --accent: #d89dca;
+    --accent-hover: #e6b4da;
+    --accent-soft: #33202e;
+    --on-accent: #2a0f24;
+    --focus: #93adea;
+    --working: #eaa63c;
+    --working-soft: #392a12;
+    --cue-light: #f2b24b;
+    --glow: rgba(242, 178, 75, 0.3);
+    --ok: #7bcb9c;
+    --ok-soft: #173225;
+    --danger: #f08a72;
+    --danger-soft: #3c1f19;
+    --added: #173323;
+    --added-text: #93d6aa;
+    --removed: #3b1d1a;
+    --removed-text: #f2a094;
+    --terminal-bg: #091312;
+    --terminal-fg: #d6e3df;
+    --stage-rule: #22383a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.45);
   }
 }
 
@@ -99,8 +170,8 @@ body {
 }
 input, textarea, .selectable, .markdown, .diff, code { user-select: text; cursor: auto; }
 button { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
 /* ---------- Buttons and fields ---------- */
 
@@ -221,7 +292,7 @@ button { font: inherit; color: inherit; }
 
 /* ---------- Session screens ---------- */
 
-.session { height: 100%; display: grid; grid-template-rows: auto auto 1fr auto; }
+.session { height: 100%; display: grid; grid-template-rows: auto auto 1fr auto; grid-template-columns: minmax(0, 1fr); }
 .toolbar {
   display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 14px;
   background: var(--surface); border-bottom: 1px solid var(--border);
@@ -303,12 +374,108 @@ button { font: inherit; color: inherit; }
 .banner.info { background: var(--accent-soft); color: var(--accent); }
 .banner.danger { background: var(--danger-soft); color: var(--danger); }
 
-.workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--side, 380px); }
-.workspace.no-side { grid-template-columns: minmax(0, 1fr); }
-.splitter { cursor: col-resize; background: var(--window); border-left: 1px solid var(--border); }
-.splitter:hover, .splitter.dragging { background: var(--accent-soft); }
+/* ---------- The session window: files, tabs, timeline (session-window spec) ---------- */
+
+.workspace { position: relative; min-height: 0; display: flex; flex-direction: column; }
+.requests:empty { display: none; }
+.panes { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
+.panes.dragging, .panes.dragging * { cursor: col-resize; user-select: none; }
+.pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); }
+.pane[hidden], .tab-area[hidden] { display: none; }
+.pane.files-pane { background: var(--surface-sunken); }
+.pane-head { display: flex; align-items: center; gap: 4px; min-height: 38px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); }
+.pane-head .spacer { flex: 1; }
+.pane-title { margin: 0; font-size: 12.5px; font-weight: 700; }
+.pane-tabs { display: flex; gap: 2px; align-self: stretch; }
+.pane-tab { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-muted); cursor: pointer; }
+.pane-tab:hover { color: var(--text); }
+.pane-tab[aria-selected="true"] { color: var(--text); font-weight: 700; border-bottom-color: var(--text); }
+.pane-tab .count { color: var(--text-faint); font-weight: 400; font-size: 11.5px; }
+.pane-body { min-height: 0; overflow: auto; padding: 10px 12px 24px; }
+.pane.files-pane .pane-body { padding: 4px 0 16px; }
+.toggle { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
+.toggle button { border: 0; background: var(--surface); padding: 3px 9px; font-size: 12px; cursor: pointer; }
+.toggle button + button { border-left: 1px solid var(--border); }
+.toggle button[aria-pressed="true"] { background: var(--text); color: var(--surface); }
+.divider { position: relative; cursor: col-resize; background: var(--border); touch-action: none; }
+.divider::after { content: ""; position: absolute; inset: 0 -4px; }
+.divider:hover, .divider:focus-visible, .divider.dragging { background: var(--accent); outline: none; }
+.pane-switch { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+.pane-switch button { flex: 1; padding: 8px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-muted); cursor: pointer; }
+.pane-switch button[aria-pressed="true"] { color: var(--text); font-weight: 700; border-bottom-color: var(--text); }
+
+/* The tab area: the terminal and the files someone opened. */
+.tab-area { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); }
+.tabs-bar { display: flex; overflow-x: auto; min-height: 36px; border-bottom: 1px solid var(--border); background: var(--surface-sunken); scrollbar-width: thin; }
+.tab-item { display: flex; align-items: center; border-right: 1px solid var(--border); color: var(--text-muted); white-space: nowrap; }
+.tab-item > button[role="tab"] { display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px 0 12px; border: 0; background: none; color: inherit; cursor: pointer; }
+.tab-item svg { width: 14px; height: 14px; flex: none; }
+.tab-item.on { background: var(--surface); color: var(--text); box-shadow: inset 0 2px 0 var(--text); }
+.tab-item.preview .label { font-style: italic; }
+.tab-item.on.term { background: var(--terminal-bg); color: var(--terminal-fg); box-shadow: inset 0 2px 0 var(--stage-cue); }
+.tab-item .close { width: 20px; height: 20px; margin-right: 6px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 4px; background: none; color: var(--text-faint); cursor: pointer; }
+.tab-item .close:hover { background: var(--hover); color: var(--text); }
+.tab-item .close svg { width: 12px; height: 12px; }
+.tab-panels { position: relative; min-height: 0; }
+.tab-panels > .terminal-pane, .tab-panels > .tab-panel { position: absolute; inset: 0; }
+.tab-panels > .search { z-index: 6; }
+/* Out of sight but laid out at the tab area's size, so xterm keeps measuring and the host's terminal keeps its size. */
+.terminal-pane.out-of-sight { visibility: hidden; pointer-events: none; }
+.tab-panel { overflow: auto; background: var(--surface); }
+.tab-panel[hidden] { display: none; }
+.tabs-empty { position: absolute; inset: 0; align-content: center; }
+.filebar { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 7px 16px; background: var(--surface); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 12px; }
+.filebar .path { color: var(--text); font-family: var(--mono); overflow-wrap: anywhere; }
+.filebar .spacer { flex: 1; }
+.filebar .check { padding-top: 0; }
+.plan-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.plan-links .link[aria-current="page"] { color: var(--text); font-weight: 700; text-decoration: none; cursor: default; }
+.document-tab .doc { max-width: 72ch; padding: 22px 28px 40px; display: grid; gap: 6px; font-size: 14.5px; line-height: 1.6; }
+.document-tab .doc .markdown { font-size: 14.5px; }
+.document-tab .doc .markdown h1 { font-size: 22px; margin: 4px 0 10px; }
+.document-tab .doc .markdown h2 { font-size: 16px; margin: 18px 0 6px; }
+.document-tab .doc .markdown h3 { font-size: 14.5px; }
+.diff-list { padding: 12px 16px 32px; display: grid; gap: 14px; align-content: start; }
+.diff-list section { display: grid; gap: 6px; border-radius: 8px; }
+.diff-list .btn { justify-self: start; }
+.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { from { background: var(--working-soft); box-shadow: 0 0 0 6px var(--working-soft); } }
+
+/* Toolbar: the people, and the layout */
+.people-menu, .layout-menu { position: relative; }
+.avatars { display: flex; align-items: center; padding: 2px 4px; border: 0; border-radius: 999px; background: none; cursor: pointer; }
+.avatars:hover { background: var(--hover); }
+.avatars .avatar { width: 26px; height: 26px; font-size: 10.5px; border: 2px solid var(--window); margin-left: -6px; }
+.avatars .avatar:first-child { margin-left: 0; }
+.avatars .avatar.host { background: var(--accent); color: var(--on-accent); }
+.avatars .avatar.more { background: var(--surface-sunken); color: var(--text-muted); }
+.layout-controls { display: flex; align-items: center; gap: 2px; }
+.layout-controls .btn[aria-pressed="true"] { color: var(--text); }
+.layout-controls .btn[aria-pressed="false"] { color: var(--text-faint); }
+.layout-menu .chevron { width: 12px; height: 12px; }
+.menu-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; width: 300px; display: grid; gap: 12px; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.menu-panel fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 6px; }
+.menu-panel legend { padding: 0 0 4px; font-size: 12px; color: var(--text-muted); }
+.menu-panel .check { display: flex; align-items: center; gap: 10px; min-height: 28px; padding-top: 0; cursor: pointer; }
+.menu-panel .check input { width: 16px; height: 16px; margin: 0; }
+.menu-panel .btn { justify-self: start; }
+.menu-panel p { margin: 0; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; }
+.people-panel { width: 320px; padding: 4px 0 0; gap: 0; }
+
+/* A narrow window: the toolbar wraps, and one panel shows at a time. */
+@media (max-width: 760px) {
+
+  .toolbar { flex-wrap: wrap; gap: 6px 8px; padding: 6px 10px; }
+  .toolbar .title { flex: 1 1 140px; }
+  .toolbar > .spacer { display: none; }
+  .invite-note { display: none; }
+  .layout-controls > .btn.icon { display: none; }
+  .panes { grid-template-columns: minmax(0, 1fr) !important; }
+  .menu-panel { position: fixed; left: 12px; right: 12px; top: 60px; width: auto; }
+}
 
 .terminal-pane { position: relative; min-width: 0; min-height: 0; background: var(--terminal-bg); display: grid; }
+.terminal-pane .jump-live { color: var(--text); }
 .terminal-host { min-height: 0; min-width: 0; padding: 8px 4px 4px 10px; overflow: hidden; }
 .terminal-host.fixed { overflow: auto; }
 /* xterm keeps its input field at the cursor, and does not move it when a viewer's text is scaled;
@@ -328,33 +495,38 @@ button { font: inherit; color: inherit; }
 .search .field { height: 28px; width: 220px; font-size: 13px; }
 .search .count { min-width: 92px; text-align: center; color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
-/* ---------- Side panel ---------- */
-
-.side { min-height: 0; display: grid; grid-template-rows: auto 1fr; background: var(--surface); }
-.tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--border); }
-.tab {
-  display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px 9px; border: 0; background: none;
-  color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 550;
-}
-.tab:hover { color: var(--text); }
-.tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
-.tab .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--surface-sunken); font-size: 11px; display: inline-grid; place-items: center; }
-.panel { min-height: 0; overflow: auto; }
 .empty { padding: 32px 22px; text-align: center; color: var(--text-muted); display: grid; gap: 6px; justify-items: center; }
 .empty svg { width: 22px; height: 22px; color: var(--text-faint); }
 .empty strong { color: var(--text); font-weight: 600; }
 
-.timeline { display: grid; padding: 6px 0 24px; }
-.turn { padding: 12px 14px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
-.turn.match { background: var(--accent-soft); }
-.turn.current { box-shadow: inset 3px 0 0 var(--accent); }
-.prompt {
-  border: 0; background: var(--surface-sunken); border-radius: 10px; padding: 9px 11px; text-align: left; cursor: pointer;
-  display: grid; gap: 4px; width: 100%;
+/* The cue rail: each prompt a numbered cue on one rail, each step a marker on it. */
+.timeline { display: grid; padding: 6px 0 24px; counter-reset: cue; }
+.turn { position: relative; display: grid; gap: 6px; padding: 0 0 18px 50px; counter-increment: cue; }
+.turn::before {
+  content: counter(cue); position: absolute; left: 0; top: 2px; width: 34px; text-align: right;
+  font-size: 24px; line-height: 1; color: var(--text-faint); font-variant-numeric: tabular-nums;
 }
+.turn::after { content: ""; position: absolute; left: 42px; top: 0; bottom: 0; border-left: 2px solid var(--border-strong); }
+.turn:last-child { padding-bottom: 8px; }
+.turn.match { background: linear-gradient(to right, transparent 44px, var(--accent-soft) 44px); }
+.turn.current::before { color: var(--working); }
+.prompt { border: 0; background: none; border-radius: 6px; padding: 2px 6px 4px; margin-left: -6px; text-align: left; cursor: pointer; display: grid; gap: 3px; width: calc(100% + 6px); }
 .prompt:hover { background: var(--hover); }
-.prompt .meta { display: flex; justify-content: space-between; color: var(--text-faint); font-size: 11.5px; }
-.prompt .text { white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+.prompt .meta { display: flex; justify-content: space-between; color: var(--text-muted); font-size: 12px; }
+.prompt .text { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.4; color: var(--text); }
+/* Markers on the rail, a shape for each outcome so they never rely on colour alone. */
+.turn > .tool, .turn > .step, .turn > .step-row { position: relative; }
+.turn > .tool::before, .turn > .step::before, .turn > .step-row::before {
+  content: ""; position: absolute; left: -13px; top: 10px; width: 10px; height: 10px; box-sizing: border-box; z-index: 1;
+  border-radius: 50%; border: 2px solid var(--text-faint); background: var(--surface);
+}
+.turn > .tool.succeeded::before, .turn > .step.succeeded::before, .turn > .step-row:has(.step.succeeded)::before { background: var(--text-muted); border-color: var(--text-muted); }
+.turn > .tool.failed::before, .turn > .step.failed::before, .turn > .step-row:has(.step.failed)::before { border-radius: 2px; border-color: var(--danger); background: var(--danger); }
+.turn > .tool.running::before, .turn > .step.running::before, .turn > .step-row:has(.step.running)::before {
+  background: var(--cue-light); border-color: var(--working); box-shadow: 0 0 0 4px var(--glow); animation: cue 2.2s ease-in-out infinite;
+}
+.turn > .step.denied::before, .turn > .step-row:has(.step.denied)::before { border-radius: 1px; transform: rotate(45deg) scale(0.85); border-color: var(--danger); }
+@keyframes cue { 50% { box-shadow: 0 0 0 7px var(--glow); } }
 .markdown { font-size: 13px; line-height: 1.55; word-break: break-word; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
@@ -368,7 +540,8 @@ button { font: inherit; color: inherit; }
 .markdown td, .markdown th { border: 1px solid var(--border); padding: 3px 6px; }
 .markdown a { color: var(--accent); }
 
-.tool { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.tool { border: 1px solid transparent; border-radius: 6px; }
+.tool[open] { border-color: var(--border); background: var(--surface); }
 .tool summary {
   list-style: none; display: grid; grid-template-columns: 16px auto minmax(0, 1fr) auto auto; gap: 8px; align-items: center;
   padding: 6px 9px; cursor: pointer; font-size: 12.5px;
@@ -397,17 +570,19 @@ button { font: inherit; color: inherit; }
 .diff .line.add { background: var(--added); color: var(--added-text); }
 .diff .line.del { background: var(--removed); color: var(--removed-text); }
 
-.files { margin: 0; padding: 6px; list-style: none; display: grid; gap: 1px; }
+.files { margin: 0; padding: 0; list-style: none; display: grid; }
 .files button {
-  width: 100%; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; align-items: center;
-  padding: 6px 8px; border: 0; border-radius: 6px; background: none; text-align: left; cursor: pointer;
+  width: 100%; display: grid; grid-template-columns: 15px minmax(0, 1fr) auto; align-items: center; column-gap: 8px;
+  padding: 5px 12px 5px 14px; border: 0; background: none; text-align: left; cursor: pointer;
 }
 .files button:hover { background: var(--hover); }
-.files button[aria-current="true"] { background: var(--accent-soft); }
+.files button[aria-current="true"] { background: var(--surface); box-shadow: inset 3px 0 0 var(--text); }
 .files svg { width: 15px; height: 15px; color: var(--text-muted); }
-.files .path { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files .folder { grid-column: 2 / 4; grid-row: 2; color: var(--text-faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .files .tag { color: var(--text-faint); font-size: 11.5px; }
-.file-detail { padding: 10px 12px 24px; display: grid; gap: 10px; }
+.files .tag.new { color: var(--ok); }
+.files .tag.changed { color: var(--working); }
 
 .people { margin: 0; padding: 6px; list-style: none; display: grid; gap: 1px; align-content: start; }
 .people li { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px; }
@@ -475,18 +650,11 @@ html[data-platform="macos"] .drag-strip { display: block; position: fixed; top: 
 
 /* With the platform's material behind the window, its chrome lets the desktop show through;
    content (terminal, cards, dialogs) stays opaque. */
-html.translucent body, html.translucent .start, html.translucent .splitter { background: transparent; }
+html.translucent body, html.translucent .start { background: transparent; }
 html.translucent .toolbar, html.translucent .statusbar { background: color-mix(in srgb, var(--surface) 55%, transparent); }
-html.translucent .workspace > .side { background: color-mix(in srgb, var(--surface) 72%, transparent); }
+html.translucent .pane { background: color-mix(in srgb, var(--surface) 72%, transparent); }
 
-/* View menu and the first-join question */
-.view-menu { position: relative; }
-.view-menu-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; width: 290px; display: grid; gap: 12px; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
-.view-menu-panel fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 6px; }
-.view-menu-panel legend { padding: 0 0 4px; font-size: 12px; color: var(--text-muted); }
-.view-menu-panel .check { display: flex; align-items: center; gap: 10px; min-height: 28px; cursor: pointer; }
-.view-menu-panel .check input { width: 16px; height: 16px; margin: 0; }
-.view-menu-panel p { margin: 0; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; }
+/* The first-join question */
 .muted { color: var(--text-muted); }
 .link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
 .dialog.first-join { width: min(600px, 100%); gap: 16px; padding: 24px; }
@@ -498,11 +666,6 @@ html.translucent .workspace > .side { background: color-mix(in srgb, var(--surfa
 .first-join .choice strong { font-size: 15px; }
 .first-join .choice span { color: var(--text-muted); line-height: 1.45; }
 
-/* The viewer's terminal, hidden: still laid out (xterm measures it) and still written to. */
-.workspace { position: relative; }
-.workspace.terminal-hidden { grid-template-columns: minmax(0, 1fr); }
-.workspace.terminal-hidden > .terminal-pane { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
-.search-over-side { position: absolute; top: 8px; right: 12px; z-index: 5; }
 
 /* Summary steps and the live line */
 .step { border-radius: 8px; }
@@ -515,27 +678,13 @@ html.translucent .workspace > .side { background: color-mix(in srgb, var(--surfa
 .step.succeeded > summary .status-icon { color: var(--ok); }
 .step.running > summary .status-icon { color: var(--working); }
 .step-body { display: grid; gap: 6px; margin: 2px 0 8px 26px; }
-.live-line { display: flex; align-items: center; gap: 10px; margin: 4px 0 0; padding: 10px 14px; border-radius: 10px; background: var(--working-soft); color: var(--text); }
-.live-line .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--working); flex: 0 0 auto; }
-.live-line.waiting { background: var(--accent-soft); }
-.live-line.waiting .dot { background: var(--accent); }
-.workspace.terminal-hidden .timeline, .workspace.terminal-hidden .prompt-list { max-width: 780px; margin-inline: auto; width: 100%; }
+/* The live line: the cue's lamp, the same light as the session's state. */
+.live-line { display: flex; align-items: center; gap: 12px; margin: 4px 0 0 50px; padding: 6px 4px; color: var(--working); font-weight: 600; font-variant-numeric: tabular-nums; }
+.live-line .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cue-light); box-shadow: 0 0 0 4px var(--glow); flex: 0 0 auto; animation: cue 2.2s ease-in-out infinite; }
+.live-line.waiting { color: var(--danger); }
+.live-line.waiting .dot { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-soft); animation: none; }
 
-/* Document reader */
-.dialog.reader { width: min(860px, 100%); height: min(88vh, 900px); padding: 0; gap: 0; grid-template-rows: auto auto 1fr; overflow: hidden; }
-.reader header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
-.reader-title { display: grid; gap: 2px; flex: 1 1 240px; min-width: 0; }
-.reader-title .muted { font-size: 12px; }
-.reader-title strong { font-size: 16px; }
-.reader header .check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
-.reader-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--window); }
-.reader-tabs [aria-current='page'] { background: var(--accent-soft); color: var(--accent-hover); font-weight: 600; }
-.reader-body { overflow-y: auto; padding: 20px 28px 32px; display: grid; align-content: start; gap: 6px; }
-.reader-body > * { max-width: 700px; width: 100%; margin-inline: auto; }
-/* A document's own heading levels, also inside the dialog that holds the reader. */
-.reader-body .markdown h1 { font-size: 20px; margin: 4px 0 8px; }
-.reader-body .markdown h2 { font-size: 16px; }
-.reader-body .markdown h3 { font-size: 14px; }
+/* Documents: what changed since someone last read them */
 .doc-block { border-radius: 8px; }
 .doc-block.mark-new, .doc-block.mark-changed { padding: 8px 12px; }
 .doc-block.mark-new { background: var(--added); }
@@ -545,7 +694,7 @@ html.translucent .workspace > .side { background: color-mix(in srgb, var(--surfa
 /* Plan card */
 .plan-card { display: grid; gap: 10px; margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--window); }
 .plan-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; }
-.plan-kind { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); }
+.plan-kind { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--accent); }
 .plan-head strong { font-size: 15px; }
 .plan-head code { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
 .plan-docs { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -555,7 +704,6 @@ html.translucent .workspace > .side { background: color-mix(in srgb, var(--surfa
 .plan-tasks { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .plan-tasks .bar { flex: 1 1 auto; height: 8px; border-radius: 4px; background: var(--surface-sunken); overflow: hidden; }
 .plan-tasks .bar > span { display: block; height: 100%; background: var(--ok); }
-.workspace.terminal-hidden .plan-card { max-width: 780px; margin-inline: auto; width: 100%; box-sizing: border-box; }
 
 .step-row { display: flex; align-items: flex-start; gap: 8px; }
 .step-row > .step { flex: 1 1 auto; min-width: 0; }
