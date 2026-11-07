@@ -143,9 +143,19 @@ local-dev: local-up
     until curl -sf http://127.0.0.1:18081/health >/dev/null; do sleep 0.25; done
     export SPECDECK_SIGNALLING_URL=ws://127.0.0.1:18081/signal
     mkdir -p .local-dev
-    SPECDECK_PROFILE=host pnpm tauri dev </dev/null 2>&1 | tee .local-dev/host.log &
-    # The viewer is a second instance of the same debug build, loading the host's dev server.
-    until curl -sf http://localhost:5173 >/dev/null && pgrep -f target/debug/specdeck-app >/dev/null; do sleep 0.5; done
+    # The UI's dev server runs on its own, not under tauri dev: both apps load it, so it must
+    # outlive a host app that is killed and started again (just local-dev-host), or the viewer's
+    # windows reload (session-processes task 8.1).
+    pnpm --filter @specdeck/ui dev </dev/null >.local-dev/vite.log 2>&1 &
+    until curl -sf http://localhost:5173 >/dev/null; do sleep 0.25; done
+    SPECDECK_PROFILE=host pnpm tauri dev --config '{"build":{"beforeDevCommand":null}}' </dev/null 2>&1 | tee .local-dev/host.log &
+    # The viewer is a second instance of the same debug build.
+    until pgrep -f target/debug/specdeck-app >/dev/null; do sleep 0.5; done
     SPECDECK_PROFILE=viewer target/debug/specdeck-app </dev/null 2>&1 | tee .local-dev/viewer.log &
     echo "SpecDeck (host) and SpecDeck (viewer) are starting. Close this with Ctrl+C."
     wait
+
+# Start the host app of just local-dev again, after it was killed or quit; the hosted sessions,
+# the viewer and the rest keep running
+local-dev-host:
+    SPECDECK_PROFILE=host SPECDECK_SIGNALLING_URL=ws://127.0.0.1:18081/signal target/debug/specdeck-app
