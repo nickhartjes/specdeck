@@ -107,6 +107,27 @@ export function SettingsScreen() {
           </span>
         </div>
       </div>
+      {profile.platform === 'macos' && (
+        <div className="row">
+          <span id="settings-browser">Browser</span>
+          <div>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={profile.browser}
+                aria-labelledby="settings-browser"
+                aria-describedby="settings-browser-hint"
+                onChange={async (event) => setProfile(await bridge.setBrowser(event.target.checked))}
+              />
+              Give Claude a browser
+            </label>
+            <span id="settings-browser-hint" className="field-hint">
+              Claude Code sessions you start from now on can open, read and screenshot web pages in a browser of their own,
+              separate from yours and empty at the start. Claude asks before using it.
+            </span>
+          </div>
+        </div>
+      )}
       <div className="row">
         <span id="settings-verbose-logging">Diagnostics</span>
         <div>

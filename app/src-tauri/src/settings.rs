@@ -1,7 +1,7 @@
 //! What the app remembers between runs: the user's name, recent folders, last used agent,
 //! whether to show notifications, how the user follows sessions, their sharing service, how
 //! far the main window is zoomed, whether to check for updates, whether the terminal works
-//! with screen readers and whether the diagnostic log is verbose.
+//! with screen readers, whether the diagnostic log is verbose and whether Claude gets a browser.
 //! Stored as JSON in the app's config directory.
 
 use std::path::{Path, PathBuf};
@@ -37,6 +37,8 @@ pub struct Settings {
     pub screen_reader: bool,
     /// The diagnostic log also records traffic, summed per second.
     pub verbose_logging: bool,
+    /// New Claude Code sessions get SpecDeck's own browser (`agent-browser`); only on macOS.
+    pub browser: bool,
 }
 
 /// How a participant follows a session (`viewer-views` design decision 4).
@@ -69,6 +71,7 @@ impl Default for Settings {
             check_updates: true,
             screen_reader: false,
             verbose_logging: false,
+            browser: true,
         }
     }
 }
@@ -164,6 +167,18 @@ mod tests {
         settings.zoom = 125;
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).zoom, 125);
+    }
+
+    #[test]
+    fn the_browser_is_on_until_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Settings saved before the browser existed still load, with it on.
+        std::fs::write(&path, r#"{"username":"nick","notifications":false}"#).unwrap();
+        assert!(Settings::load(&path).browser);
+        let settings = Settings { browser: false, ..Settings::load(&path) };
+        settings.save(&path).unwrap();
+        assert!(!Settings::load(&path).browser);
     }
 
     #[test]

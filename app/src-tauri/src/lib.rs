@@ -3,6 +3,7 @@ pub(crate) use specdeck_diag as diagnostics;
 // The hosted session, shared with the session process (`session-processes`).
 use specdeck_session::runtime as host;
 mod adapter;
+mod browser;
 mod client;
 mod menu;
 mod migrate;
@@ -165,6 +166,8 @@ struct Profile {
     screen_reader: bool,
     /// The diagnostic log records traffic too.
     verbose_logging: bool,
+    /// New Claude Code sessions get SpecDeck's own browser.
+    browser: bool,
 }
 
 /// The agents to choose from, in display order: the coding agents, then Terminal.
@@ -223,6 +226,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
         check_updates: settings.check_updates,
         screen_reader: settings.screen_reader,
         verbose_logging: settings.verbose_logging,
+        browser: settings.browser,
     }
 }
 
@@ -467,6 +471,23 @@ async fn diagnostics_heartbeat(
 ) -> Result<(), String> {
     state.diagnostics.heartbeat(window.label(), beat);
     Ok(())
+}
+
+/// Gives new Claude Code sessions a browser, or not; running sessions keep what they started with.
+#[tauri::command]
+async fn set_browser(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<Profile, String> {
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.browser = enabled;
+        state.save(&settings);
+    }
+    settings_changed(&app);
+    Ok(profile(&state, window.label()))
 }
 
 /// Turns Verbose logging on or off, at once.
@@ -752,10 +773,12 @@ async fn start_hosting(
     if !state.sessions.lock().unwrap().is_free(window.label()) {
         return Err("This window already shows a session. Open a new window for another.".into());
     }
-    let (username, verbose) = {
+    let (username, verbose, browser) = {
         let settings = state.settings.lock().unwrap();
-        (settings.username.clone().ok_or("Set your name first.")?, settings.verbose_logging)
+        let username = settings.username.clone().ok_or("Set your name first.")?;
+        (username, settings.verbose_logging, settings.browser)
     };
+    let id = state.sessions.lock().unwrap().next_id();
     let launch = client::Launch {
         agent,
         folder: folder.clone(),
@@ -765,8 +788,8 @@ async fn start_hosting(
         signalling_url: state.sharing_service(),
         environment: state.environment(),
         verbose,
+        browser: browser::offered(agent, browser).then(|| browser::runner(&app, id)).flatten(),
     };
-    let id = state.sessions.lock().unwrap().next_id();
     let name = folder_name(&folder);
     // The menu-bar or tray icon shows the session from the start, and follows it.
     let starting = Summary {
@@ -778,7 +801,10 @@ async fn start_hosting(
     update_tray(&app, id, Some(tray_entry(id, name.clone(), agent, starting, true)));
     let service = launch.signalling_url.clone();
     let ended = app.clone();
-    let on_ended: client::OnEnded = Box::new(move || session_gone(&ended, id));
+    let on_ended: client::OnEnded = Box::new(move || {
+        browser::close(&ended, id);
+        session_gone(&ended, id);
+    });
     // The session runs in a process of its own (`session-processes`), so it outlives the app.
     let observer = host_observer(&app, id, agent);
     let client = match client::launch(&state.paths, id, launch, observer, on_ended).await {
@@ -1152,10 +1178,16 @@ async fn find_sessions(app: &AppHandle) -> Vec<SessionId> {
         let ended = app.clone();
         let id = entry.id;
         let observer = host_observer(app, id, entry.agent);
-        let on_ended: client::OnEnded = Box::new(move || session_gone(&ended, id));
+        let on_ended: client::OnEnded = Box::new(move || {
+            browser::close(&ended, id);
+            session_gone(&ended, id);
+        });
+        // A session this app's release started with a browser asks for it again; the browser
+        // itself starts anew (`agent-browser`, *Browser without the app*).
+        let runner = browser::runner(app, id);
         let found = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            client::connect(&entry.endpoint, entry.agent, observer, on_ended),
+            client::connect(&entry.endpoint, entry.agent, observer, runner, on_ended),
         )
         .await;
         let Ok(Ok(client)) = found else {
@@ -1968,6 +2000,7 @@ pub fn run() {
             set_check_updates,
             set_screen_reader,
             set_verbose_logging,
+            set_browser,
             diagnostics_status,
             diagnostics_report_terminal,
             reconnect_viewer,

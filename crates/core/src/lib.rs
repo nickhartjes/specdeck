@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod agent;
+pub mod browser;
 // The only module that may emit diagnostic events; a test in it holds that.
 pub mod diag;
 pub mod documents;

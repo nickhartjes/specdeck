@@ -38,6 +38,7 @@ export const tauriBridge: Bridge = {
   setCheckUpdates: (enabled) => invoke<Profile>('set_check_updates', { enabled }),
   setScreenReader: (enabled) => invoke<Profile>('set_screen_reader', { enabled }),
   setVerboseLogging: (enabled) => invoke<Profile>('set_verbose_logging', { enabled }),
+  setBrowser: (enabled) => invoke<Profile>('set_browser', { enabled }),
   updateStatus: () => invoke<UpdateState>('update_status'),
   onUpdate: (handler) => {
     const stop = listen<UpdateState>('update-changed', (event) => handler(event.payload));

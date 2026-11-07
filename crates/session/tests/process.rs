@@ -1,6 +1,7 @@
 //! The session process as the app meets it (`session-processes` tasks 3.2 to 3.4): started as
 //! its own binary, driven over the local protocol, sharing through an in-process signalling
-//! service over loopback WebRTC. The agent is a plain `/bin/sh` terminal session.
+//! service over loopback WebRTC. The agent is a plain `/bin/sh` terminal session, or a fake Claude
+//! Code for the browser.
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
@@ -172,6 +173,7 @@ fn start(folder: &Path, signalling_url: &str) -> Command {
         signalling_url: signalling_url.into(),
         environment,
         verbose: false,
+        browser: false,
     }
 }
 
@@ -606,4 +608,87 @@ async fn record_transcript() {
     let path = folder.join(format!("{}.jsonl", Protocol::own().0));
     std::fs::write(&path, lines.join("\n") + "\n").unwrap();
     println!("recorded {} frames in {}", lines.len(), path.display());
+}
+
+/// A fake Claude Code that calls the browser's screenshot tool for every line it reads, and
+/// prints the answer.
+const BROWSING_CLAUDE: &str = r#"#!/bin/sh
+while [ $# -gt 0 ]; do [ "$1" = "--mcp-config" ] && mcp="$2"; shift; done
+[ -n "$mcp" ] || { echo "no browser"; read wait; exit; }
+url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$mcp" | head -n 1)
+echo ready
+while read line; do
+  [ "$line" = later ] && sleep 1
+  answer=$(curl -s -X POST -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"screenshot","arguments":{}}}' "$url")
+  echo "answer:$answer"
+done"#;
+
+/// Starts a Claude Code session whose `claude` is [`BROWSING_CLAUDE`], and attaches.
+async fn browsing_session(app: &mut App, folder: &Path, url: &str, browser: bool) -> String {
+    let bin = folder.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let claude = bin.join("claude");
+    std::fs::write(&claude, BROWSING_CLAUDE).unwrap();
+    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let Command::Start { mut environment, .. } = start(folder, url) else { unreachable!() };
+    environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+    let mut terminal = String::new();
+    app.send(&Command::Start {
+        agent: AgentId::ClaudeCode,
+        folder: folder.to_owned(),
+        cols: 200,
+        rows: 30,
+        username: "Nick".into(),
+        data_dir: folder.to_owned(),
+        signalling_url: url.into(),
+        environment,
+        verbose: false,
+        browser,
+    })
+    .await;
+    app.until(&mut terminal, |event| matches!(event, Event::Started)).await;
+    app.send(&Command::Attach).await;
+    terminal
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_actions_go_to_the_app_and_back() {
+    use specdeck_core::browser::{BrowserAction, BrowserResult};
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let mut terminal = browsing_session(&mut app, folder.path(), &url, true).await;
+    app.until_text(&mut terminal, "ready").await;
+
+    app.send(&Command::Input { data: "now\r".into() }).await;
+    let asked = app.until(&mut terminal, |event| matches!(event, Event::Browser { .. })).await;
+    let Event::Browser { id, action } = asked else { unreachable!() };
+    assert_eq!(action, BrowserAction::Screenshot);
+    let result = BrowserResult::text("seen by the app");
+    app.send(&Command::BrowserResult { id, result }).await;
+    app.until_text(&mut terminal, "seen by the app").await;
+
+    // Without an app, the tool answers at once that the browser is not available.
+    app.send(&Command::Input { data: "later\r".into() }).await;
+    drop(app);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut app = App::connect(&process.socket).await;
+    let mut replay = String::new();
+    app.send(&Command::Attach).await;
+    app.until_text(&mut replay, "isn't available until SpecDeck is open again").await;
+    let asked = app.log.iter().any(|f| f["control"]["type"] == "browser");
+    assert!(!asked, "the new app was not asked to run the old action");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_started_without_the_browser_never_asks() {
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let _process = Process_::launch(600);
+    let mut app = App::connect(&_process.socket).await;
+    let mut terminal = browsing_session(&mut app, folder.path(), &url, false).await;
+    app.until_text(&mut terminal, "no browser").await;
+    assert!(!app.log.iter().any(|f| f["control"]["type"] == "browser"));
 }
