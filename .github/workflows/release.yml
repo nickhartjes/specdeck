@@ -1,6 +1,10 @@
 # Release builds, started by pushing a tag like v1.0.0 that matches the app version
 # (Cargo.toml workspace version and app/src-tauri/tauri.conf.json). Design decision 13.
 #
+# A new minor version needs its session transcript: run `just record-transcript` after the
+# version bump and commit crates/session/transcripts/<protocol>.jsonl (session-processes task
+# 8.2); the tests fail without it.
+#
 # The installers are uploaded to a draft GitHub release under stable names, which the Homebrew
 # cask and the user guide use; the draft is published once every platform has uploaded. Tags
 # with a suffix (v1.1.0-rc.1) are published as prereleases.

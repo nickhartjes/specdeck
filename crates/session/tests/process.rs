@@ -77,9 +77,10 @@ impl Drop for Process_ {
     }
 }
 
-/// The app's side of a connection.
+/// The app's side of a connection; notes every frame both ways, for the transcript.
 struct App {
     connection: Connection,
+    log: Vec<serde_json::Value>,
 }
 
 impl App {
@@ -93,23 +94,43 @@ impl App {
             assert!(Instant::now() < deadline, "no socket");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let mut connection = connect(socket).await.unwrap();
+        let connection = connect(socket).await.unwrap();
+        let mut app = App { connection, log: Vec::new() };
         let hello = Frozen::Hello { protocol, release: "test".into() };
-        connection.writer.send(&Frame::control(&hello).unwrap()).await.unwrap();
-        let theirs = connection.reader.recv().await.unwrap().unwrap();
+        app.send_frame(Frame::control(&hello).unwrap()).await;
+        let theirs = app.recv().await;
         assert!(matches!(theirs.parse::<Frozen>().unwrap(), Frozen::Hello { .. }));
-        App { connection }
+        app
     }
 
     async fn send(&mut self, command: &Command) {
-        self.connection.writer.send(&Frame::control(command).unwrap()).await.unwrap();
+        self.send_frame(Frame::control(command).unwrap()).await;
+    }
+
+    async fn send_frame(&mut self, frame: Frame) {
+        self.note("app", &frame);
+        self.connection.writer.send(&frame).await.unwrap();
+    }
+
+    async fn recv(&mut self) -> Frame {
+        let frame = self.connection.reader.recv().await.unwrap().expect("connection closed");
+        self.note("session", &frame);
+        frame
+    }
+
+    fn note(&mut self, from: &str, frame: &Frame) {
+        self.log.push(match frame {
+            // Terminal records pass through the app to the window unread.
+            Frame::Data(records) => serde_json::json!({ "from": from, "data": records.len() }),
+            frame => serde_json::json!({ "from": from, "control": frame.parse::<serde_json::Value>().unwrap() }),
+        });
     }
 
     /// Reads until `done` returns true for an event, collecting terminal output on the way.
     async fn until(&mut self, terminal: &mut String, done: impl Fn(&Event) -> bool) -> Event {
         tokio::time::timeout(WAIT, async {
             loop {
-                match self.connection.reader.recv().await.unwrap().expect("connection closed") {
+                match self.recv().await {
                     Frame::Data(records) => terminal.push_str(&String::from_utf8_lossy(&records)),
                     frame => {
                         let event = frame.parse::<Event>().unwrap();
@@ -128,9 +149,7 @@ impl App {
     async fn until_text(&mut self, terminal: &mut String, text: &str) {
         tokio::time::timeout(WAIT, async {
             while !terminal.contains(text) {
-                let frame =
-                    self.connection.reader.recv().await.unwrap().expect("connection closed");
-                if let Frame::Data(records) = frame {
+                if let Frame::Data(records) = self.recv().await {
                     terminal.push_str(&String::from_utf8_lossy(&records));
                 }
             }
@@ -396,4 +415,81 @@ async fn an_app_two_releases_older_can_only_end_the_session() {
     assert!(matches!(refused, Event::Failed { message } if message.contains("cannot control")));
     app.send(&Command::End).await;
     process.exits().await;
+}
+
+/// Records what the app and this release's session process say to each other, for the replay in
+/// `app/src-tauri/src/adapter.rs` (task 8.2): `just record-transcript`, once per release. Every
+/// command, and every event the app acts on that a terminal session sends.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "writes crates/session/transcripts; run by just record-transcript"]
+async fn record_transcript() {
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let mut process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let mut terminal = String::new();
+
+    // Only what the shell needs: nothing of the machine it was recorded on.
+    let mut environment = Environment::default();
+    environment.set("PATH", "/usr/bin:/bin");
+    environment.set("SHELL", "/bin/sh");
+    environment.set("HOME", folder.path().as_os_str());
+    let mut command = start(folder.path(), &url);
+    if let Command::Start { environment: start_environment, username, .. } = &mut command {
+        *start_environment = environment;
+        *username = "Host".into();
+    }
+    app.send(&command).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Started)).await;
+    let code = |event: &Event| match event {
+        Event::Notice { notice: HostNotice::Summary(summary) } => summary.code.clone(),
+        _ => None,
+    };
+    let first = app.until(&mut terminal, |event| code(event).is_some()).await;
+    let first = code(&first).unwrap();
+
+    app.send(&Command::Attach).await;
+    app.until(
+        &mut terminal,
+        |event| matches!(event, Event::HostEvent { event } if event["type"] == "snapshot"),
+    )
+    .await;
+    app.send(&Command::Input { data: "echo transcript-$((1+1))\n".into() }).await;
+    app.until_text(&mut terminal, "transcript-2").await;
+    app.send(&Command::Resize { cols: 90, rows: 25 }).await;
+    app.send(&Command::Colors { foreground: "#d0d0d0".into(), background: "#101010".into() }).await;
+    app.send(&Command::Verbose { enabled: true }).await;
+    app.send(&Command::WebViewer { available: true }).await;
+    app.send(&Command::ViewerLimit { limit: 5 }).await;
+    // Colours it cannot read: the answer is `failed`.
+    app.send(&Command::Colors { foreground: "red".into(), background: "blue".into() }).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Failed { .. })).await;
+
+    let code_now = InviteCode::parse(&first).unwrap();
+    let (_viewer, mut viewer) = join(&url, &code_now);
+    viewer_until(&mut viewer, |event| matches!(event, ViewerEvent::Welcome { .. })).await;
+    app.until(&mut terminal, |event| {
+        matches!(event, Event::Notice { notice: HostNotice::ViewerJoined(_) })
+    })
+    .await;
+    app.send(&Command::RemoveViewer { viewer_id: 1 }).await;
+    app.until(&mut terminal, |event| {
+        matches!(event, Event::Notice { notice: HostNotice::ViewerLeft(_) })
+    })
+    .await;
+    app.send(&Command::NewCode).await;
+    app.until(&mut terminal, |event| code(event).is_some_and(|code| code != first)).await;
+    app.send(&Command::Status).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Status { .. })).await;
+    app.send(&Command::Detach).await;
+    app.send(&Command::End).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;
+    process.exits().await;
+
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("transcripts");
+    std::fs::create_dir_all(&folder).unwrap();
+    let lines: Vec<String> = app.log.iter().map(|line| line.to_string()).collect();
+    let path = folder.join(format!("{}.jsonl", Protocol::own().0));
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    println!("recorded {} frames in {}", lines.len(), path.display());
 }

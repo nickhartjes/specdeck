@@ -15,6 +15,7 @@ use specdeck_session::runtime::{HostNotice, Summary};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::adapter;
 use crate::sessions::SessionId;
 
 /// How long a new session process may take to serve its socket.
@@ -50,6 +51,8 @@ pub struct SessionClient {
     pub agent: AgentId,
     /// What this app may do with it: everything, or only end it (an older release).
     pub compat: Compat,
+    /// The protocol of the release that started it.
+    peer: Protocol,
     outgoing: mpsc::UnboundedSender<Frame>,
     state: Arc<Mutex<ClientState>>,
 }
@@ -75,7 +78,7 @@ struct ClientState {
 
 impl SessionClient {
     fn send(&self, command: &Command) {
-        if let Ok(frame) = Frame::control(command) {
+        if let Some(frame) = adapter::command(self.peer, command) {
             let _ = self.outgoing.send(frame);
         }
     }
@@ -223,7 +226,7 @@ pub async fn connect(
     let read_state = state.clone();
     tokio::spawn(async move {
         while let Ok(Some(frame)) = reader.recv().await {
-            if !receive(frame, &read_state, &observer) {
+            if !receive(peer, frame, &read_state, &observer) {
                 break;
             }
         }
@@ -241,11 +244,11 @@ pub async fn connect(
         }
         on_ended();
     });
-    Ok(Arc::new(SessionClient { agent, compat: compat(own, peer), outgoing, state }))
+    Ok(Arc::new(SessionClient { agent, compat: compat(own, peer), peer, outgoing, state }))
 }
 
 /// Handles one frame from the session; false once the session has ended.
-fn receive(frame: Frame, state: &Mutex<ClientState>, observer: &Observer) -> bool {
+fn receive(peer: Protocol, frame: Frame, state: &Mutex<ClientState>, observer: &Observer) -> bool {
     let event = match frame {
         Frame::Data(records) => {
             let terminal = state.lock().unwrap().terminal.clone();
@@ -254,9 +257,9 @@ fn receive(frame: Frame, state: &Mutex<ClientState>, observer: &Observer) -> boo
             }
             return true;
         }
-        frame => match frame.parse::<Event>() {
-            Ok(event) => event,
-            Err(_) => return true,
+        frame => match adapter::event(peer, &frame) {
+            Some(event) => event,
+            None => return true,
         },
     };
     match event {

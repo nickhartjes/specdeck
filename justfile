@@ -49,6 +49,12 @@ check-web: web-wasm web-test
 capacity:
     cargo test -p specdeck-core --test sharing twenty_viewers_under_continuous_output -- --ignored --nocapture
 
+# Record what this release's session process and the app say to each other
+# (crates/session/transcripts/<protocol>.jsonl), once per release after the version bump. The app
+# replays the previous release's transcript to check it still controls its sessions (macOS, Linux)
+record-transcript:
+    cargo test -p specdeck-session --test process record_transcript -- --ignored --nocapture
+
 # Format the Rust code
 fmt:
     cargo fmt --all

@@ -2,6 +2,7 @@
 pub(crate) use specdeck_diag as diagnostics;
 // The hosted session, shared with the session process (`session-processes`).
 use specdeck_session::runtime as host;
+mod adapter;
 mod client;
 mod menu;
 mod migrate;

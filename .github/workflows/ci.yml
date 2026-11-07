@@ -42,6 +42,12 @@ jobs:
 
       - run: just check
 
+      # session-processes: the app still understands sessions the previous release started, from
+      # that release's recorded transcript (app/src-tauri/src/adapter.rs). Part of just check too;
+      # its own step, so a failure says what broke.
+      - name: Sessions of the previous release
+        run: cargo test -p specdeck-app adapter::tests
+
       # The web viewer is the same on every platform, and its recipes use bash: once, on Linux.
       - name: Web viewer
         if: runner.os == 'Linux'
