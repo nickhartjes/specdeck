@@ -1,0 +1,1122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- The target design for SpecDeck's session window; see README.md next to it. Open this file in a browser. -->
+<title>SpecDeck Workspace Mockup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: a desktop window frame (toolbar, request banners, three docks, status bar) under a thin
+   strip of mockup controls. Tokens are SpecDeck's own (app/ui/src/styles.css): system fonts, one
+   blue accent, semantic colours for working, ready and attention. */
+:root {
+  --window: #f4f5f7; --surface: #ffffff; --surface-sunken: #eceef1;
+  --hover: rgba(24,32,48,.06); --border: #dfe2e7; --border-strong: #c7ccd4;
+  --text: #1b1f27; --text-muted: #5d6573; --text-faint: #8a919d;
+  --accent: #3d5a99; --accent-soft: #e6ecf8; --on-accent: #fff;
+  --working: #b26a00; --working-soft: #fbf0dc; --ok: #1d7a55; --ok-soft: #e1f3ea;
+  --danger: #c0392b; --danger-soft: #fbe7e4;
+  --added: #e6f4ea; --added-text: #1d6b3a; --removed: #fce8e8; --removed-text: #a12a24;
+  --terminal-bg: #fbfbfc; --terminal-fg: #1b1f27; --page: #e3e6eb;
+  --nick: #3d5a99; --sanne: #1d7a55; --mo: #a0522d; --on-avatar: #fff;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 8px 28px rgba(16,24,40,.12);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Ubuntu, Cantarell, "Noto Sans", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "Ubuntu Mono", monospace;
+  --radius: 8px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  color-scheme: dark;
+  --window: #16181c; --surface: #1d2025; --surface-sunken: #121417;
+  --hover: rgba(255,255,255,.06); --border: #2b2f36; --border-strong: #3a3f48;
+  --text: #e6e8ec; --text-muted: #a0a7b2; --text-faint: #6f7682;
+  --accent: #8ea6e0; --accent-soft: #233150; --on-accent: #10172a;
+  --working: #f0b14f; --working-soft: #3a2c13; --ok: #5cc595; --ok-soft: #173326;
+  --danger: #ff7b6b; --danger-soft: #3c1d1a;
+  --added: #16301f; --added-text: #7fd89c; --removed: #3a1c1c; --removed-text: #ff9a90;
+  --terminal-bg: #121417; --terminal-fg: #dfe3e8; --page: #0d0e11;
+  --nick: #5b78b8; --sanne: #2f8f68; --mo: #b5683f; --on-avatar: #fff;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 28px rgba(0,0,0,.45);
+} }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --window: #16181c; --surface: #1d2025; --surface-sunken: #121417;
+  --hover: rgba(255,255,255,.06); --border: #2b2f36; --border-strong: #3a3f48;
+  --text: #e6e8ec; --text-muted: #a0a7b2; --text-faint: #6f7682;
+  --accent: #8ea6e0; --accent-soft: #233150; --on-accent: #10172a;
+  --working: #f0b14f; --working-soft: #3a2c13; --ok: #5cc595; --ok-soft: #173326;
+  --danger: #ff7b6b; --danger-soft: #3c1d1a;
+  --added: #16301f; --added-text: #7fd89c; --removed: #3a1c1c; --removed-text: #ff9a90;
+  --terminal-bg: #121417; --terminal-fg: #dfe3e8; --page: #0d0e11;
+  --nick: #5b78b8; --sanne: #2f8f68; --mo: #b5683f; --on-avatar: #fff;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 28px rgba(0,0,0,.45);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--page); color: var(--text); font: 13px/1.45 var(--font);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 12px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Mockup controls, outside the window */
+.demo { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; color: var(--text-muted); font-size: 12px; }
+.demo strong { color: var(--text); font-size: 13px; margin-right: 4px; }
+.demo .group { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: transparent; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.seg button:disabled { color: var(--text-faint); cursor: not-allowed; }
+.btn { height: 26px; padding: 0 10px; border: 1px solid var(--border-strong); background: var(--surface); border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.btn:hover { background: var(--hover); }
+.btn:disabled { color: var(--text-faint); cursor: not-allowed; background: var(--surface); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+.btn.good { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 45%, transparent); color: var(--ok); }
+.btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.btn svg { width: 15px; height: 15px; }
+.btn.small { height: 22px; padding: 0 8px; font-size: 11.5px; }
+
+/* The window */
+.win { flex: 1; min-height: 600px; display: grid; grid-template-rows: auto auto 1fr auto; background: var(--window); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; position: relative; }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--window); min-width: 0; flex-wrap: wrap; position: relative; }
+.lights { display: flex; gap: 6px; margin-right: 6px; }
+.lights i { width: 11px; height: 11px; border-radius: 50%; background: var(--border-strong); }
+.title { font-weight: 600; white-space: nowrap; }
+.title span { font-weight: 400; color: var(--text-muted); }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pill.working { color: var(--working); background: var(--working-soft); }
+.pill.waiting { color: var(--danger); background: var(--danger-soft); }
+.pill.ended { color: var(--text-muted); background: var(--surface-sunken); }
+.pill.ro { color: var(--text-muted); background: var(--surface-sunken); }
+.pill.ro::before { display: none; }
+.spacer { flex: 1; }
+.avatars { display: flex; }
+.av { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 10.5px; font-weight: 700; color: var(--on-avatar); flex: none; }
+.avatars .av { border: 2px solid var(--window); margin-left: -6px; }
+.av.Nick { background: var(--nick); } .av.Sanne { background: var(--sanne); } .av.Mo { background: var(--mo); }
+.sep { width: 1px; height: 18px; background: var(--border); }
+
+/* Popovers from the toolbar: ask to read, estimate, sharing settings */
+.pop { position: absolute; top: calc(100% + 4px); right: 10px; z-index: 20; width: min(340px, calc(100% - 20px)); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px; display: grid; gap: 10px; }
+.pop h3 { margin: 0; font-size: 13px; }
+.pop label { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.pop .check { display: flex; align-items: flex-start; gap: 8px; color: var(--text); }
+.pop .check input { margin-top: 2px; }
+.pop .check small { display: block; color: var(--text-muted); }
+.pop select, .pop textarea, .composer textarea { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; padding: 5px 7px; width: 100%; }
+.pop .actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* Request banners: read and confirm, estimation */
+.banners { display: grid; }
+.banners:empty { display: none; }
+.banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 7px 12px; border-bottom: 1px solid var(--border); background: var(--accent-soft); min-width: 0; }
+.banner .what { min-width: 0; flex: 1 1 260px; }
+.banner .what strong { font-weight: 650; }
+.banner .what small { display: block; color: var(--text-muted); }
+.clock { font: 600 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--accent); padding: 1px 7px; border-radius: 999px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.clock.low { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.who-ready { display: flex; gap: 6px; flex-wrap: wrap; }
+.who-ready span { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 2px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); font-size: 11.5px; }
+.who-ready span.done { border-color: color-mix(in srgb, var(--ok) 45%, transparent); color: var(--ok); }
+.who-ready .av { width: 18px; height: 18px; font-size: 9.5px; }
+.cards { display: flex; gap: 6px; flex-wrap: wrap; }
+.cardv { width: 34px; height: 44px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer; font: 650 14px var(--font); font-variant-numeric: tabular-nums; display: grid; place-items: center; }
+.cardv:hover { border-color: var(--accent); }
+.cardv[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); transform: translateY(-3px); }
+@media (prefers-reduced-motion: reduce) { .cardv[aria-pressed="true"] { transform: none; } }
+.dist { display: grid; gap: 3px; min-width: 200px; flex: 1 1 260px; }
+.dist .bar { display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.dist .bar b { text-align: right; }
+.dist .bar i { display: block; height: 10px; border-radius: 3px; background: var(--accent); }
+.dist .bar span { color: var(--text-muted); white-space: nowrap; }
+
+.main { display: grid; min-height: 0; position: relative; }
+.dock { background: var(--surface); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.dock-head { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px; border-bottom: 1px solid var(--border); flex: none; min-width: 0; }
+.dock-head .spacer { flex: 1; }
+.dtabs { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.dtab { border: 0; background: transparent; padding: 3px 8px; border-radius: 5px; cursor: pointer; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; display: inline-flex; gap: 5px; align-items: center; }
+.dtab:hover { background: var(--hover); }
+.dtab[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); }
+.badge { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--danger); color: var(--on-accent); font-size: 10px; letter-spacing: 0; display: inline-grid; place-items: center; font-variant-numeric: tabular-nums; }
+.dock-head .seg button { font-size: 11px; font-weight: 500; padding: 1px 7px; }
+.dock-body { overflow: auto; flex: 1; min-height: 0; }
+.split { background: var(--border); cursor: col-resize; position: relative; }
+.split:hover, .split:focus-visible { background: var(--accent); outline: none; }
+.split::after { content: ""; position: absolute; inset: 0 -3px; }
+
+/* Tree and lists */
+.tree { list-style: none; margin: 0; padding: 4px 0; }
+.tree ul { list-style: none; margin: 0; padding: 0; }
+.node { display: flex; align-items: center; gap: 5px; min-height: 24px; padding-right: 8px; cursor: pointer; white-space: nowrap; user-select: none; }
+.node:hover { background: var(--hover); }
+.node.sel { background: var(--accent-soft); }
+.node .chev { width: 12px; color: var(--text-faint); font-size: 9px; text-align: center; flex: none; }
+.node svg { width: 14px; height: 14px; flex: none; color: var(--text-faint); }
+.node .name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.node .sub { color: var(--text-faint); font-size: 11px; }
+.node.faint .name { color: var(--text-faint); }
+.node .st { font: 600 10.5px var(--mono); width: 14px; text-align: center; flex: none; }
+.st.M { color: var(--working); } .st.A { color: var(--ok); } .st.R { color: var(--text-faint); }
+.node.two { align-items: flex-start; padding-block: 5px; }
+.node.two .name { white-space: normal; }
+.tree-foot { padding: 8px 10px; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 11.5px; flex: none; display: grid; gap: 6px; }
+
+/* Center: tabs and editor */
+.center { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
+.tabs { display: flex; align-items: stretch; height: 34px; background: var(--window); border-bottom: 1px solid var(--border); overflow-x: auto; flex: none; scrollbar-width: thin; }
+.tab { display: flex; align-items: center; gap: 6px; padding: 0 8px 0 12px; border-right: 1px solid var(--border); cursor: pointer; white-space: nowrap; color: var(--text-muted); position: relative; }
+.tab:hover { background: var(--hover); }
+.tab[aria-selected="true"] { background: var(--surface); color: var(--text); }
+.tab[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--accent); }
+.tab.preview .tlabel { font-style: italic; }
+.tab .x { width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; color: var(--text-faint); font-size: 14px; line-height: 1; }
+.tab .x:hover { background: var(--hover); color: var(--text); }
+.tab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.tab svg { width: 14px; height: 14px; }
+.editor { flex: 1; min-height: 0; overflow: auto; position: relative; }
+
+.term { background: var(--terminal-bg); color: var(--terminal-fg); font: 12.5px/1.55 var(--mono); padding: 10px 14px; min-height: 100%; white-space: pre-wrap; word-break: break-word; }
+.term .l { display: block; border-radius: 3px; }
+.term .dim { color: var(--text-faint); }
+.term .ac { color: var(--accent); font-weight: 600; }
+.term .ok { color: var(--ok); }
+.term .wk { color: var(--working); }
+.term .add { color: var(--added-text); }
+.term .q { color: var(--danger); font-weight: 600; }
+.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { from { background: color-mix(in srgb, var(--accent) 30%, transparent); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .flash { animation: none; outline: 1px solid var(--accent); } }
+
+.filebar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: var(--surface); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
+.filebar .path { font-family: var(--mono); color: var(--text); overflow-wrap: anywhere; }
+.filebar .spacer { flex: 1; }
+.code { font: 12.5px/1.6 var(--mono); padding: 6px 0 24px; min-width: max-content; }
+.row { display: grid; grid-template-columns: 44px 18px 1fr; padding-right: 20px; }
+.row .n { text-align: right; color: var(--text-faint); padding-right: 8px; user-select: none; }
+.row .m { color: var(--text-faint); user-select: none; text-align: center; }
+.row.add { background: var(--added); } .row.add .m { color: var(--added-text); }
+.row.del { background: var(--removed); } .row.del .m { color: var(--removed-text); }
+.row.del .t { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed-text) 50%, transparent); }
+.row.mark .n { box-shadow: inset -3px 0 0 var(--added-text); }
+.row .t { white-space: pre; }
+
+.md { max-width: 68ch; padding: 18px 28px 40px; font-size: 14px; line-height: 1.6; }
+.md h1 { font-size: 21px; margin: 0 0 10px; text-wrap: balance; }
+.md h2 { font-size: 15.5px; margin: 22px 0 6px; text-wrap: balance; }
+.md p { margin: 0 0 10px; }
+.md ul { padding-left: 20px; margin: 0 0 10px; }
+.md li.task { list-style: none; margin-left: -20px; display: flex; gap: 8px; }
+.md li.task.done span { color: var(--text-muted); text-decoration: line-through; }
+.md code { font: 12.5px var(--mono); background: var(--surface-sunken); padding: 1px 4px; border-radius: 4px; }
+.md .new { background: var(--added); box-shadow: -8px 0 0 var(--added), inset 3px 0 0 var(--added-text); border-radius: 0 4px 4px 0; }
+.notice { margin: 40px auto; max-width: 46ch; text-align: center; color: var(--text-muted); display: grid; gap: 8px; padding: 0 16px; }
+.notice strong { color: var(--text); font-size: 15px; }
+.notice svg { width: 28px; height: 28px; margin: 0 auto; color: var(--text-faint); }
+.wire { margin: 16px; border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 14px; display: grid; gap: 10px; max-width: 520px; }
+.wire .bar { height: 26px; border-radius: 5px; background: var(--surface-sunken); display: flex; align-items: center; gap: 8px; padding: 0 8px; font-size: 11.5px; color: var(--text-muted); }
+.wire .bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+.wire .blk { height: 70px; border-radius: 5px; background: var(--surface-sunken); }
+
+/* Timeline */
+.tl { padding: 8px 0 20px; }
+.prompt { margin: 6px 10px 2px; padding: 8px 10px; background: var(--surface-sunken); border-radius: var(--radius); }
+.prompt .who { font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 2px; }
+.prompt .outcome { margin-top: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
+.prompt .outcome button { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 12px; }
+.step { display: flex; align-items: flex-start; gap: 8px; width: calc(100% - 12px); margin: 0 6px; padding: 5px 8px 5px 14px; text-align: left; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+.step:hover { background: var(--hover); }
+.step.cur { background: var(--accent-soft); }
+.step svg { width: 14px; height: 14px; flex: none; margin-top: 2px; color: var(--text-faint); }
+.step .lbl { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.step .lbl code { font: 12px var(--mono); }
+.step .go { color: var(--text-faint); font-size: 11px; white-space: nowrap; }
+.step .plus { color: var(--added-text); font: 11px var(--mono); }
+.step .minus { color: var(--removed-text); font: 11px var(--mono); }
+.step.ask { background: var(--danger-soft); }
+.step.ask svg { color: var(--danger); }
+.event { margin: 6px 10px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius); font-size: 12px; color: var(--text-muted); display: flex; gap: 8px; align-items: center; }
+.event svg { width: 14px; height: 14px; color: var(--accent); flex: none; }
+.event strong { color: var(--text); }
+.catchup { margin: 6px 10px 10px; padding: 10px 12px; border-radius: var(--radius); background: var(--accent-soft); display: grid; gap: 6px; }
+.catchup h4 { margin: 0; font-size: 12.5px; }
+.catchup ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.now { margin: 8px 16px; color: var(--working); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.now::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .now::before { animation: none; } }
+
+/* Prompt suggestions */
+.sugs { padding: 10px; display: grid; gap: 10px; }
+.sugs h4 { margin: 4px 2px 0; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); }
+.sug { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; display: grid; gap: 6px; background: var(--surface); }
+.sug .head { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-muted); }
+.sug .head .av { width: 18px; height: 18px; font-size: 9.5px; }
+.sug .head strong { color: var(--text); }
+.sug .text { overflow-wrap: anywhere; }
+.sug textarea { width: 100%; min-height: 64px; border: 1px solid var(--border-strong); border-radius: 6px; padding: 5px 7px; background: var(--surface); resize: vertical; }
+.sug .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-left: auto; }
+.chip.pending { background: var(--working-soft); color: var(--working); }
+.chip.accepted { background: var(--ok-soft); color: var(--ok); }
+.chip.kept { background: var(--accent-soft); color: var(--accent); }
+.chip.declined { background: var(--surface-sunken); color: var(--text-muted); }
+.composer { display: grid; gap: 6px; padding: 10px; border-bottom: 1px solid var(--border); }
+.composer textarea { min-height: 60px; resize: vertical; }
+.composer .row2 { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 11.5px; color: var(--text-muted); flex-wrap: wrap; }
+.empty-note { color: var(--text-muted); font-size: 12px; padding: 4px 2px; }
+
+/* Recap after the session */
+.recap { grid-column: 1 / -1; overflow: auto; background: var(--surface); }
+.recap-in { max-width: 760px; margin: 0 auto; padding: 22px 24px 36px; display: grid; gap: 18px; }
+.recap h2 { margin: 0; font-size: 20px; text-wrap: balance; }
+.recap .meta { color: var(--text-muted); }
+.recap section { display: grid; gap: 6px; }
+.recap h3 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); }
+.recap ol, .recap ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.recap li small { display: block; color: var(--text-muted); }
+.recap code { font: 12.5px var(--mono); }
+.recap .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.recap .acts span { color: var(--text-muted); font-size: 12px; }
+
+/* Notifications (in the mockup: the OS notification, shown inside the window) */
+.toasts { position: absolute; right: 12px; bottom: 34px; z-index: 30; display: grid; gap: 8px; width: min(320px, calc(100% - 24px)); pointer-events: none; }
+.toast { pointer-events: auto; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow); padding: 9px 11px; display: grid; gap: 2px; font-size: 12.5px; }
+.toast small { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+
+/* Status bar */
+.status { display: flex; align-items: center; gap: 2px; padding: 0 6px; height: 26px; border-top: 1px solid var(--border); background: var(--window); font-size: 11.5px; color: var(--text-muted); overflow: hidden; white-space: nowrap; }
+.status button { border: 0; background: transparent; padding: 2px 7px; border-radius: 4px; cursor: pointer; color: inherit; }
+.status button:hover { background: var(--hover); color: var(--text); }
+.gauge { display: inline-block; width: 46px; height: 6px; border-radius: 3px; background: var(--surface-sunken); vertical-align: middle; margin-right: 4px; overflow: hidden; border: 1px solid var(--border); }
+.gauge i { display: block; height: 100%; width: 38%; background: var(--accent); }
+.status .dirty { color: var(--working); }
+
+.try { color: var(--text-muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.try b { color: var(--text); font-weight: 600; }
+kbd { font: 11px var(--mono); padding: 0 4px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; background: var(--surface); }
+
+/* Phone and narrow windows: one area at a time, docks slide over the tabs */
+@media (max-width: 760px) {
+  .main { grid-template-columns: 1fr !important; }
+  .split { display: none; }
+  .dock { position: absolute; top: 0; bottom: 0; z-index: 5; width: min(86%, 340px); box-shadow: var(--shadow); }
+  .dock.left { left: 0; border-right: 1px solid var(--border); }
+  .dock.right { right: 0; border-left: 1px solid var(--border); }
+  .title span, .hide-narrow { display: none; }
+  .win { min-height: 660px; }
+}
+</style>
+
+</head>
+<body>
+<div class="demo" aria-label="Mockup controls">
+  <strong>Mockup</strong>
+  <span class="group"><span>You are</span>
+    <span class="seg" id="persona"><button aria-pressed="true" data-v="host">Nick · host</button><button aria-pressed="false" data-v="po">Sanne · product owner</button><button aria-pressed="false" data-v="dev">Mo · developer</button></span>
+  </span>
+  <span class="group"><span>Files</span>
+    <span class="seg" id="scope"><button aria-pressed="true" data-v="touched">Touched files</button><button aria-pressed="false" data-v="all">Whole project</button></span>
+  </span>
+  <span class="group">
+    <button class="btn" id="simWait">Agent asks the host a question</button>
+    <button class="btn" id="simSuggest">A viewer suggests a prompt</button>
+    <button class="btn" id="simLate" aria-pressed="false" hidden>Joined 40 minutes late</button>
+    <button class="btn" id="simEnd">End the session</button>
+  </span>
+</div>
+
+<div class="win" id="win">
+  <div class="toolbar" id="toolbar">
+    <div class="lights hide-narrow" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="title">specshare <span id="hostedBy">· hosted by you</span></div>
+    <span class="pill working" id="statePill">Working</span>
+    <span class="pill ro" id="roPill" hidden>Read-only</span>
+    <span class="spacer"></span>
+    <span id="hostActs" style="display:inline-flex;gap:4px;flex-wrap:wrap">
+      <button class="btn" id="askRead" title="Ask viewers to read something and say when they are ready">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5h4.5A1.5 1.5 0 018 5v8a1.5 1.5 0 00-1.5-1.5H2zM14 3.5H9.5A1.5 1.5 0 008 5v8a1.5 1.5 0 011.5-1.5H14z"/></svg>Ask to read
+      </button>
+      <button class="btn" id="askEstimate" title="Ask everyone how big a task is">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3.5" width="7" height="10" rx="1.2" transform="rotate(-8 5.5 8.5)"/><rect x="7" y="2.5" width="7" height="10" rx="1.2"/></svg>Estimate
+      </button>
+      <button class="btn ghost" id="sharingBtn" title="What viewers may see and do" aria-label="Sharing settings">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6"/><circle cx="10" cy="4.5" r="1.5"/><circle cx="6" cy="11.5" r="1.5"/></svg>
+      </button>
+    </span>
+    <div class="avatars" aria-label="3 people: Nick (host), Sanne and Mo watching" title="Nick (host), Sanne and Mo watching">
+      <span class="av Nick">N</span><span class="av Sanne">S</span><span class="av Mo">M</span>
+    </div>
+    <span class="sep hide-narrow"></span>
+    <span class="seg hide-narrow" id="presets" aria-label="Layout">
+      <button data-v="overview" aria-pressed="false">Overview</button><button data-v="developer" aria-pressed="true">Developer</button><button data-v="present" aria-pressed="false">Present</button>
+    </span>
+    <button class="btn ghost" id="tglLeft" aria-pressed="true" title="Files (Alt+1)" aria-label="Show files">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M6 2.5v11"/><path d="M2.8 5h2M2.8 7h2" stroke-width="1"/></svg>
+    </button>
+    <button class="btn ghost" id="tglRight" aria-pressed="true" title="Timeline and prompts (Alt+2)" aria-label="Show timeline">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10 2.5v11"/><path d="M11.3 5h2M11.3 7h2M11.3 9h2" stroke-width="1"/></svg>
+    </button>
+    <div id="pop"></div>
+  </div>
+
+  <div class="banners" id="banners" aria-live="polite"></div>
+
+  <div class="main" id="main">
+    <aside class="dock left" id="left" aria-label="Files">
+      <div class="dock-head">
+        <div class="dtabs" role="tablist" id="leftTabs" aria-label="Files"></div>
+        <span class="spacer"></span>
+        <button class="btn ghost small" id="closeLeft" aria-label="Hide files" title="Hide (Alt+1)">&times;</button>
+      </div>
+      <div class="dock-body"><ul class="tree" id="tree" role="tree"></ul></div>
+      <div class="tree-foot" id="treeFoot"></div>
+    </aside>
+    <div class="split" id="splitL" role="separator" aria-orientation="vertical" aria-label="Resize files" tabindex="0"></div>
+    <section class="center" aria-label="Editor">
+      <div class="tabs" id="tabs" role="tablist"></div>
+      <div class="editor" id="editor" role="tabpanel"></div>
+    </section>
+    <div class="split" id="splitR" role="separator" aria-orientation="vertical" aria-label="Resize timeline" tabindex="0"></div>
+    <aside class="dock right" id="right" aria-label="Timeline and prompts">
+      <div class="dock-head">
+        <div class="dtabs" role="tablist" id="rightTabs" aria-label="Timeline and prompts"></div>
+        <span class="spacer"></span>
+        <span class="seg" id="detail"><button data-v="summary" aria-pressed="false">Summary</button><button data-v="details" aria-pressed="true">Details</button></span>
+        <button class="btn ghost small" id="closeRight" aria-label="Hide timeline" title="Hide (Alt+2)">&times;</button>
+      </div>
+      <div class="dock-body" id="rightBody"></div>
+    </aside>
+    <section class="recap" id="recap" hidden aria-label="Session recap"></section>
+  </div>
+
+  <div class="status">
+    <button title="Session folder">~/projects/specshare</button>
+    <button title="Open the uncommitted files">&#9095; viewer-heartbeat <span class="dirty">&#9679; 5</span> &uarr;2</button>
+    <span class="spacer"></span>
+    <button title="Model">Opus 5.5 &middot; 1M</button>
+    <button title="Context used"><span class="gauge"><i></i></span>38% &middot; 380k</button>
+  </div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</div>
+
+<div class="try">
+  <span><b>Switch who you are</b> above: the host, a product owner (Overview) or a developer</span>
+  <span><b>As Nick:</b> Ask to read, Estimate, and the sliders button for what viewers may see</span>
+  <span><b>As a viewer:</b> suggest a prompt in Prompts, answer a read request or a vote</span>
+  <span><b>Click a step</b> in the timeline: jumps to the change or the terminal line</span>
+  <span><kbd>Alt</kbd>+<kbd>1</kbd> files &middot; <kbd>Alt</kbd>+<kbd>2</kbd> timeline &middot; <kbd>Alt</kbd>+<kbd>0</kbd> terminal</span>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k));
+  return e;
+}
+const svg = (d) => { const t = document.createElement('template'); t.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`; return t.content.firstChild; };
+const IC = {
+  file: '<path d="M4 1.5h5l3 3v10H4z"/><path d="M9 1.5v3h3"/>',
+  doc: '<path d="M4 1.5h5l3 3v10H4z"/><path d="M6 7.5h4M6 9.5h4M6 11.5h2.5"/>',
+  folder: '<path d="M1.5 4.5v8h13v-7h-6l-1.5-1.5h-5.5z"/>',
+  term: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6l2 2-2 2M8 10.5h3.5"/>',
+  read: '<path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>',
+  edit: '<path d="M10.5 2.5l3 3-8 8h-3v-3z"/>',
+  write: '<path d="M4 1.5h5l3 3v10H4z"/><path d="M8 7v5M5.5 9.5h5"/>',
+  run: '<path d="M4.5 3l8 5-8 5z"/>',
+  plan: '<path d="M3 2.5h10v11H3z"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>',
+  ask: '<circle cx="8" cy="8" r="6.5"/><path d="M6.3 6.2a1.8 1.8 0 113 1.4c-.8.5-1.3.9-1.3 1.8M8 11.3v.2"/>',
+  lock: '<rect x="3.5" y="7" width="9" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/>',
+  share: '<path d="M8 10V2.5M5 5.5l3-3 3 3"/><path d="M3 9v4.5h10V9"/>',
+  image: '<rect x="2" y="3" width="12" height="10" rx="1.2"/><circle cx="6" cy="6.5" r="1.2"/><path d="M2.5 12l3.5-3.5 2.5 2.5 2-2 3 3"/>',
+  cards: '<rect x="2" y="3.5" width="7" height="10" rx="1.2"/><rect x="7" y="2.5" width="7" height="10" rx="1.2"/>',
+  check: '<path d="M3 8.5l3 3 7-7"/>',
+};
+const PEOPLE = { host: 'Nick', po: 'Sanne', dev: 'Mo' };
+const avatar = (name) => h('span', { class: 'av ' + name, 'aria-hidden': 'true' }, name[0]);
+const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+/* ---------- Session data: a Claude Code session adding a heartbeat ---------- */
+const C = (t) => ({ k: 'ctx', t }), A = (t) => ({ k: 'add', t }), D = (t) => ({ k: 'del', t });
+const FILES = {
+  'crates/protocol/src/message.rs': { st: 'M', lines: [
+    C('use serde::{Deserialize, Serialize};'), C(''), C('use crate::Role;'), C(''),
+    C('#[derive(Debug, Clone, Serialize, Deserialize)]'), C('#[serde(tag = "type", rename_all = "camelCase")]'),
+    C('pub enum Message {'), C('    Hello { name: String, role: Role },'), C('    Frame { seq: u64, data: Vec<u8> },'),
+    D('    Bye,'), A('    Bye,'), A('    /// Sent by the host every 3 seconds. A viewer that misses'), A('    /// three in a row shows the session as unreachable.'), A('    Heartbeat { at_ms: u64 },'),
+    C('}'), C(''), C('impl Message {'), C('    pub fn is_control(&self) -> bool {'), D('        matches!(self, Message::Hello { .. } | Message::Bye)'), A('        matches!(self, Message::Hello { .. } | Message::Bye | Message::Heartbeat { .. })'), C('    }'), C('}'),
+  ]},
+  'crates/core/src/heartbeat.rs': { st: 'A', lines: [
+    A('//! Heartbeats from the host, so viewers notice a host that went away'), A('//! without closing the connection (sleep, lost network).'), A(''),
+    A('use std::time::{Duration, Instant};'), A(''), A('pub const INTERVAL: Duration = Duration::from_secs(3);'), A('pub const MISSED_BEFORE_UNREACHABLE: u32 = 3;'), A(''),
+    A('#[derive(Debug)]'), A('pub struct Watch {'), A('    last: Instant,'), A('}'), A(''),
+    A('impl Watch {'), A('    pub fn new(now: Instant) -> Self {'), A('        Self { last: now }'), A('    }'), A(''),
+    A('    pub fn beat(&mut self, now: Instant) {'), A('        self.last = now;'), A('    }'), A(''),
+    A('    pub fn unreachable(&self, now: Instant) -> bool {'), A('        now.duration_since(self.last) > INTERVAL * MISSED_BEFORE_UNREACHABLE'), A('    }'), A('}'),
+  ]},
+  'crates/core/src/session.rs': { st: 'M', lines: [
+    C('use crate::heartbeat;'), C('use crate::output::OutputLog;'), C('use specdeck_protocol::Message;'), C(''),
+    C('pub struct Session {'), C('    log: OutputLog,'), C('    peers: Vec<Peer>,'), A('    last_beat: Instant,'), C('}'), C(''),
+    C('impl Session {'), C('    pub fn tick(&mut self, now: Instant) {'), D('        self.flush(now);'), A('        self.flush(now);'), A('        if now.duration_since(self.last_beat) >= heartbeat::INTERVAL {'), A('            let at_ms = self.clock.millis(now);'), A('            self.broadcast(Message::Heartbeat { at_ms });'), A('            self.last_beat = now;'), A('        }'),
+    C('    }'), C(''), C('    fn broadcast(&mut self, message: Message) {'), C('        for peer in &mut self.peers {'), C('            peer.send(&message);'), C('        }'), C('    }'), C('}'),
+  ]},
+  'app/ui/src/components/StatusBar.tsx': { st: 'M', lines: [
+    C("import type { SessionState } from '../api/types';"), C(''),
+    C('export function StatusBar({ state }: { state: SessionState }) {'), C('  return ('), C('    <footer className="status-bar">'),
+    D('      <StatusPill live={state.live} />'), A('      <StatusPill live={state.live} unreachable={state.hostUnreachable} />'),
+    C('      <Folder path={state.folder} />'), C('    </footer>'), C('  );'), C('}'),
+  ]},
+  'Cargo.toml': { st: 'R', lines: [
+    C('[workspace]'), C('resolver = "2"'), C('members = ["crates/*", "app/src-tauri"]'), C(''), C('[workspace.package]'), C('version = "1.6.0"'), C('edition = "2024"'), C('license = "MIT"'),
+  ]},
+  'openspec/changes/viewer-heartbeat/design.md': { st: 'A', md: [
+    '# Viewer heartbeat', '',
+    'Viewers cannot tell a quiet agent from a host that went away. A laptop that sleeps keeps the WebRTC connection open for up to 30 seconds before ICE gives up.', '',
+    '## Decision', '',
+    'The host sends `Heartbeat { at_ms }` every 3 seconds on the control channel. A viewer that misses three in a row shows the session as **unreachable** in the status pill.', '',
+    '+The interval is fixed, not a setting: nobody should have to tune it.', '',
+    '## Alternatives', '',
+    '- Rely on ICE consent freshness: too slow, and not visible to the UI.',
+    '- Heartbeat from the server: says nothing about the host app itself.',
+  ]},
+  'openspec/changes/viewer-heartbeat/tasks.md': { st: 'A', md: [
+    '# Tasks', '',
+    '## 1. Protocol', '', '- [x] 1.1 Add `Message::Heartbeat`', '- [x] 1.2 Treat it as a control message', '',
+    '## 2. Host', '', '- [x] 2.1 Send a heartbeat every 3 seconds', '- [ ] 2.2 Stop sending while the session is ending', '',
+    '## 3. Viewer', '', '- [ ] 3.1 Show "unreachable" after three missed heartbeats', '- [ ] 3.2 Recover when heartbeats return',
+  ]},
+};
+const PROJECT = {
+  'README.md': { md: ['# SpecDeck', '', 'Run a coding agent with your team watching along.'] },
+  'crates/core/src/lib.rs': {}, 'crates/core/src/pty.rs': {}, 'crates/protocol/src/lib.rs': {}, 'app/ui/src/App.tsx': {}, '.env': { denied: true },
+};
+const isDoc = (p) => p.endsWith('.md');
+
+/* Files shared into the session by people, apart from what the agent touched. */
+const SHARED = [
+  { id: 'shared/heartbeat-wireframe.png', name: 'heartbeat-wireframe.png', by: 'Sanne', size: '240 KB', kind: 'image', when: '12 min ago' },
+  { id: 'shared/acceptance-criteria.md', name: 'acceptance-criteria.md', by: 'Sanne', size: '2 KB', kind: 'md', when: '9 min ago', md: [
+    '# Acceptance criteria: host unreachable', '',
+    '- A viewer sees **Host unreachable** within 10 seconds after the host\'s laptop sleeps.',
+    '- The terminal keeps the last output; nothing is cleared.',
+    '- When the host is back, the pill returns to **Working** without the viewer doing anything.',
+  ]},
+  { id: 'shared/ci-failure.log', name: 'ci-failure.log', by: 'Mo', size: '18 KB', kind: 'text', when: '4 min ago', text: [
+    'thread \'viewer_reconnects\' panicked at crates/core/tests/sharing.rs:211:9:',
+    'assertion failed: viewer saw Ended before Unreachable',
+    'test result: FAILED. 19 passed; 1 failed',
+  ]},
+];
+
+const TERM = [
+  ['dim', '╭───────────────────────────────────────────────╮'],
+  ['dim', '│ ✻ Claude Code   ~/projects/specshare          │'],
+  ['dim', '╰───────────────────────────────────────────────╯'],
+  ['', ''],
+  ['ac', '> Viewers should notice within 10 seconds when the host goes away. Plan it as an OpenSpec change first.'],
+  ['', ''],
+  ['', '⏺ Read(crates/core/src/session.rs)', 'r1'], ['dim', '  ⎿  Read 214 lines'],
+  ['', '⏺ Read(crates/protocol/src/message.rs)', 'r2'], ['dim', '  ⎿  Read 88 lines'],
+  ['', '⏺ Read(Cargo.toml)', 'r3'], ['dim', '  ⎿  Read 31 lines'],
+  ['', '⏺ Write(openspec/changes/viewer-heartbeat/design.md)', 'w1'], ['dim', '  ⎿  Wrote 18 lines'],
+  ['', '⏺ Write(openspec/changes/viewer-heartbeat/tasks.md)', 'w2'], ['dim', '  ⎿  Wrote 14 lines'],
+  ['', '⏺ The plan is in openspec/changes/viewer-heartbeat. Starting on the protocol.'],
+  ['', ''],
+  ['ac', '> go ahead'],
+  ['', ''],
+  ['', '⏺ Update(crates/protocol/src/message.rs)', 'e1'], ['add', '  ⎿  +5 -2'],
+  ['', '⏺ Write(crates/core/src/heartbeat.rs)', 'e2'], ['add', '  ⎿  Wrote 26 lines'],
+  ['', '⏺ Update(crates/core/src/session.rs)', 'e3'], ['add', '  ⎿  +7 -1'],
+  ['', '⏺ Bash(cargo test -p specdeck-core heartbeat)', 'b1'], ['dim', '  ⎿  running 3 tests'],
+  ['ok', '     test result: ok. 3 passed; 0 failed'],
+  ['', '⏺ Update(app/ui/src/components/StatusBar.tsx)', 'e4'], ['add', '  ⎿  +1 -1'],
+  ['', '⏺ Update(openspec/changes/viewer-heartbeat/tasks.md)', 'e5'], ['add', '  ⎿  +3 -3'],
+  ['', ''],
+];
+
+const TIMELINE = [
+  { prompt: 'Viewers should notice within 10 seconds when the host goes away. Plan it as an OpenSpec change first.', outcome: 'Wrote a plan: Viewer heartbeat', steps: [
+    { k: 'read', d: 'Read <code>session.rs</code>', s: null, file: 'crates/core/src/session.rs', term: 'r1' },
+    { k: 'read', d: 'Read <code>message.rs</code>', s: null, file: 'crates/protocol/src/message.rs', term: 'r2' },
+    { k: 'read', d: 'Read <code>Cargo.toml</code>', s: 'Looked at 3 files', file: 'Cargo.toml', term: 'r3' },
+    { k: 'plan', d: 'Write <code>design.md</code>, <code>tasks.md</code>', s: 'Proposed a plan: Viewer heartbeat', file: 'openspec/changes/viewer-heartbeat/design.md', term: 'w1' },
+  ]},
+  { prompt: 'go ahead', outcome: '4 files changed · tests pass · 3 of 6 tasks done', steps: [
+    { k: 'edit', d: 'Update <code>message.rs</code>', s: 'Changed message.rs', file: 'crates/protocol/src/message.rs', term: 'e1', p: 5, m: 2 },
+    { k: 'write', d: 'Write <code>heartbeat.rs</code>', s: 'Created heartbeat.rs', file: 'crates/core/src/heartbeat.rs', term: 'e2', p: 26, m: 0 },
+    { k: 'edit', d: 'Update <code>session.rs</code>', s: 'Changed session.rs', file: 'crates/core/src/session.rs', term: 'e3', p: 7, m: 1 },
+    { k: 'run', d: '<code>cargo test -p specdeck-core heartbeat</code>', s: 'Ran the heartbeat tests: 3 passed', term: 'b1' },
+    { k: 'edit', d: 'Update <code>StatusBar.tsx</code>', s: 'Changed StatusBar.tsx', file: 'app/ui/src/components/StatusBar.tsx', term: 'e4', p: 1, m: 1 },
+    { k: 'edit', d: 'Update <code>tasks.md</code>', s: 'Ticked 3 tasks: 3 of 6 done', file: 'openspec/changes/viewer-heartbeat/tasks.md', term: 'e5', p: 3, m: 3 },
+  ]},
+];
+
+/* ---------- State ---------- */
+const S = {
+  persona: 'host', scope: 'touched', detail: 'details', preset: 'developer',
+  left: true, right: true, lw: 250, rw: 340, leftTab: 'code', rightTab: 'timeline',
+  tabs: [{ id: 'terminal' }], active: 'terminal', views: {},
+  open: new Set(['crates', 'crates/core', 'crates/core/src', 'crates/protocol', 'crates/protocol/src', 'app', 'app/ui', 'app/ui/src', 'app/ui/src/components', 'openspec', 'openspec/changes', 'openspec/changes/viewer-heartbeat']),
+  waiting: false, seconds: 14, curStep: null, late: false, ended: false, expanded: new Set(),
+  settings: { suggest: true, whole: 'changed', recap: true, shareFiles: true },
+  suggestions: [
+    { id: 1, from: 'Sanne', text: 'Also show the host as unreachable in the people list, not only in the status pill.', status: 'pending', when: '2 min ago' },
+    { id: 2, from: 'Mo', text: 'Add a test for a host that comes back after 9 seconds: the viewer should never show unreachable.', status: 'pending', when: 'just now' },
+    { id: 3, from: 'Sanne', text: 'Write a short note in the docs on what viewers see when the host\'s laptop sleeps.', status: 'kept', when: '15 min ago' },
+  ],
+  extra: [], events: [], read: null, estimate: null, pop: null, editing: null, nextId: 10,
+};
+const me = () => PEOPLE[S.persona];
+const isHost = () => S.persona === 'host';
+const narrow = () => matchMedia('(max-width: 760px)').matches;
+if (narrow()) { S.left = false; S.right = false; }
+
+/* ---------- Layout ---------- */
+function layout() {
+  const main = $('#main');
+  const ended = S.ended;
+  $('#recap').hidden = !ended;
+  for (const id of ['#left', '#splitL', '#right', '#splitR']) $(id).style.display = ended ? 'none' : '';
+  document.querySelector('.center').style.display = ended ? 'none' : '';
+  main.style.gridTemplateColumns = ended ? '1fr' : `${S.left ? S.lw + 'px' : '0'} ${S.left ? '4px' : '0'} minmax(0,1fr) ${S.right ? '4px' : '0'} ${S.right ? S.rw + 'px' : '0'}`;
+  if (!ended) { $('#left').hidden = !S.left; $('#splitL').hidden = !S.left; $('#right').hidden = !S.right; $('#splitR').hidden = !S.right; }
+  $('#tglLeft').setAttribute('aria-pressed', S.left); $('#tglRight').setAttribute('aria-pressed', S.right);
+  for (const b of $('#presets').children) b.setAttribute('aria-pressed', b.dataset.v === S.preset);
+}
+function setDock(side, on) {
+  S[side] = on ?? !S[side];
+  if (narrow() && S[side]) S[side === 'left' ? 'right' : 'left'] = false;
+  S.preset = null; layout();
+}
+function drag(id, key, sign) {
+  const el = $(id);
+  el.addEventListener('pointerdown', (e) => {
+    el.setPointerCapture(e.pointerId);
+    const x0 = e.clientX, w0 = S[key];
+    const move = (ev) => { S[key] = Math.max(180, Math.min(560, w0 + sign * (ev.clientX - x0))); layout(); };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', () => el.removeEventListener('pointermove', move), { once: true });
+  });
+  el.addEventListener('keydown', (e) => {
+    const d = e.key === 'ArrowRight' ? 16 : e.key === 'ArrowLeft' ? -16 : 0;
+    if (!d) return; e.preventDefault();
+    S[key] = Math.max(180, Math.min(560, S[key] + sign * d)); layout();
+  });
+}
+
+/* ---------- Tabs ---------- */
+const base = (p) => p.split('/').pop();
+function openFile(path, { pin = false, focus } = {}) {
+  let t = S.tabs.find((x) => x.id === path);
+  if (t) { if (pin) t.preview = false; }
+  else {
+    const prev = S.tabs.findIndex((x) => x.preview);
+    t = { id: path, preview: !pin };
+    if (prev >= 0 && !pin) S.tabs[prev] = t; else S.tabs.push(t);
+  }
+  S.active = path;
+  if (narrow()) { S.left = false; layout(); }
+  renderTabs(); renderEditor(focus); renderLeft();
+}
+function closeTab(id) {
+  const i = S.tabs.findIndex((x) => x.id === id);
+  if (i < 0 || id === 'terminal') return;
+  S.tabs.splice(i, 1);
+  if (S.active === id) S.active = (S.tabs[i] || S.tabs[i - 1]).id;
+  renderTabs(); renderEditor(); renderLeft();
+}
+function activate(id, focus) { S.active = id; renderTabs(); renderEditor(focus); renderLeft(); }
+function tabLabel(id) {
+  if (id === 'terminal') return isHost() ? 'Terminal' : 'Terminal · read-only';
+  const shared = SHARED.find((f) => f.id === id);
+  return shared ? shared.name : base(id);
+}
+function renderTabs() {
+  const bar = $('#tabs'); bar.replaceChildren();
+  for (const t of S.tabs) {
+    const term = t.id === 'terminal', sel = t.id === S.active, label = tabLabel(t.id);
+    const waitDot = term && S.waiting && !sel && isHost();
+    const icon = term ? IC.term : t.id.startsWith('shared/') ? IC.share : isDoc(t.id) ? IC.doc : IC.file;
+    bar.append(h('div', {
+      class: 'tab' + (t.preview ? ' preview' : ''), role: 'tab', tabindex: sel ? 0 : -1, 'aria-selected': sel,
+      title: term ? 'Keeps its size while another tab is shown' : t.id + (t.preview ? '  (preview: double-click to keep open)' : ''),
+      'aria-label': label + (waitDot ? ', the agent is waiting for you' : ''),
+      onclick: () => activate(t.id),
+      ondblclick: () => { if (!term) { t.preview = false; renderTabs(); } },
+      onauxclick: (e) => { if (e.button === 1) closeTab(t.id); },
+      onkeydown: (e) => {
+        const i = S.tabs.indexOf(t);
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { const n = S.tabs[(i + (e.key === 'ArrowRight' ? 1 : S.tabs.length - 1)) % S.tabs.length]; activate(n.id); bar.children[S.tabs.indexOf(n)].focus(); }
+        if (e.key === 'Delete') closeTab(t.id);
+      },
+    }, svg(icon), h('span', { class: 'tlabel' }, label), waitDot && h('span', { class: 'dot', 'aria-hidden': 'true' }),
+      !term && h('span', { class: 'x', role: 'button', 'aria-label': 'Close ' + label, onclick: (e) => { e.stopPropagation(); closeTab(t.id); } }, '×')));
+  }
+}
+
+/* ---------- Editor ---------- */
+function renderTerminal() {
+  const pre = h('div', { class: 'term', 'aria-label': 'Terminal output' });
+  for (const [cls, text, id] of TERM) pre.append(h('span', { class: 'l ' + cls, 'data-id': id || null }, text || ' '));
+  for (const x of S.extra) { pre.append(h('span', { class: 'l ac' }, '> ' + x.prompt)); pre.append(h('span', { class: 'l' }, ' ')); }
+  if (S.ended) pre.append(h('span', { class: 'l dim' }, 'The session has ended.'));
+  else if (S.waiting) {
+    pre.append(h('span', { class: 'l q' }, '⏺ Should a viewer that comes back after "unreachable" replay the output it missed?'));
+    pre.append(h('span', { class: 'l' }, '  ❯ 1. Yes, replay from the last frame it saw'));
+    pre.append(h('span', { class: 'l' }, '    2. No, jump to live'));
+  } else pre.append(h('span', { class: 'l wk', id: 'spin' }, `✻ ${S.extra.length ? 'Working on the suggested prompt' : 'Working on task 2.2'}… (${S.seconds}s · esc to interrupt)`));
+  return pre;
+}
+function renderEditor(focus) {
+  const ed = $('#editor'); ed.replaceChildren();
+  if (S.active === 'terminal') {
+    ed.append(renderTerminal());
+    if (focus) { const l = ed.querySelector(`[data-id="${focus}"]`); if (l) { l.scrollIntoView({ block: 'center' }); l.classList.add('flash'); } }
+    else ed.scrollTop = ed.scrollHeight;
+    return;
+  }
+  const shared = SHARED.find((f) => f.id === S.active);
+  if (shared) return ed.append(renderShared(shared));
+  const path = S.active, f = FILES[path];
+  if (!f) return ed.append(notShared(path));
+  const viewerNoWhole = !isHost() && S.settings.whole === 'off';
+  if (f.st === 'R' && viewerNoWhole) return ed.append(h('div', { class: 'notice' }, svg(IC.lock), h('strong', null, 'Only changes are shared'), h('span', null, `Nick shares the changes the agent makes, not whole files. ${base(path)} was only read, so there is nothing to show.`)));
+  const canWhole = !viewerNoWhole && f.lines && f.st !== 'R';
+  const view = f.md ? 'md' : f.st === 'R' ? 'full' : (canWhole ? (S.views[path] || 'diff') : 'diff');
+  const adds = f.lines ? f.lines.filter((l) => l.k === 'add').length : 0, dels = f.lines ? f.lines.filter((l) => l.k === 'del').length : 0;
+  const stText = { M: 'Changed this session', A: 'Created this session', R: 'Read by the agent, not changed' }[f.st];
+  ed.append(h('div', { class: 'filebar' }, h('span', { class: 'path' }, path), h('span', null, stText),
+    f.lines && f.st !== 'R' && h('span', null, h('span', { style: 'color:var(--added-text)' }, '+' + adds), ' ', h('span', { style: 'color:var(--removed-text)' }, '−' + dels)),
+    h('span', { class: 'spacer' }),
+    f.lines && f.st !== 'R' && h('span', { class: 'seg', title: canWhole ? '' : 'Nick shares changes only' }, ...['diff', 'full'].map((v) => h('button', { 'aria-pressed': view === v, disabled: v === 'full' && !canWhole, onclick: () => { S.views[path] = v; renderEditor(); } }, v === 'diff' ? 'Changes' : 'Whole file, changes marked'))),
+    f.md && h('span', null, 'Formatted · new since you last read it is marked')));
+  if (f.md) return ed.append(renderMd(f.md));
+  const code = h('div', { class: 'code' });
+  let n = 0, firstAdd = null;
+  for (const l of f.lines) {
+    if (view === 'full' && l.k === 'del') continue;
+    const num = l.k === 'del' ? '' : ++n;
+    const cls = view === 'diff' ? (l.k !== 'ctx' ? ' ' + l.k : '') : (l.k === 'add' && f.st !== 'R' ? ' mark' : '');
+    const row = h('div', { class: 'row' + cls }, h('span', { class: 'n' }, String(num)), h('span', { class: 'm' }, view === 'diff' ? (l.k === 'add' ? '+' : l.k === 'del' ? '−' : '') : ''), h('span', { class: 't' }, l.t || ' '));
+    if (!firstAdd && l.k !== 'ctx') firstAdd = row;
+    code.append(row);
+  }
+  ed.append(code);
+  if (focus && firstAdd) { firstAdd.scrollIntoView({ block: 'center' }); firstAdd.classList.add('flash'); }
+}
+function renderShared(f) {
+  const box = h('div');
+  box.append(h('div', { class: 'filebar' }, h('span', { class: 'path' }, f.name), h('span', null, `Shared by ${f.by === me() ? 'you' : f.by} · ${f.size} · ${f.when}`), h('span', { class: 'spacer' }),
+    isHost() && h('button', { class: 'btn small', onclick: () => toast('Copied into the session folder', `${f.name} is now in shared/ for Claude to read.`) }, 'Put in the session folder')));
+  if (f.kind === 'md') box.append(renderMd(f.md));
+  else if (f.kind === 'text') { const code = h('div', { class: 'code' }); f.text.forEach((t, i) => code.append(h('div', { class: 'row' }, h('span', { class: 'n' }, String(i + 1)), h('span', { class: 'm' }), h('span', { class: 't' }, t)))); box.append(code); }
+  else box.append(h('div', { class: 'wire', role: 'img', 'aria-label': 'Wireframe: the status pill showing Host unreachable' }, h('div', { class: 'bar' }, h('i'), 'Host unreachable · reconnecting'), h('div', { class: 'blk' }), h('div', { class: 'blk' })));
+  return box;
+}
+function renderMd(lines) {
+  const box = h('div', { class: 'md' }); let ul = null;
+  const inline = (s) => { const span = h('span'); s.split(/(`[^`]+`|\*\*[^*]+\*\*)/).forEach((p) => span.append(p.startsWith('`') ? h('code', null, p.slice(1, -1)) : p.startsWith('**') ? h('strong', null, p.slice(2, -2)) : p)); return span; };
+  for (let raw of lines) {
+    const isNew = raw.startsWith('+'); if (isNew) raw = raw.slice(1);
+    let e = null;
+    if (raw.startsWith('# ')) { ul = null; e = h('h1', null, inline(raw.slice(2))); }
+    else if (raw.startsWith('## ')) { ul = null; e = h('h2', null, inline(raw.slice(3))); }
+    else if (/^- \[[ x]\] /.test(raw)) { if (!ul) box.append(ul = h('ul')); const done = raw[3] === 'x'; ul.append(h('li', { class: 'task' + (done ? ' done' : '') }, h('input', { type: 'checkbox', checked: done, disabled: true, 'aria-label': done ? 'done' : 'to do' }), inline(raw.slice(6)))); continue; }
+    else if (raw.startsWith('- ')) { if (!ul) box.append(ul = h('ul')); ul.append(h('li', null, inline(raw.slice(2)))); continue; }
+    else if (raw.trim()) { ul = null; e = h('p', null, inline(raw)); }
+    else { ul = null; continue; }
+    if (isNew) { e.classList.add('new'); e.title = 'New since you last read it'; }
+    box.append(e);
+  }
+  return box;
+}
+function notShared(path) {
+  const p = PROJECT[path];
+  if (p && p.denied) return h('div', { class: 'notice' }, svg(IC.lock), h('strong', null, 'Hidden by the host'), h('span', null, `${path} matches the host's deny list, so it is never listed for viewers or sent.`));
+  if (p && p.md) return renderMd(p.md);
+  return h('div', { class: 'notice' }, svg(IC.file), h('strong', null, 'Not touched in this session'),
+    h('span', null, isHost()
+      ? 'Viewers can open this file only while you allow browsing the whole project. Your app reads it from disk when they ask.'
+      : `Opening ${base(path)} asks Nick's app for the file; it reads it from disk and sends the current text.`));
+}
+
+/* ---------- Left dock: Documents, Code, Shared ---------- */
+function renderLeft() {
+  const tabs = $('#leftTabs'); tabs.replaceChildren();
+  const unread = SHARED.length;
+  for (const [id, label] of [['docs', 'Documents'], ['code', 'Code'], ['shared', 'Shared']]) {
+    tabs.append(h('button', { class: 'dtab', role: 'tab', 'aria-selected': S.leftTab === id, onclick: () => { S.leftTab = id; renderLeft(); } }, label, id === 'shared' && h('span', { class: 'badge', 'aria-label': unread + ' files' }, String(unread))));
+  }
+  const ul = $('#tree'); ul.replaceChildren();
+  const foot = $('#treeFoot'); foot.replaceChildren();
+  const project = S.scope === 'all' ? PROJECT : {};
+  if (S.leftTab === 'shared') {
+    for (const f of SHARED) {
+      ul.append(h('li', { role: 'treeitem', 'aria-selected': S.active === f.id },
+        h('div', { class: 'node two' + (S.active === f.id ? ' sel' : ''), style: 'padding-left:10px', tabindex: 0, onclick: () => openFile(f.id, { pin: true }), onkeydown: (e) => { if (e.key === 'Enter') openFile(f.id, { pin: true }); } },
+          svg(f.kind === 'image' ? IC.image : IC.doc), h('span', { class: 'name' }, f.name, h('br'), h('span', { class: 'sub' }, `${f.by === me() ? 'You' : f.by} · ${f.size} · ${f.when}`)))));
+    }
+    foot.append(h('span', null, 'Files people shared with everyone in this session. They go over the session\'s own connections, not through the sharing service.'),
+      S.settings.shareFiles || isHost()
+        ? h('button', { class: 'btn small', onclick: shareFile }, svg(IC.share), 'Share a file…')
+        : h('span', null, 'Nick has turned sharing files off.'));
+    return;
+  }
+  const wantDocs = S.leftTab === 'docs';
+  const paths = [...Object.keys(FILES), ...Object.keys(project)].filter((p) => wantDocs === isDoc(p));
+  const root = {};
+  for (const p of paths) { let n = root; const parts = p.split('/'); parts.forEach((part, i) => { n[part] = n[part] || (i === parts.length - 1 ? { __file: p } : {}); n = n[part]; }); }
+  const walk = (node, depth, prefix, into) => {
+    const entries = Object.entries(node).sort(([a, x], [b, y]) => (!!x.__file - !!y.__file) || a.localeCompare(b));
+    for (const [name, child] of entries) {
+      const pad = `padding-left:${8 + depth * 14}px`;
+      if (child.__file) {
+        const p = child.__file, f = FILES[p], denied = PROJECT[p] && PROJECT[p].denied;
+        into.append(h('li', { role: 'treeitem', 'aria-selected': S.active === p },
+          h('div', { class: 'node' + (S.active === p ? ' sel' : '') + (f ? '' : ' faint'), style: pad, tabindex: 0, title: p,
+            onclick: () => openFile(p), ondblclick: () => openFile(p, { pin: true }), onkeydown: (e) => { if (e.key === 'Enter') openFile(p, { pin: true }); } },
+            h('span', { class: 'chev' }), svg(isDoc(p) ? IC.doc : IC.file), h('span', { class: 'name' }, name),
+            f ? h('span', { class: 'st ' + f.st, title: { M: 'Changed', A: 'Created', R: 'Read' }[f.st] }, f.st) : denied ? svg(IC.lock) : null)));
+      } else {
+        const key = prefix + name, open = S.open.has(key);
+        const sub = h('ul', { role: 'group' });
+        const toggle = () => { open ? S.open.delete(key) : S.open.add(key); renderLeft(); };
+        into.append(h('li', { role: 'treeitem', 'aria-expanded': open },
+          h('div', { class: 'node', style: pad, tabindex: 0, onclick: toggle, onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } } },
+            h('span', { class: 'chev' }, open ? '▼' : '▶'), svg(IC.folder), h('span', { class: 'name' }, name)), open && sub));
+        if (open) walk(child, depth + 1, key + '/', sub);
+      }
+    }
+  };
+  walk(root, 0, '', ul);
+  foot.append(h('span', null, wantDocs
+    ? 'Plans, specs and notes, read whole and formatted. New text since you last read it is marked.'
+    : S.scope === 'touched' ? 'Code the agent read or changed. M changed · A created · R read.' : 'Whole project. Greyed files are fetched from Nick\'s app when opened.'));
+}
+function shareFile() {
+  SHARED.unshift({ id: 'shared/notes-' + S.nextId, name: `notes-${S.nextId++}.md`, by: me(), size: '1 KB', kind: 'md', when: 'just now', md: ['# Notes', '', 'Shared from the mockup: in the app this opens a file picker.'] });
+  if (!isHost()) toast('Shared with everyone', 'Your file is in Shared for everyone in the session.');
+  else toast('Shared with everyone', 'Viewers see it under Shared.');
+  renderLeft();
+}
+
+/* ---------- Right dock: Timeline and Prompts ---------- */
+function renderRight() {
+  const tabs = $('#rightTabs'); tabs.replaceChildren();
+  const pending = S.suggestions.filter((s) => s.status === 'pending').length;
+  const mine = S.suggestions.filter((s) => s.from === me() && s.status === 'pending').length;
+  const badge = isHost() ? pending : 0;
+  tabs.append(h('button', { class: 'dtab', role: 'tab', 'aria-selected': S.rightTab === 'timeline', onclick: () => { S.rightTab = 'timeline'; renderRight(); } }, 'Timeline'));
+  tabs.append(h('button', { class: 'dtab', role: 'tab', 'aria-selected': S.rightTab === 'prompts', onclick: () => { S.rightTab = 'prompts'; renderRight(); } }, 'Prompts',
+    badge > 0 && h('span', { class: 'badge', 'aria-label': badge + ' waiting' }, String(badge)), !isHost() && mine > 0 && h('span', { class: 'sub' })));
+  $('#detail').style.display = S.rightTab === 'timeline' ? '' : 'none';
+  $('#rightBody').replaceChildren(S.rightTab === 'timeline' ? renderTimeline() : renderPrompts());
+}
+function renderTimeline() {
+  const box = h('div', { class: 'tl' });
+  const collapse = !isHost() && S.late;
+  if (collapse) {
+    box.append(h('div', { class: 'catchup' }, h('h4', null, 'You joined 40 minutes in. So far:'),
+      h('ul', null, h('li', null, 'Nick asked for a heartbeat so viewers notice a host that went away.'), h('li', null, 'Claude wrote a plan, Viewer heartbeat, and you can read it under Documents.'), h('li', null, '4 files changed, the heartbeat tests pass, 3 of 6 tasks done.'))));
+  }
+  const turns = TIMELINE.concat(S.extra);
+  turns.forEach((t, ti) => {
+    const last = ti === turns.length - 1;
+    const folded = collapse && !last && !S.expanded.has(ti);
+    const p = h('div', { class: 'prompt' }, h('div', { class: 'who' }, t.by ? `Nick asked · suggested by ${t.by}` : 'Nick asked'), t.prompt);
+    if (folded) p.append(h('div', { class: 'outcome' }, h('span', null, t.outcome), h('button', { onclick: () => { S.expanded.add(ti); renderRight(); } }, `Show ${t.steps.length} steps`)));
+    box.append(p);
+    if (folded) return;
+    t.steps.forEach((s, si) => {
+      if (S.detail === 'summary' && s.s === null) return;
+      const id = ti + '.' + si;
+      const lbl = h('span', { class: 'lbl' }); lbl.innerHTML = S.detail === 'summary' ? s.s : s.d;
+      box.append(h('button', { class: 'step' + (S.curStep === id ? ' cur' : ''), onclick: () => { S.curStep = id; renderRight(); if (s.file) openFile(s.file, { focus: true }); else activate('terminal', s.term); } },
+        svg(IC[s.k]), lbl,
+        s.p != null && S.detail === 'details' && h('span', null, h('span', { class: 'plus' }, '+' + s.p), ' ', h('span', { class: 'minus' }, '−' + s.m)),
+        h('span', { class: 'go' }, s.file ? 'open' : 'terminal')));
+    });
+  });
+  for (const ev of S.events) box.append(h('div', { class: 'event' }, svg(ev.icon), h('span', null, h('strong', null, ev.title), ' ', ev.text)));
+  if (S.ended) box.append(h('div', { class: 'event' }, svg(IC.check), h('span', null, h('strong', null, 'Session ended.'), ' The recap is ready.')));
+  else if (S.waiting) box.append(h('button', { class: 'step ask', onclick: () => activate('terminal') }, svg(IC.ask), h('span', { class: 'lbl' }, h('strong', null, 'Asked the host: '), 'Should a viewer that comes back after "unreachable" replay the output it missed?'), h('span', { class: 'go' }, 'terminal')));
+  else box.append(h('div', { class: 'now', id: 'now' }, `${S.extra.length ? 'Working on the suggested prompt' : 'Working on task 2.2'} for ${S.seconds}s`));
+  return box;
+}
+function renderPrompts() {
+  const box = h('div');
+  if (!isHost()) {
+    if (!S.settings.suggest) return h('div', { class: 'sugs' }, h('p', { class: 'empty-note' }, 'Nick has turned prompt suggestions off for this session.'));
+    const ta = h('textarea', { id: 'suggestText', 'aria-label': 'Prompt to suggest', placeholder: 'What should Claude do next? Nick decides whether to send it.' });
+    box.append(h('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); suggest(ta.value); } }, ta,
+      h('div', { class: 'row2' }, h('span', null, 'Only Nick sees it until he sends it.'), h('button', { class: 'btn primary small', type: 'submit' }, 'Suggest to Nick'))));
+  }
+  const list = h('div', { class: 'sugs' });
+  const show = (s) => list.append(sugCard(s));
+  if (isHost()) {
+    const pend = S.suggestions.filter((s) => s.status === 'pending');
+    const kept = S.suggestions.filter((s) => s.status === 'kept');
+    const done = S.suggestions.filter((s) => s.status === 'accepted' || s.status === 'declined');
+    list.append(h('h4', null, 'Waiting for you'));
+    pend.length ? pend.forEach(show) : list.append(h('p', { class: 'empty-note' }, 'No suggestions waiting.'));
+    list.append(h('h4', null, 'Kept for later'));
+    kept.length ? kept.forEach(show) : list.append(h('p', { class: 'empty-note' }, 'Nothing kept.'));
+    if (done.length) { list.append(h('h4', null, 'Handled')); done.forEach(show); }
+  } else {
+    const mine = S.suggestions.filter((s) => s.from === me());
+    list.append(h('h4', null, 'Your suggestions'));
+    mine.length ? mine.forEach(show) : list.append(h('p', { class: 'empty-note' }, 'You have not suggested anything yet.'));
+  }
+  box.append(list);
+  return box;
+}
+const STATUS = { pending: 'Waiting for Nick', accepted: 'Sent to Claude', kept: 'Kept for later', declined: 'Declined' };
+function sugCard(s) {
+  const editing = S.editing === s.id;
+  const ta = editing ? h('textarea', { 'aria-label': 'Edit the prompt' }, s.text) : null;
+  const card = h('div', { class: 'sug' }, h('div', { class: 'head' }, avatar(s.from), h('strong', null, s.from === me() ? 'You' : s.from), h('span', null, s.when), h('span', { class: 'chip ' + s.status }, STATUS[s.status])),
+    editing ? ta : h('div', { class: 'text' }, s.text));
+  if (isHost() && (s.status === 'pending' || s.status === 'kept')) {
+    card.append(h('div', { class: 'acts' },
+      h('button', { class: 'btn primary small', onclick: () => accept(s, ta ? ta.value : s.text) }, editing ? 'Send edited prompt' : 'Send to Claude'),
+      !editing && h('button', { class: 'btn small', onclick: () => { S.editing = s.id; renderRight(); } }, 'Edit first'),
+      s.status === 'pending' && h('button', { class: 'btn small', onclick: () => { s.status = 'kept'; renderRight(); } }, 'Keep for later'),
+      h('button', { class: 'btn ghost small', onclick: () => { s.status = 'declined'; S.editing = null; renderRight(); } }, s.status === 'kept' ? 'Remove' : 'Decline')));
+  }
+  return card;
+}
+function accept(s, text) {
+  s.status = 'accepted'; s.text = text; S.editing = null; S.waiting = false;
+  S.extra.push({ prompt: text, by: s.from, outcome: 'Working on it', steps: [] });
+  S.seconds = 0;
+  renderAll();
+  if (S.active === 'terminal') renderEditor();
+}
+function suggest(text) {
+  text = text.trim(); if (!text) return;
+  const s = { id: S.nextId++, from: me(), text, status: 'pending', when: 'just now' };
+  S.suggestions.push(s); renderRight();
+  setTimeout(() => { if (s.status !== 'pending') return; s.status = 'kept'; if (S.persona !== 'host') { toast('Nick kept your suggestion', 'He will use it later in the session.'); renderRight(); } }, 5000);
+}
+
+/* ---------- Read and confirm ---------- */
+function startRead(file, limit) {
+  const viewers = ['Sanne', 'Mo'];
+  S.read = { file, limit, left: limit, ready: new Set(), viewers, started: Date.now() };
+  if (!isHost()) toast('Nick asks you to read', `${base(file)}${limit ? `, within ${limit / 60} minutes` : ''}.`);
+  for (const [who, after] of [['Mo', 6000], ['Sanne', 11000]]) setTimeout(() => { if (S.read && who !== me()) { S.read.ready.add(who); renderBanners(); } }, after);
+  renderBanners();
+}
+function endRead(timeUp) {
+  const r = S.read; if (!r) return;
+  S.events.push({ icon: IC.read, title: `Read ${base(r.file)}:`, text: `${r.ready.size} of ${r.viewers.length} ready${timeUp ? ' when time was up' : ''}.` });
+  S.read = null; renderBanners(); renderRight();
+}
+function readBanner() {
+  const r = S.read;
+  const clock = r.limit ? h('span', { class: 'clock' + (r.left <= 30 ? ' low' : ''), title: 'Time left' }, fmt(r.left)) : h('span', { class: 'clock' }, 'No time limit');
+  if (isHost()) {
+    return h('div', { class: 'banner' }, svg(IC.read),
+      h('div', { class: 'what' }, h('strong', null, `You asked everyone to read ${base(r.file)}`), h('small', null, `${r.ready.size} of ${r.viewers.length} ready`)),
+      h('div', { class: 'who-ready' }, ...r.viewers.map((v) => h('span', { class: r.ready.has(v) ? 'done' : '' }, avatar(v), v, r.ready.has(v) ? ' · ready' : ' · reading'))),
+      clock, h('button', { class: 'btn small', onclick: () => endRead(false) }, 'Go on'));
+  }
+  const ready = r.ready.has(me());
+  return h('div', { class: 'banner' }, svg(IC.read),
+    h('div', { class: 'what' }, h('strong', null, `Nick asks you to read ${base(r.file)}`), h('small', null, ready ? 'You said you are ready. Nick sees it.' : 'Say when you are done, so Nick knows when to go on.')),
+    clock, h('button', { class: 'btn small', onclick: () => { if (FILES[r.file]) { S.leftTab = 'docs'; openFile(r.file, { pin: true }); } } }, 'Open it'),
+    ready ? h('button', { class: 'btn small good', onclick: () => { r.ready.delete(me()); renderBanners(); } }, svg(IC.check), 'Ready')
+      : h('button', { class: 'btn primary small', onclick: () => { r.ready.add(me()); renderBanners(); } }, 'I\'m ready'));
+}
+
+/* ---------- Estimate ---------- */
+const DECK = ['1', '2', '3', '5', '8', '13', '?', '☕'];
+function startEstimate(task) {
+  S.estimate = { task, votes: {}, revealed: false };
+  if (!isHost()) toast('Nick asks for an estimate', task);
+  const others = { Sanne: '5', Mo: '8', Nick: '5' };
+  let delay = 3500;
+  for (const [who, v] of Object.entries(others)) { if (who === me()) continue; setTimeout(() => { if (S.estimate && !S.estimate.revealed) { S.estimate.votes[who] = v; renderBanners(); maybeHostReveals(); } }, delay); delay += 3000; }
+  renderBanners();
+}
+function maybeHostReveals() {
+  const e = S.estimate; if (!e || isHost() || e.revealed) return;
+  if (Object.keys(e.votes).length === 3) setTimeout(() => { if (S.estimate === e) { e.revealed = true; renderBanners(); } }, 2500);
+}
+function estimateBanner() {
+  const e = S.estimate, names = ['Nick', 'Sanne', 'Mo'];
+  const mine = e.votes[me()];
+  const head = h('div', { class: 'what' }, h('strong', null, `How big is it? ${e.task}`), h('small', null, e.revealed ? 'Votes revealed' : `${Object.keys(e.votes).length} of 3 voted · votes stay hidden until Nick reveals them`));
+  if (!e.revealed) {
+    return h('div', { class: 'banner' }, svg(IC.cards), head,
+      h('div', { class: 'cards', role: 'group', 'aria-label': 'Your estimate' }, ...DECK.map((c) => h('button', { class: 'cardv', 'aria-pressed': mine === c, 'aria-label': c === '☕' ? 'Need a break' : c === '?' ? 'No idea' : c + ' points', onclick: () => { e.votes[me()] = c; renderBanners(); maybeHostReveals(); } }, c))),
+      h('div', { class: 'who-ready' }, ...names.map((n) => h('span', { class: e.votes[n] ? 'done' : '' }, avatar(n), n, e.votes[n] ? ' · voted' : ''))),
+      isHost() && h('button', { class: 'btn primary small', disabled: !Object.keys(e.votes).length, onclick: () => { e.revealed = true; renderBanners(); } }, 'Reveal'),
+      isHost() && h('button', { class: 'btn ghost small', onclick: () => { S.estimate = null; renderBanners(); } }, 'Cancel'));
+  }
+  const counts = {}; for (const [n, v] of Object.entries(e.votes)) (counts[v] = counts[v] || []).push(n);
+  const max = Math.max(...Object.values(counts).map((x) => x.length));
+  const top = Object.entries(counts).sort((a, b) => b[1].length - a[1].length)[0][0];
+  const nums = Object.values(e.votes).filter((v) => /^\d+$/.test(v)).map(Number);
+  const spread = nums.length ? `${Math.min(...nums)} to ${Math.max(...nums)}` : '';
+  return h('div', { class: 'banner' }, svg(IC.cards), head,
+    h('div', { class: 'dist', role: 'img', 'aria-label': Object.entries(counts).map(([v, n]) => `${v}: ${n.join(', ')}`).join('; ') },
+      ...DECK.filter((c) => counts[c]).map((c) => h('div', { class: 'bar' }, h('b', null, c), h('i', { style: `width:${(counts[c].length / max) * 100}%` }), h('span', null, counts[c].join(', '))))),
+    h('small', { style: 'color:var(--text-muted)' }, spread && Math.min(...nums) !== Math.max(...nums) ? `Spread ${spread}: talk it through, then vote again.` : 'Everyone agrees.'),
+    isHost() && h('button', { class: 'btn small', onclick: () => startEstimate(e.task) }, 'Vote again'),
+    isHost() && h('button', { class: 'btn primary small', onclick: () => { S.events.push({ icon: IC.cards, title: 'Estimated:', text: `${e.task}: ${top} points.` }); S.estimate = null; renderBanners(); renderRight(); } }, `Keep ${top} points`),
+    !isHost() && h('span', { style: 'color:var(--text-muted);font-size:12px' }, 'Nick decides what to keep.'));
+}
+function renderBanners() {
+  const b = $('#banners'); b.replaceChildren();
+  if (S.ended) return;
+  if (S.read) b.append(readBanner());
+  if (S.estimate) b.append(estimateBanner());
+}
+
+/* ---------- Popovers ---------- */
+function openPop(kind) {
+  S.pop = S.pop === kind ? null : kind;
+  const pop = $('#pop'); pop.replaceChildren();
+  if (!S.pop) return;
+  const close = () => { S.pop = null; pop.replaceChildren(); };
+  let body;
+  if (kind === 'read') {
+    const docs = Object.keys(FILES).concat(SHARED.filter((f) => f.kind === 'md').map((f) => f.id));
+    const sel = h('select', { id: 'readWhat' }, ...docs.map((p) => h('option', { value: p, selected: p.endsWith('design.md') }, tabLabel(p))));
+    const lim = h('select', { id: 'readLimit' }, h('option', { value: '0' }, 'No time limit'), h('option', { value: '120' }, '2 minutes'), h('option', { value: '300', selected: true }, '5 minutes'), h('option', { value: '600' }, '10 minutes'));
+    body = [h('h3', null, 'Ask everyone to read'), h('label', null, 'What to read', sel), h('label', null, 'Time to read', lim),
+      h('div', { class: 'actions' }, h('button', { class: 'btn small', onclick: close }, 'Cancel'), h('button', { class: 'btn primary small', onclick: () => { startRead(sel.value, Number(lim.value)); close(); } }, 'Ask 2 viewers'))];
+  } else if (kind === 'estimate') {
+    const ta = h('textarea', { id: 'estTask', rows: 2 }, 'Task 3.1: show "unreachable" after three missed heartbeats');
+    body = [h('h3', null, 'Ask how big a task is'), h('label', null, 'Task', ta), h('small', { style: 'color:var(--text-muted)' }, 'Everyone votes hidden; you reveal the votes.'),
+      h('div', { class: 'actions' }, h('button', { class: 'btn small', onclick: close }, 'Cancel'), h('button', { class: 'btn primary small', onclick: () => { startEstimate(ta.value.trim() || 'This task'); close(); } }, 'Start voting'))];
+  } else {
+    const st = S.settings;
+    const check = (key, label, help) => h('label', { class: 'check' }, h('input', { type: 'checkbox', id: 'set-' + key, checked: st[key], onchange: (e) => { st[key] = e.target.checked; renderAll(); } }), h('span', null, label, h('small', null, help)));
+    const whole = h('select', { id: 'set-whole', onchange: (e) => { st.whole = e.target.value; renderAll(); } }, h('option', { value: 'changed', selected: st.whole === 'changed' }, 'Changed files: whole file with changes marked'), h('option', { value: 'off', selected: st.whole === 'off' }, 'Changes only'));
+    body = [h('h3', null, 'What viewers may see and do'),
+      h('label', null, 'Code viewers can open', whole),
+      check('suggest', 'Viewers can suggest prompts', 'Nothing reaches Claude until you send it.'),
+      check('shareFiles', 'Viewers can share files', 'Files go to everyone in the session.'),
+      check('recap', 'Viewers can save a recap', 'The prompts, plans and documents, after the session ends.'),
+      h('div', { class: 'actions' }, h('button', { class: 'btn small', onclick: close }, 'Done'))];
+  }
+  pop.append(h('div', { class: 'pop', role: 'dialog', 'aria-label': 'Options' }, ...body));
+  const first = pop.querySelector('select, textarea, input'); if (first) first.focus();
+}
+
+/* ---------- Recap ---------- */
+function renderRecap() {
+  const r = $('#recap'); r.replaceChildren();
+  if (!S.ended) return;
+  const turns = TIMELINE.concat(S.extra);
+  const changed = Object.entries(FILES).filter(([, f]) => f.st !== 'R');
+  const allowed = isHost() || S.settings.recap;
+  r.append(h('div', { class: 'recap-in' },
+    h('div', null, h('h2', null, 'Recap: specshare, hosted by Nick'), h('div', { class: 'meta' }, 'Ended just now · 52 minutes · Nick, Sanne and Mo')),
+    h('section', null, h('h3', null, 'Prompts and what came of them'), h('ol', null, ...turns.map((t) => h('li', null, t.prompt, h('small', null, (t.by ? `Suggested by ${t.by} · ` : '') + t.outcome))))),
+    h('section', null, h('h3', null, 'Plans and documents'), h('ul', null,
+      h('li', null, 'Viewer heartbeat, ', h('code', null, 'design.md'), h('small', null, 'Heartbeat every 3 seconds; unreachable after three missed.')),
+      h('li', null, h('code', null, 'tasks.md'), h('small', null, '3 of 6 tasks done')),
+      ...SHARED.filter((f) => f.kind === 'md').map((f) => h('li', null, h('code', null, f.name), h('small', null, `Shared by ${f.by}`))))),
+    S.events.length > 0 && h('section', null, h('h3', null, 'Decisions'), h('ul', null, ...S.events.map((e) => h('li', null, e.title + ' ' + e.text)))),
+    h('section', null, h('h3', null, 'Files changed'), h('ul', null, ...changed.map(([p, f]) => h('li', null, h('code', null, p), h('small', null, f.st === 'A' ? 'Created' : 'Changed'))))),
+    h('div', { class: 'acts' },
+      allowed ? h('button', { class: 'btn primary', onclick: () => toast('Recap saved', 'specshare-recap-2026-11-07.md, in the app. The mockup saves nothing.') }, 'Save recap') : h('span', null, 'Nick did not allow saving a recap of this session.'),
+      h('span', null, 'No code or terminal output is in the recap, only what is listed here.'),
+      h('button', { class: 'btn ghost', onclick: () => { S.ended = false; renderAll(); renderEditor(); } }, 'Back to the session (mockup)'))));
+}
+
+/* ---------- Notifications ---------- */
+function toast(title, text) {
+  const t = h('div', { class: 'toast', role: 'status' }, h('small', null, 'SpecDeck'), h('strong', null, title), h('span', null, text));
+  $('#toasts').append(t);
+  setTimeout(() => t.remove(), 5200);
+}
+
+/* ---------- Chrome and personas ---------- */
+function renderChrome() {
+  const host = isHost();
+  $('#hostedBy').textContent = host ? '· hosted by you' : '· hosted by Nick';
+  $('#roPill').hidden = host;
+  $('#hostActs').hidden = !host || S.ended;
+  const pill = $('#statePill');
+  pill.className = 'pill ' + (S.ended ? 'ended' : S.waiting ? 'waiting' : 'working');
+  pill.textContent = S.ended ? 'Ended' : S.waiting ? (host ? 'Waiting for you' : 'Waiting for the host') : 'Working';
+  $('#simWait').textContent = S.waiting ? 'Answer the question' : 'Agent asks the host a question';
+  $('#simWait').disabled = S.ended;
+  $('#simSuggest').hidden = !host;
+  $('#simLate').hidden = host;
+  $('#simLate').setAttribute('aria-pressed', S.late);
+  $('#simEnd').textContent = S.ended ? 'Back to the live session' : 'End the session';
+}
+function applyPreset(p) {
+  S.preset = p;
+  if (p === 'overview') { S.left = !narrow(); S.right = true; S.rw = 400; S.detail = 'summary'; S.leftTab = 'docs'; openFile('openspec/changes/viewer-heartbeat/design.md', { pin: true }); }
+  if (p === 'developer') { S.left = !narrow(); S.right = !narrow(); S.rw = 340; S.detail = 'details'; S.leftTab = 'code'; activate('terminal'); }
+  if (p === 'present') { S.left = false; S.right = false; activate('terminal'); }
+  syncSeg('#detail', S.detail); renderAll();
+}
+function setPersona(v) {
+  S.persona = v; S.editing = null; S.pop = null; $('#pop').replaceChildren();
+  if (v === 'host') S.late = false;
+  applyPreset(v === 'po' ? 'overview' : 'developer');
+}
+function renderAll() { layout(); renderChrome(); renderTabs(); renderLeft(); renderRight(); renderBanners(); renderRecap(); }
+function syncSeg(id, v) { for (const b of $(id).children) b.setAttribute('aria-pressed', b.dataset.v === v); }
+function seg(id, fn) { $(id).addEventListener('click', (e) => { const b = e.target.closest('button'); if (b && !b.disabled) { syncSeg(id, b.dataset.v); fn(b.dataset.v); } }); }
+
+seg('#persona', setPersona);
+seg('#scope', (v) => { S.scope = v; if (v === 'touched') S.tabs = S.tabs.filter((t) => t.id === 'terminal' || FILES[t.id] || t.id.startsWith('shared/')); if (!S.tabs.find((t) => t.id === S.active)) S.active = 'terminal'; renderLeft(); renderTabs(); renderEditor(); });
+seg('#detail', (v) => { S.detail = v; renderRight(); });
+seg('#presets', applyPreset);
+$('#tglLeft').onclick = () => setDock('left');
+$('#tglRight').onclick = () => setDock('right');
+$('#closeLeft').onclick = () => setDock('left', false);
+$('#closeRight').onclick = () => setDock('right', false);
+$('#askRead').onclick = () => openPop('read');
+$('#askEstimate').onclick = () => openPop('estimate');
+$('#sharingBtn').onclick = () => openPop('sharing');
+$('#simWait').onclick = () => { S.waiting = !S.waiting; renderChrome(); renderTabs(); renderRight(); if (S.active === 'terminal') renderEditor(); if (S.waiting && !isHost()) toast('Claude is waiting for Nick', 'It asked a question; Nick answers in the terminal.'); };
+$('#simSuggest').onclick = () => { S.suggestions.push({ id: S.nextId++, from: 'Sanne', text: 'Can the people list show who is reading the plan right now?', status: 'pending', when: 'just now' }); toast('Sanne suggests a prompt', 'Open Prompts to send, keep or decline it.'); renderRight(); };
+$('#simLate').onclick = () => { S.late = !S.late; S.expanded.clear(); renderChrome(); renderRight(); };
+$('#simEnd').onclick = () => { S.ended = !S.ended; S.read = null; S.estimate = null; if (S.ended && !isHost()) toast('The session has ended', S.settings.recap ? 'The recap is ready to save.' : 'Nick did not allow saving a recap.'); renderAll(); renderEditor(); };
+drag('#splitL', 'lw', 1); drag('#splitR', 'rw', -1);
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && S.pop) { S.pop = null; $('#pop').replaceChildren(); return; }
+  if (!e.altKey || e.metaKey || e.ctrlKey) return;
+  if (e.code === 'Digit1') { e.preventDefault(); setDock('left'); }
+  if (e.code === 'Digit2') { e.preventDefault(); setDock('right'); }
+  if (e.code === 'Digit0') { e.preventDefault(); activate('terminal'); }
+});
+setInterval(() => {
+  if (S.read && S.read.limit) { S.read.left = Math.max(0, S.read.left - 1); if (S.read.left === 0) endRead(true); else { const c = document.querySelector('.banner .clock'); if (c) { c.textContent = fmt(S.read.left); c.classList.toggle('low', S.read.left <= 30); } } }
+  if (S.waiting || S.ended) return;
+  S.seconds++;
+  const label = S.extra.length ? 'Working on the suggested prompt' : 'Working on task 2.2';
+  const sp = document.getElementById('spin'); if (sp) sp.textContent = `✻ ${label}… (${S.seconds}s · esc to interrupt)`;
+  const nw = document.getElementById('now'); if (nw) nw.textContent = `${label} for ${S.seconds}s`;
+}, 1000);
+
+renderAll(); renderEditor();
+</script>
+</body>
+</html>
