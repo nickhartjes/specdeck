@@ -5,7 +5,10 @@
 
 use crate::AgentId;
 use crate::AgentStatus;
-use crate::control::{self, HostMessage, Participant, RefusalReason, ViewerMessage};
+use crate::control::{
+    self, HostMessage, Outcome, Participant, RefusalReason, Suggestion, ViewerMessage,
+    ViewerRequest,
+};
 use crate::frames::{Frame, FrameVerifier, Record};
 use crate::invite::InviteCode;
 use crate::timeline::TimelineEvent;
@@ -22,6 +25,10 @@ pub struct ViewerState {
     /// Where a `Resend` was asked from, until records arrive from there.
     resend_requested: Option<u64>,
     admitted_once: bool,
+    /// The id of the next request; ids stay unique for this viewer across reconnects.
+    next_request: u32,
+    /// Requests the host has not answered yet, sent again after a reconnect with the same id.
+    unanswered: Vec<(u32, ViewerRequest)>,
 }
 
 /// What a message on the control channel means for the viewer.
@@ -42,6 +49,17 @@ pub enum ControlUpdate {
     Refused(RefusalReason),
     /// The host closed the session; final.
     Ended,
+    /// What the host lets viewers send.
+    Allowed {
+        suggestions: bool,
+    },
+    /// Whether one of this viewer's requests got through.
+    Reply {
+        id: u32,
+        outcome: Outcome,
+    },
+    /// This viewer's suggestions and what became of each.
+    Suggestions(Vec<Suggestion>),
     /// The message could not be used; drop this connection and try again.
     Retry,
 }
@@ -70,6 +88,8 @@ impl ViewerState {
             next_event: 0,
             resend_requested: None,
             admitted_once: false,
+            next_request: 1,
+            unanswered: Vec::new(),
         }
     }
 
@@ -135,7 +155,30 @@ impl ViewerState {
             HostMessage::Participants { participants } => ControlUpdate::Participants(participants),
             HostMessage::Status { status } => ControlUpdate::Status(status),
             HostMessage::SessionEnded => ControlUpdate::Ended,
+            HostMessage::Allowed { suggestions } => ControlUpdate::Allowed { suggestions },
+            HostMessage::Reply { id, outcome } => {
+                self.unanswered.retain(|(waiting, _)| *waiting != id);
+                ControlUpdate::Reply { id, outcome }
+            }
+            HostMessage::Suggestions { mine } => ControlUpdate::Suggestions(mine),
         }
+    }
+
+    /// A new request to the host, numbered; it is kept until the host answers it.
+    pub fn send_request(&mut self, request: ViewerRequest) -> (u32, ViewerMessage) {
+        let id = self.next_request;
+        self.next_request += 1;
+        self.unanswered.push((id, request.clone()));
+        (id, ViewerMessage::Send { id, request })
+    }
+
+    /// The requests the host has not answered, to send again after reconnecting. The host
+    /// answers an id it already has without taking it twice.
+    pub fn unanswered_requests(&self) -> Vec<ViewerMessage> {
+        self.unanswered
+            .iter()
+            .map(|(id, request)| ViewerMessage::Send { id: *id, request: request.clone() })
+            .collect()
     }
 
     /// Applies a stream frame. Also returns a `Resend` request to send when records are missing
@@ -188,7 +231,15 @@ mod tests {
     /// A viewer admitted by the host holding `key`.
     fn viewer(key: &SessionKey) -> ViewerState {
         let mut viewer = ViewerState::new(InviteCode::generate());
-        let welcome = HostMessage::Welcome {
+        assert!(matches!(
+            viewer.on_control(&control::encode(&welcome(key))),
+            ControlUpdate::Welcome { reconnected: false, .. }
+        ));
+        viewer
+    }
+
+    fn welcome(key: &SessionKey) -> HostMessage {
+        HostMessage::Welcome {
             protocol_version: control::PROTOCOL_VERSION,
             viewer_id: 1,
             session_public_key: key.public_key(),
@@ -198,12 +249,7 @@ mod tests {
             rejoin_room: "rejoin".into(),
             agent: AgentId::ClaudeCode,
             timeline_supported: true,
-        };
-        assert!(matches!(
-            viewer.on_control(&control::encode(&welcome)),
-            ControlUpdate::Welcome { reconnected: false, .. }
-        ));
-        viewer
+        }
     }
 
     fn output(seq: u64) -> Record {
@@ -299,6 +345,53 @@ mod tests {
                 last_event_seq: None,
                 resume_token: Some([7; 32]),
             }
+        );
+    }
+
+    #[test]
+    fn requests_are_numbered_and_kept_until_answered() {
+        let key = SessionKey::generate();
+        let mut viewer = viewer(&key);
+        let suggest = |text: &str| ViewerRequest::Suggest { text: text.into() };
+        let (first, message) = viewer.send_request(suggest("one"));
+        assert_eq!(message, ViewerMessage::Send { id: 1, request: suggest("one") });
+        let (second, _) = viewer.send_request(suggest("two"));
+        assert_eq!((first, second), (1, 2));
+        let reply = HostMessage::Reply { id: 1, outcome: Outcome::Received };
+        assert_eq!(
+            viewer.on_control(&control::encode(&reply)),
+            ControlUpdate::Reply { id: 1, outcome: Outcome::Received }
+        );
+        // The connection drops before request 2 is answered: after the new Welcome it is sent
+        // again with its own id, and new requests keep counting.
+        assert!(matches!(
+            viewer.on_control(&control::encode(&welcome(&key))),
+            ControlUpdate::Welcome { reconnected: true, .. }
+        ));
+        assert_eq!(
+            viewer.unanswered_requests(),
+            [ViewerMessage::Send { id: 2, request: suggest("two") }]
+        );
+        assert_eq!(viewer.send_request(suggest("three")).0, 3);
+    }
+
+    #[test]
+    fn host_answers_are_passed_on() {
+        let mut viewer = ViewerState::new(InviteCode::generate());
+        let allowed = HostMessage::Allowed { suggestions: true };
+        assert_eq!(
+            viewer.on_control(&control::encode(&allowed)),
+            ControlUpdate::Allowed { suggestions: true }
+        );
+        let mine = vec![Suggestion {
+            id: 1,
+            text: "one".into(),
+            state: control::SuggestionState::Declined,
+        }];
+        let suggestions = HostMessage::Suggestions { mine: mine.clone() };
+        assert_eq!(
+            viewer.on_control(&control::encode(&suggestions)),
+            ControlUpdate::Suggestions(mine)
         );
     }
 

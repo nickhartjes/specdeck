@@ -206,3 +206,40 @@ describe('viewer screen', () => {
     expect(screen.queryByText(/tokens/)).toBeNull();
   });
 });
+
+describe('suggesting a prompt as a viewer', () => {
+  it('offers the Prompts tab once the host says what it allows', async () => {
+    const { bridge } = setup();
+    join();
+    expect(screen.queryByRole('tab', { name: /Prompts/ })).toBeNull();
+    act(() => emit({ type: 'allowed', suggestions: true }));
+    await userEvent.click(screen.getByRole('tab', { name: /Prompts/ }));
+    expect(screen.getByText(/goes to Nick, not to Claude Code/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('Prompt to suggest'), 'Add a test');
+    await userEvent.click(screen.getByRole('button', { name: 'Suggest to Nick' }));
+    expect(bridge.suggestPrompt).toHaveBeenCalledWith('Add a test');
+    act(() => {
+      emit({ type: 'request-sent', id: 1 });
+      emit({ type: 'reply', id: 1, outcome: 'Received' });
+      emit({ type: 'suggestions', mine: [{ id: 1, text: 'Add a test', state: 'Waiting' }] });
+    });
+    expect(screen.getByLabelText('Prompt to suggest')).toHaveValue('');
+    expect(screen.getByText('Waiting for Nick')).toBeInTheDocument();
+  });
+
+  it('says when the host turns suggestions off', async () => {
+    setup();
+    join();
+    act(() => emit({ type: 'allowed', suggestions: true }));
+    await userEvent.click(screen.getByRole('tab', { name: /Prompts/ }));
+    act(() => emit({ type: 'allowed', suggestions: false }));
+    expect(screen.getByText('Nick has turned prompt suggestions off.')).toBeInTheDocument();
+  });
+
+  it('has no Prompts tab with a host that takes no suggestions', () => {
+    setup();
+    join();
+    expect(screen.queryByRole('tab', { name: /Prompts/ })).toBeNull();
+    expect(screen.getByText(/Read-only/)).toBeInTheDocument();
+  });
+});

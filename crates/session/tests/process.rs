@@ -15,7 +15,7 @@ use specdeck_local::{Connection, Frame, Frozen, Protocol, connect, make_private_
 use specdeck_protocol::AgentId;
 use specdeck_protocol::control::PROTOCOL_VERSION;
 use specdeck_protocol::invite::InviteCode;
-use specdeck_session::messages::{Command, Event};
+use specdeck_session::messages::{Command, Event, SuggestionAnswer};
 use specdeck_session::runtime::HostNotice;
 use tokio::net::TcpListener;
 
@@ -261,6 +261,120 @@ async fn the_app_attaches_detaches_and_gets_the_whole_terminal_back() {
     process.exits().await;
     assert!(!process.entry().exists(), "the run entry is removed");
     assert!(!process.socket.exists(), "and the socket");
+}
+
+/// A fake agent that shows each byte it reads as `[hex]`, so the test sees exactly what was typed.
+const BYTES_AGENT: &str = r#"#!/bin/sh
+stty raw -echo
+echo ready
+while true; do
+  b=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+  printf '[%s]' "$b"
+done
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sent_suggestion_is_typed_as_one_prompt() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let program = folder.path().join("opencode");
+    std::fs::write(&program, BYTES_AGENT).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let Command::Start {
+        mut environment,
+        folder: f,
+        cols,
+        rows,
+        username,
+        data_dir,
+        signalling_url,
+        verbose,
+        ..
+    } = start(folder.path(), &url)
+    else {
+        unreachable!()
+    };
+    environment.set("PATH", format!("{}:/usr/bin:/bin", folder.path().display()));
+    let start = Command::Start {
+        agent: AgentId::OpenCode,
+        folder: f,
+        cols,
+        rows,
+        username,
+        data_dir,
+        signalling_url,
+        environment,
+        verbose,
+    };
+    let mut terminal = String::new();
+    app.send(&start).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Started)).await;
+    let ready = app
+        .until(&mut terminal, |event| {
+            matches!(event, Event::Notice { notice: HostNotice::Summary(summary) } if summary.code.is_some())
+        })
+        .await;
+    let Event::Notice { notice: HostNotice::Summary(summary) } = ready else { unreachable!() };
+    let code = InviteCode::parse(&summary.code.unwrap()).unwrap();
+    app.send(&Command::Attach).await;
+    app.until_text(&mut terminal, "ready").await;
+
+    app.send(&Command::AllowRequests { suggestions: true }).await;
+    let (viewer, mut events) = join(&url, &code);
+    viewer_until(&mut events, |e| *e == ViewerEvent::Allowed { suggestions: true }).await;
+    viewer.suggest("one\ntwo".into());
+    let event = app
+        .until(
+            &mut terminal,
+            |event| matches!(event, Event::HostEvent { event } if event["type"] == "suggestions"),
+        )
+        .await;
+    let Event::HostEvent { event } = event else { unreachable!() };
+    let suggestion = &event["suggestions"][0];
+    assert_eq!(suggestion["from"], "anna");
+    assert_eq!(suggestion["state"], "Waiting");
+    assert!(!terminal.contains("[6f]"), "nothing typed before the host sends it");
+    let (viewer_id, id) =
+        (suggestion["viewer"].as_u64().unwrap() as u32, suggestion["id"].as_u64().unwrap() as u32);
+
+    // The host edits it into three lines and sends it: one prompt, submitted once.
+    let answer = SuggestionAnswer::Send { text: "one\ntwo\r\nsix".into() };
+    app.send(&Command::AnswerSuggestion { viewer_id, id, answer: answer.clone() }).await;
+    // The bytes the agent read, in order; the terminal stream frames them in records.
+    let bytes_read = |terminal: &str| -> String {
+        terminal.split('[').skip(1).filter_map(|token| token.get(..2)).collect()
+    };
+    tokio::time::timeout(WAIT, async {
+        while !bytes_read(&terminal).contains("0d") {
+            if let Frame::Data(records) = app.recv().await {
+                terminal.push_str(&String::from_utf8_lossy(&records));
+            }
+        }
+    })
+    .await
+    .expect("nothing was submitted");
+    assert_eq!(bytes_read(&terminal), "6f6e650a74776f0a7369780d");
+    viewer_until(&mut events, |e| {
+        matches!(e, ViewerEvent::Suggestions(mine)
+            if mine.first().is_some_and(|s| s.state == specdeck_protocol::control::SuggestionState::Sent { edited: true }))
+    })
+    .await;
+
+    // Sending it again is refused and types nothing.
+    app.send(&Command::AnswerSuggestion { viewer_id, id, answer }).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Failed { .. })).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    app.send(&Command::Status).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Status { .. })).await;
+    assert_eq!(bytes_read(&terminal), "6f6e650a74776f0a7369780d", "typed once");
+
+    app.send(&Command::End).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;
+    process.exits().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

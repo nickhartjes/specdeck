@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Bridge } from '../api/bridge';
 import type { HostEvent } from '../api/types';
-import { demoParticipants } from '../api/demo';
+import { demoParticipants, demoSuggestions } from '../api/demo';
 import { fakeBridge, renderWith } from '../test/helpers';
 import { terminal, TerminalViewStub } from '../test/terminal-stub';
 import { HostScreen } from './HostScreen';
@@ -205,4 +205,92 @@ describe('host screen', () => {
     expect(screen.getByText(/Claude Code has exited/)).toBeInTheDocument();
     expect(screen.getByText('Agent exited')).toBeInTheDocument();
   });
+
+  it('lists waiting suggestions, oldest first, to send, edit or decline', async () => {
+    const { bridge } = await setup();
+    await userEvent.click(screen.getByRole('tab', { name: /Prompts/ }));
+    expect(screen.getByRole('tab', { name: /Prompts/ })).toHaveTextContent('2');
+    const waiting = within(screen.getByRole('list', { name: 'Suggestions waiting' })).getAllByRole('listitem');
+    expect(waiting.map((item) => item.getAttribute('aria-label'))).toEqual(['Bram’s suggestion', 'Anna de Vries’s suggestion']);
+
+    await userEvent.click(within(waiting[0]!).getByRole('button', { name: 'Send' }));
+    expect(bridge.hostAnswerSuggestion).toHaveBeenCalledWith(2, 1, 'Add a test for the 503 when the database is down.');
+
+    await userEvent.click(within(waiting[1]!).getByRole('button', { name: 'Edit' }));
+    const field = screen.getByLabelText('Edit Anna de Vries’s suggestion');
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Explain the retry policy');
+    await userEvent.click(within(waiting[1]!).getByRole('button', { name: 'Send' }));
+    expect(bridge.hostAnswerSuggestion).toHaveBeenLastCalledWith(1, 2, 'Explain the retry policy');
+  });
+
+  it('declines a suggestion without sending anything', async () => {
+    const { bridge } = await setup();
+    await userEvent.click(screen.getByRole('tab', { name: /Prompts/ }));
+    const waiting = within(screen.getByRole('list', { name: 'Suggestions waiting' })).getAllByRole('listitem');
+    await userEvent.click(within(waiting[0]!).getByRole('button', { name: 'Decline' }));
+    expect(bridge.hostAnswerSuggestion).toHaveBeenCalledWith(2, 1, null);
+    expect(bridge.hostInput).not.toHaveBeenCalled();
+  });
+
+  it('turns suggestions on and off from the people list', async () => {
+    const { bridge } = await setup();
+    await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
+    const toggle = screen.getByRole('checkbox', { name: /Viewers can suggest prompts/ });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    expect(bridge.hostAllowSuggestions).toHaveBeenCalledWith(false);
+  });
+
+  it('announces a new suggestion without taking focus from the terminal', async () => {
+    await setup();
+    const focused = document.activeElement;
+    const focusCalls = terminal.handle.focus.mock.calls.length;
+    act(() =>
+      emit({
+        type: 'suggestions',
+        suggestions: [...demoSuggestions, { viewer: 3, id: 1, from: 'Anna de Vries (2)', text: 'One more', state: 'Waiting' }],
+      }),
+    );
+    expect(screen.getByText(/Anna de Vries \(2\) suggests a prompt/)).toBeInTheDocument();
+    expect(document.activeElement).toBe(focused);
+    expect(terminal.handle.focus.mock.calls.length).toBe(focusCalls);
+    expect(screen.getByRole('tab', { name: /Prompts/ })).toHaveTextContent('3');
+  });
+
+  it('offers no suggestions for a session of the previous release or a terminal', async () => {
+    await setup();
+    const older: HostEvent = { ...snapshot() };
+    delete older.suggestionsPossible;
+    delete older.suggestionsAllowed;
+    delete older.suggestions;
+    act(() => emit(older));
+    expect(screen.queryByRole('tab', { name: /Prompts/ })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
+    expect(screen.queryByRole('checkbox', { name: /Viewers can suggest prompts/ })).toBeNull();
+    act(() => emit({ ...snapshot(), agent: 'terminal', suggestionsPossible: false }));
+    expect(screen.queryByRole('tab', { name: /Prompts/ })).toBeNull();
+  });
 });
+
+/** The demo's snapshot, as a session of this release sends it. */
+function snapshot(): Extract<HostEvent, { type: 'snapshot' }> {
+  return {
+    type: 'snapshot',
+    agent: 'claude-code',
+    folder: '/Users/nick/projects/webshop',
+    timelineSupported: true,
+    sharing: 'ready',
+    code: '7K2M9QXH4TPA',
+    service: 'wss://specdeck.hartj.es/signal',
+    webViewer: false,
+    participants: demoParticipants,
+    status: 'working',
+    viewerLimit: 20,
+    exited: null,
+    timeline: [],
+    suggestionsPossible: true,
+    suggestionsAllowed: true,
+    suggestions: demoSuggestions,
+  };
+}

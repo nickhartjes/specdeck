@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Eye, LogOut, WifiOff } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, EndReason, Participant, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
+import { SuggestPanel } from '../components/SuggestPanel';
 import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
 import { FirstJoinDialog } from '../components/FirstJoinDialog';
@@ -62,9 +63,18 @@ interface State {
   timeline: TimelineEvent[];
   /** What the agent waits on, if it does. */
   request: string | null;
+  /** Whether the host lets viewers suggest; null while the host has not said, as older hosts never do. */
+  suggestionsAllowed: boolean | null;
+  /** This viewer's suggestions and what became of each. */
+  mine: Suggestion[];
+  /** The latest request sent, and the host's reply once it came. */
+  sent: { id: number; outcome: RequestOutcome | null } | null;
 }
 
 const initial: State = {
+  suggestionsAllowed: null,
+  mine: [],
+  sent: null,
   phase: 'joining',
   ended: null,
   viewerId: undefined,
@@ -90,6 +100,14 @@ export function viewerReducer(state: State, event: ViewEvent): State {
       return { ...state, participants: event.participants };
     case 'status':
       return { ...state, status: event.status, request: nextRequest(state.request, event) };
+    case 'allowed':
+      return { ...state, suggestionsAllowed: event.suggestions };
+    case 'request-sent':
+      return { ...state, sent: { id: event.id, outcome: null } };
+    case 'reply':
+      return state.sent?.id === event.id ? { ...state, sent: { id: event.id, outcome: event.outcome } } : state;
+    case 'suggestions':
+      return { ...state, mine: event.mine };
     case 'ended':
       return { ...state, phase: 'ended', ended: event.reason };
   }
@@ -224,6 +242,23 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
           onLayout={setLayout}
           timelineSupported={state.timelineSupported}
           timeline={state.timeline}
+          prompts={
+            // Hosts that take no suggestions never say whether they allow them.
+            state.suggestionsAllowed !== null && !terminal && state.phase !== 'ended'
+              ? {
+                  content: (
+                    <SuggestPanel
+                      host={host?.label ?? 'The host'}
+                      agentName={agentName}
+                      allowed={state.suggestionsAllowed}
+                      mine={state.mine}
+                      sent={state.sent}
+                      onSuggest={(text) => bridge.suggestPrompt(text)}
+                    />
+                  ),
+                }
+              : undefined
+          }
         />
         {state.phase === 'joining' && (
           <div className="overlay" style={{ position: 'absolute', background: 'var(--window)' }}>

@@ -13,7 +13,7 @@ use std::time::Duration;
 use specdeck_core::environment::Environment;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession};
-use specdeck_core::sharing::{Sharing, SharingConfig, SharingEvent};
+use specdeck_core::sharing::{Answer, Sharing, SharingConfig, SharingEvent};
 use specdeck_core::viewer::{CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession};
 use specdeck_protocol::AgentId;
 use specdeck_protocol::control::PROTOCOL_VERSION;
@@ -33,6 +33,7 @@ const OUTPUT_MARKER: &str = "Marker-Terminal-Output";
 const PROMPT_MARKER: &str = "Marker-Prompt-Text";
 const PATH_MARKER: &str = "marker-tool-path.rs";
 const TURN_SECRET: &str = "Marker-Turn-Secret";
+const SUGGESTION_MARKER: &str = "Marker-Suggestion-Text";
 
 /// A fake Claude Code: prints the output marker, and on the line "go" reports a prompt and a
 /// tool call holding the other markers through its hooks. Then echoes lines.
@@ -165,6 +166,24 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     .await;
     session.input(b"Marker-Typed-Line\r").unwrap();
     until(&mut events, &mut text, |text, _| text.contains("got:Marker-Typed-Line")).await;
+
+    // A suggestion, which the host edits and sends; then the host turns suggestions off.
+    viewer.suggest(format!("{SUGGESTION_MARKER}\nsecond line"));
+    let suggestion = tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(SharingEvent::Suggestions(list)) = sharing_events.recv().await
+                && let Some(first) = list.into_iter().next()
+            {
+                return first;
+            }
+        }
+    })
+    .await
+    .expect("no suggestion");
+    let edited = Answer::Sent { text: format!("{SUGGESTION_MARKER}, edited") };
+    assert!(sharing.answer_suggestion(suggestion.viewer, suggestion.id, edited).await.unwrap());
+    sharing.allow_suggestions(false);
+    until(&mut events, &mut text, |_, e| *e == ViewerEvent::Allowed { suggestions: false }).await;
     // Past a traffic report, so verbose events are in.
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     viewer.leave();
@@ -181,6 +200,11 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "peer.path",
         "viewer.attempt_ended",
         "host.viewer_left",
+        "host.requests_allowed",
+        "host.viewer_request",
+        "host.suggestion_answered",
+        "viewer.request_sent",
+        "viewer.request_reply",
         "host.traffic",
         "viewer.traffic",
     ] {
@@ -198,6 +222,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         PROMPT_MARKER,
         PATH_MARKER,
         "Marker-Typed-Line",
+        SUGGESTION_MARKER,
         TURN_SECRET,
         code.as_str(),
         "127.0.0.1",

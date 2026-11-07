@@ -16,7 +16,7 @@ use specdeck_local::{Compat, Connection, Frame, Frozen, Listener, Protocol, comp
 use specdeck_protocol::AgentId;
 use tokio::sync::{Notify, mpsc};
 
-use crate::messages::{Command, Event};
+use crate::messages::{Command, Event, SuggestionAnswer};
 use crate::runtime::{HostNotice, HostRuntime, Observer, StartOptions};
 
 /// How long a session process waits for the app's `start` after it was launched.
@@ -308,6 +308,17 @@ async fn run(
                 diagnostics.set_verbose(enabled);
             }
             Ok(())
+        }
+        Command::AllowRequests { suggestions } => {
+            runtime.allow_suggestions(suggestions);
+            Ok(())
+        }
+        Command::AnswerSuggestion { viewer_id, id, answer } => {
+            let text = match answer {
+                SuggestionAnswer::Send { text } => Some(text),
+                SuggestionAnswer::Decline => None,
+            };
+            runtime.answer_suggestion(viewer_id, id, text).await
         }
         Command::Status => {
             let sharing = serde_json::to_value(runtime.sharing_status()).unwrap_or_default();

@@ -8,7 +8,9 @@ use specdeck_core::peer::PeerConfig;
 use specdeck_core::viewer::{
     CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession, ViewerStatus,
 };
-use specdeck_protocol::control::{PROTOCOL_VERSION, Participant};
+use specdeck_protocol::control::{
+    Outcome, PROTOCOL_VERSION, Participant, Suggestion, valid_suggestion,
+};
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::timeline::TimelineEvent;
 use specdeck_protocol::{AgentId, AgentStatus};
@@ -37,6 +39,23 @@ pub enum ViewEvent {
     },
     Status {
         status: AgentStatus,
+    },
+    /// What the host lets viewers send.
+    Allowed {
+        suggestions: bool,
+    },
+    /// A request was numbered; its replies carry this id.
+    RequestSent {
+        id: u32,
+    },
+    /// Whether a request got through to the host.
+    Reply {
+        id: u32,
+        outcome: Outcome,
+    },
+    /// This viewer's suggestions and what became of each.
+    Suggestions {
+        mine: Vec<Suggestion>,
     },
     /// The session is over for this viewer; `reason` says why, for the window to explain.
     Ended {
@@ -116,6 +135,17 @@ impl ViewerRuntime {
         self.session.status().borrow().clone()
     }
 
+    /// Suggests a prompt to the host; refused when the host would refuse it, so a slip in the
+    /// window never costs the viewer its connection.
+    pub fn suggest(&self, text: String) -> Result<(), String> {
+        let text = text.replace("\r\n", "\n");
+        if !valid_suggestion(&text) {
+            return Err("A suggestion is 1 to 4096 bytes of text.".into());
+        }
+        self.session.suggest(text);
+        Ok(())
+    }
+
     /// Drops the connection and reconnects at once, keeping the viewer's place; refused while
     /// not connected.
     pub fn reconnect(&self) -> Result<(), String> {
@@ -137,6 +167,10 @@ fn translate(event: ViewerEvent) -> Option<ViewEvent> {
         ViewerEvent::Participants(participants) => ViewEvent::Participants { participants },
         ViewerEvent::Status(status) => ViewEvent::Status { status },
         ViewerEvent::Reconnecting => ViewEvent::Reconnecting,
+        ViewerEvent::Allowed { suggestions } => ViewEvent::Allowed { suggestions },
+        ViewerEvent::RequestSent { id } => ViewEvent::RequestSent { id },
+        ViewerEvent::Reply { id, outcome } => ViewEvent::Reply { id, outcome },
+        ViewerEvent::Suggestions(mine) => ViewEvent::Suggestions { mine },
         ViewerEvent::Ended => ViewEvent::Ended { reason: EndReason::Closed },
         ViewerEvent::Refused(reason) => ViewEvent::Ended {
             reason: match reason {

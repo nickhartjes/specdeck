@@ -391,6 +391,8 @@ button { font: inherit; color: inherit; }
 .pane-tab:hover { color: var(--text); }
 .pane-tab[aria-selected="true"] { color: var(--text); font-weight: 700; border-bottom-color: var(--text); }
 .pane-tab .count { color: var(--text-faint); font-weight: 400; font-size: 11.5px; }
+.pane-tab .badge { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 10px; font-weight: 700; display: inline-grid; place-items: center; }
+.prompts-body { padding: 0; }
 .pane-body { min-height: 0; overflow: auto; padding: 10px 12px 24px; }
 .pane.files-pane .pane-body { padding: 4px 0 16px; }
 .toggle { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
@@ -596,6 +598,19 @@ button { font: inherit; color: inherit; }
 .stepper button { width: 26px; height: 26px; border: 0; background: none; cursor: pointer; }
 .stepper button:hover:not(:disabled) { background: var(--hover); }
 .stepper output { min-width: 28px; text-align: center; font-variant-numeric: tabular-nums; color: var(--text); }
+
+/* Prompt suggestions: the viewer's Prompts tab and the host's inbox. */
+.suggest { padding: 12px 14px 24px; display: grid; gap: 10px; align-content: start; }
+.suggest p { margin: 0; }
+.suggest textarea.field { height: auto; padding: 8px 10px; resize: vertical; line-height: 1.45; }
+.suggest-form { display: grid; gap: 8px; }
+.suggest-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.suggest-heading { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.suggest .empty-note { color: var(--text-muted); }
+.suggestions { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.suggestions li { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.suggestion-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.suggest-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .prompt-list { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .prompt-list select { flex: 1; min-width: 0; height: 28px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; padding: 0 6px; }

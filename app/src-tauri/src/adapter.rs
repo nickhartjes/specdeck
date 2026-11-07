@@ -7,14 +7,23 @@
 //! release, check that this release still understands the previous one (task 8.2): until a
 //! release changes the messages, this passes them on unchanged.
 
-use specdeck_local::{Frame, Protocol, compat};
+use specdeck_local::{Compat, Frame, Protocol, compat};
 use specdeck_session::messages::{Command, Event};
+
+/// Commands added in this release (`viewer-to-host-channel`), which a session of the release
+/// before it does not know. Its snapshot has no `suggestionsPossible`, so the window offers none
+/// of them; this keeps a stray one from reaching it. Remove a release later.
+const NEW_COMMANDS: [&str; 2] = ["allow-requests", "answer-suggestion"];
 
 /// `command` as a session of release `peer` understands it, or None when it cannot take it.
 pub fn command(peer: Protocol, command: &Command) -> Option<Frame> {
     let message = serde_json::to_value(command).ok()?;
     let kind = message["type"].as_str()?;
-    compat(Protocol::own(), peer).allows(kind).then(|| Frame::control(&message).ok())?
+    let compat = compat(Protocol::own(), peer);
+    if compat == Compat::Previous && NEW_COMMANDS.contains(&kind) {
+        return None;
+    }
+    compat.allows(kind).then(|| Frame::control(&message).ok())?
 }
 
 /// What a session of release `peer` sent, as this release's event; None for anything else.
@@ -27,7 +36,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use serde_json::Value;
-    use specdeck_local::{Compat, Frozen};
+    use specdeck_local::Frozen;
 
     use super::*;
 
@@ -133,6 +142,22 @@ mod tests {
             let end = sent(&transcript, "app").find(|message| message["type"] == "end");
             assert_eq!(end, Some(&serde_json::to_value(Frozen::End).unwrap()));
         }
+    }
+
+    #[test]
+    fn the_previous_release_gets_no_new_commands() {
+        let previous = Protocol(Protocol::own().0 - 1);
+        let allow = Command::AllowRequests { suggestions: true };
+        let answer = Command::AnswerSuggestion {
+            viewer_id: 1,
+            id: 1,
+            answer: specdeck_session::messages::SuggestionAnswer::Decline,
+        };
+        assert!(command(previous, &allow).is_none());
+        assert!(command(previous, &answer).is_none());
+        assert!(command(previous, &Command::Status).is_some());
+        assert!(command(Protocol::own(), &allow).is_some());
+        assert!(command(Protocol::own(), &answer).is_some());
     }
 
     #[test]

@@ -49,6 +49,8 @@ describe('accessibility', () => {
     expect(await violations()).toEqual([]);
     await userEvent.click(screen.getByRole('tab', { name: /Documents/ }));
     expect(await violations()).toEqual([]);
+    await userEvent.click(screen.getByRole('tab', { name: /Prompts/ }));
+    expect(await violations()).toEqual([]);
     await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
     expect(await violations()).toEqual([]);
     await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
@@ -61,6 +63,8 @@ describe('accessibility', () => {
     await userEvent.type(await screen.findByLabelText('Invite code'), '7K2M9QXH4TPA');
     await userEvent.click(screen.getByRole('button', { name: /Join/ }));
     await waitFor(() => expect(screen.getByText(/Nick's session/)).toBeInTheDocument(), { timeout: 2000 });
+    expect(await violations()).toEqual([]);
+    await userEvent.click(screen.getByRole('tab', { name: /Prompts/ }));
     expect(await violations()).toEqual([]);
   });
 

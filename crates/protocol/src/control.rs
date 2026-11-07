@@ -8,14 +8,29 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{AgentId, AgentStatus};
 
-/// Bumped on every incompatible protocol change. Host and viewer must be equal.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// Bumped on every protocol change. Version 3 added requests from viewers (`Send`) and the host's
+/// answers to them (`Allowed`, `Reply`, `Suggestions`).
+pub const PROTOCOL_VERSION: u32 = 3;
+
+/// The oldest viewer protocol a host admits. Older viewers watch only: the host never sends them
+/// a message their version cannot read.
+pub const MIN_VIEWER_PROTOCOL_VERSION: u32 = 2;
+
+/// The first protocol version that can send requests to the host.
+pub const REQUESTS_PROTOCOL_VERSION: u32 = 3;
 
 /// Longest username accepted, in characters.
 pub const MAX_USERNAME_CHARS: usize = 64;
 
-/// Longest control message accepted from a viewer, in bytes.
+/// Longest control message accepted from a viewer, in bytes; `Send` may be up to
+/// [`MAX_REQUEST_BYTES`].
 pub const MAX_VIEWER_MESSAGE_BYTES: usize = 1024;
+
+/// Longest suggestion accepted, in bytes of UTF-8.
+pub const MAX_SUGGESTION_BYTES: usize = 4096;
+
+/// Longest `Send` accepted from a viewer, in bytes: the longest suggestion and its framing.
+pub const MAX_REQUEST_BYTES: usize = MAX_SUGGESTION_BYTES + 64;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ViewerMessage {
@@ -32,6 +47,25 @@ pub enum ViewerMessage {
     Resend { from_output_seq: u64 },
     /// The viewer is leaving the session.
     Leave,
+    /// A request to the host (version 3). `id` is the viewer's own, unique among its requests;
+    /// the host answers with a `Reply` carrying it, and answers a repeated id the same way.
+    Send { id: u32, request: ViewerRequest },
+}
+
+/// What a viewer can ask of the host. Each kind has its own switch, which the host turns on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViewerRequest {
+    /// A prompt for the agent, which only the host can send.
+    Suggest { text: String },
+}
+
+impl ViewerRequest {
+    /// The kind's fixed name, for diagnostics.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ViewerRequest::Suggest { .. } => "suggest",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +101,59 @@ pub enum HostMessage {
     },
     /// The host closed the session.
     SessionEnded,
+    /// What viewers may send (version 3): on admission and on every change.
+    Allowed {
+        suggestions: bool,
+    },
+    /// Whether a request got through to the host (version 3); only to the viewer that sent it.
+    Reply {
+        id: u32,
+        outcome: Outcome,
+    },
+    /// The viewer's own suggestions in this session and what became of each (version 3): on
+    /// admission and on every change; only to that viewer.
+    Suggestions {
+        mine: Vec<Suggestion>,
+    },
+}
+
+/// What became of a request when it reached the host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Outcome {
+    /// The host has it.
+    Received,
+    /// The host has turned this kind of request off.
+    Off,
+    /// Too many requests; the viewer can send it again in a moment.
+    RateLimited,
+}
+
+impl Outcome {
+    /// The outcome's fixed name, for diagnostics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Received => "received",
+            Outcome::Off => "off",
+            Outcome::RateLimited => "rate_limited",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Suggestion {
+    pub id: u32,
+    pub text: String,
+    pub state: SuggestionState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SuggestionState {
+    Waiting,
+    /// The host sent it to the agent; `edited` when the host changed the text first.
+    Sent {
+        edited: bool,
+    },
+    Declined,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,13 +193,24 @@ pub enum Role {
     Viewer,
 }
 
-/// Accepts only equal versions; otherwise says which side has to update.
-pub fn check_version(host: u32, viewer: u32) -> Result<(), RefusalReason> {
-    match viewer.cmp(&host) {
-        std::cmp::Ordering::Less => Err(RefusalReason::ViewerOutdated),
-        std::cmp::Ordering::Greater => Err(RefusalReason::HostOutdated),
-        std::cmp::Ordering::Equal => Ok(()),
+/// Accepts viewer versions from `host_min` to `host`; otherwise says which side has to update.
+pub fn check_version(host_min: u32, host: u32, viewer: u32) -> Result<(), RefusalReason> {
+    if viewer < host_min {
+        Err(RefusalReason::ViewerOutdated)
+    } else if viewer > host {
+        Err(RefusalReason::HostOutdated)
+    } else {
+        Ok(())
     }
+}
+
+/// Whether `text` is a suggestion the host accepts: 1 to [`MAX_SUGGESTION_BYTES`] bytes, not
+/// blank, and no control characters but line breaks and tabs. A carriage return or an escape
+/// could submit early or drive the terminal once typed.
+pub fn valid_suggestion(text: &str) -> bool {
+    text.len() <= MAX_SUGGESTION_BYTES
+        && !text.trim().is_empty()
+        && !text.chars().any(|c| c.is_control() && c != '\n' && c != '\t')
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -123,23 +221,42 @@ pub enum DecodeError {
     Malformed,
     #[error("username must be 1 to {MAX_USERNAME_CHARS} characters")]
     InvalidUsername,
+    #[error("suggestion must be 1 to {MAX_SUGGESTION_BYTES} bytes without control characters")]
+    InvalidSuggestion,
 }
 
 pub fn encode<T: Serialize>(message: &T) -> Vec<u8> {
     postcard::to_allocvec(message).expect("control messages always encode")
 }
 
+/// The first byte of an encoded `ViewerMessage::Send`.
+const SEND_VARIANT: u8 = 3;
+
 /// Decodes a message from a viewer: strict, bounded and validated.
 pub fn decode_viewer(bytes: &[u8]) -> Result<ViewerMessage, DecodeError> {
-    if bytes.len() > MAX_VIEWER_MESSAGE_BYTES {
+    // Postcard starts with the variant index; only `Send` (3) may use the larger cap.
+    let limit = if bytes.first() == Some(&SEND_VARIANT) {
+        MAX_REQUEST_BYTES
+    } else {
+        MAX_VIEWER_MESSAGE_BYTES
+    };
+    if bytes.len() > limit {
         return Err(DecodeError::TooLarge);
     }
     let message: ViewerMessage = decode_exact(bytes)?;
-    if let ViewerMessage::Hello { username, .. } = &message {
-        let chars = username.trim().chars().count();
-        if chars == 0 || chars > MAX_USERNAME_CHARS || username.chars().any(char::is_control) {
-            return Err(DecodeError::InvalidUsername);
+    match &message {
+        ViewerMessage::Send { request: ViewerRequest::Suggest { text }, .. } => {
+            if !valid_suggestion(text) {
+                return Err(DecodeError::InvalidSuggestion);
+            }
         }
+        ViewerMessage::Hello { username, .. } => {
+            let chars = username.trim().chars().count();
+            if chars == 0 || chars > MAX_USERNAME_CHARS || username.chars().any(char::is_control) {
+                return Err(DecodeError::InvalidUsername);
+            }
+        }
+        _ => {}
     }
     Ok(message)
 }
@@ -160,6 +277,10 @@ fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, DecodeError> {
 mod tests {
     use super::*;
 
+    fn suggest(id: u32, text: &str) -> ViewerMessage {
+        ViewerMessage::Send { id, request: ViewerRequest::Suggest { text: text.into() } }
+    }
+
     fn hello(username: &str) -> ViewerMessage {
         ViewerMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -172,9 +293,12 @@ mod tests {
 
     #[test]
     fn viewer_messages_round_trip() {
-        for message in
-            [hello("nick"), ViewerMessage::Resend { from_output_seq: 9 }, ViewerMessage::Leave]
-        {
+        for message in [
+            hello("nick"),
+            ViewerMessage::Resend { from_output_seq: 9 },
+            ViewerMessage::Leave,
+            suggest(4, "Add a test for\n\tthe heartbeat"),
+        ] {
             assert_eq!(decode_viewer(&encode(&message)), Ok(message));
         }
     }
@@ -204,6 +328,19 @@ mod tests {
             },
             HostMessage::Status { status: AgentStatus::Working },
             HostMessage::SessionEnded,
+            HostMessage::Allowed { suggestions: true },
+            HostMessage::Reply { id: 4, outcome: Outcome::RateLimited },
+            HostMessage::Suggestions {
+                mine: vec![
+                    Suggestion { id: 1, text: "a".into(), state: SuggestionState::Waiting },
+                    Suggestion {
+                        id: 2,
+                        text: "b".into(),
+                        state: SuggestionState::Sent { edited: true },
+                    },
+                    Suggestion { id: 3, text: "c".into(), state: SuggestionState::Declined },
+                ],
+            },
         ];
         for message in messages {
             assert_eq!(decode_host(&encode(&message)), Ok(message));
@@ -212,9 +349,64 @@ mod tests {
 
     #[test]
     fn unknown_variant_is_rejected() {
-        // Variant indexes 0-2 exist; 3 would be a message type this version does not know, such
-        // as an attempt to send terminal input.
-        assert_eq!(decode_viewer(&[3, 0]), Err(DecodeError::Malformed));
+        // Variant indexes 0-3 exist; 4 would be a message type this version does not know, such
+        // as an attempt to send terminal input. The same for requests: 0 is `Suggest`.
+        assert_eq!(decode_viewer(&[4, 0]), Err(DecodeError::Malformed));
+        assert_eq!(decode_viewer(&[3, 1, 1, 0]), Err(DecodeError::Malformed));
+    }
+
+    #[test]
+    fn send_starts_with_its_variant_byte() {
+        assert_eq!(encode(&suggest(1, "a"))[0], SEND_VARIANT);
+    }
+
+    #[test]
+    fn version_2_messages_keep_their_bytes() {
+        // Hosts still admit version 2 viewers, so these encodings must not change.
+        assert_eq!(encode(&ViewerMessage::Leave), [2]);
+        assert_eq!(encode(&ViewerMessage::Resend { from_output_seq: 9 }), [1, 9]);
+        let hello = ViewerMessage::Hello {
+            protocol_version: 2,
+            username: "ab".into(),
+            last_output_seq: None,
+            last_event_seq: Some(1),
+            resume_token: None,
+        };
+        assert_eq!(encode(&hello), [0, 2, 2, b'a', b'b', 0, 1, 1, 0]);
+        assert_eq!(encode(&HostMessage::SessionEnded), [4]);
+        assert_eq!(encode(&HostMessage::Status { status: AgentStatus::Working }), [3, 1]);
+    }
+
+    #[test]
+    fn requests_may_be_larger_than_other_messages() {
+        let longest = "x".repeat(MAX_SUGGESTION_BYTES);
+        assert!(decode_viewer(&encode(&suggest(1, &longest))).is_ok());
+        let longer = "x".repeat(MAX_SUGGESTION_BYTES + 1);
+        assert_eq!(
+            decode_viewer(&encode(&suggest(1, &longer))),
+            Err(DecodeError::InvalidSuggestion)
+        );
+        // Other messages keep the small cap: a username padded past it is refused as too large.
+        let mut padded = encode(&ViewerMessage::Leave);
+        padded.resize(MAX_VIEWER_MESSAGE_BYTES + 1, 0);
+        assert_eq!(decode_viewer(&padded), Err(DecodeError::TooLarge));
+        let hello = encode(&hello(&"x".repeat(MAX_VIEWER_MESSAGE_BYTES)));
+        assert_eq!(decode_viewer(&hello), Err(DecodeError::TooLarge));
+        assert_eq!(decode_viewer(&vec![3; MAX_REQUEST_BYTES + 1]), Err(DecodeError::TooLarge));
+    }
+
+    #[test]
+    fn suggestions_are_validated() {
+        for text in ["", "   ", "\n\t", "run\r", "a\u{1b}[2J", "nul\0", "bell\u{7}", "del\u{7f}"] {
+            assert_eq!(
+                decode_viewer(&encode(&suggest(1, text))),
+                Err(DecodeError::InvalidSuggestion),
+                "{text:?}"
+            );
+        }
+        for text in ["Add a test", "Two\nlines\twith a tab", "Ünïcødé 名前"] {
+            assert!(decode_viewer(&encode(&suggest(1, text))).is_ok(), "{text:?}");
+        }
     }
 
     #[test]
@@ -250,9 +442,14 @@ mod tests {
 
     #[test]
     fn version_check_names_the_side_that_must_update() {
-        assert_eq!(check_version(1, 1), Ok(()));
-        assert_eq!(check_version(2, 1), Err(RefusalReason::ViewerOutdated));
-        assert_eq!(check_version(1, 2), Err(RefusalReason::HostOutdated));
+        assert_eq!(check_version(2, 3, 2), Ok(()));
+        assert_eq!(check_version(2, 3, 3), Ok(()));
+        assert_eq!(check_version(2, 3, 1), Err(RefusalReason::ViewerOutdated));
+        assert_eq!(check_version(2, 3, 4), Err(RefusalReason::HostOutdated));
+        assert_eq!(
+            check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION),
+            Ok(())
+        );
         assert_eq!(
             RefusalReason::ViewerOutdated.message(),
             "Update your app to join this session."

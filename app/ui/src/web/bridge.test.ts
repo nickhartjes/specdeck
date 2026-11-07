@@ -91,6 +91,13 @@ describe('web bridge', () => {
     );
   });
 
+  it('suggests only while in a session, and never answers suggestions', async () => {
+    const page = bridge();
+    await expect(page.suggestPrompt('Add a test')).rejects.toThrow('not in a session');
+    await expect(page.hostAllowSuggestions(true)).rejects.toThrow('only watch');
+    await expect(page.hostAnswerSuggestion(1, 1, 'x')).rejects.toThrow('only watch');
+  });
+
   it('can only watch', async () => {
     const page = bridge();
     await expect(page.startHosting('claude-code', '/tmp', 80, 24)).rejects.toThrow('only watch');

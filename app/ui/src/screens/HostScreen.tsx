@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Copy, Link2, Power, RefreshCw } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, HostEvent, Participant, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
+import type { AgentId, AgentStatus, HostEvent, HostSuggestion, Participant, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
+import { SuggestionsInbox } from '../components/SuggestionsInbox';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
@@ -44,6 +45,12 @@ interface State {
   timeline: TimelineEvent[];
   /** What the agent waits on, if it does. */
   request: string | null;
+  /** False for terminal sessions and sessions of the previous release, which take no suggestions. */
+  suggestionsPossible: boolean;
+  suggestionsAllowed: boolean;
+  suggestions: HostSuggestion[];
+  /** The latest suggestion to arrive while the window is open, to announce. */
+  arrived: HostSuggestion | null;
 }
 
 const initial: State = {
@@ -60,12 +67,32 @@ const initial: State = {
   exited: null,
   timeline: [],
   request: null,
+  suggestionsPossible: false,
+  suggestionsAllowed: false,
+  suggestions: [],
+  arrived: null,
 };
 
 export function hostReducer(state: State, event: HostEvent | { type: 'limit'; limit: number }): State {
   switch (event.type) {
     case 'snapshot':
-      return { ...state, ...event, timeline: event.timeline, request: requestIn(event.timeline, event.status) };
+      return {
+        ...state,
+        ...event,
+        timeline: event.timeline,
+        request: requestIn(event.timeline, event.status),
+        // A session of the previous release says nothing of suggestions: it takes none.
+        suggestionsPossible: event.suggestionsPossible ?? false,
+        suggestionsAllowed: event.suggestionsAllowed ?? false,
+        suggestions: event.suggestions ?? [],
+      };
+    case 'allowed':
+      return { ...state, suggestionsAllowed: event.suggestions };
+    case 'suggestions': {
+      const newest = event.suggestions.at(-1);
+      const arrived = event.suggestions.length > state.suggestions.length && newest?.state === 'Waiting' ? newest : state.arrived;
+      return { ...state, suggestions: event.suggestions, arrived };
+    }
     case 'sharing':
       return { ...state, sharing: event.state, code: event.code ?? (event.state === 'connecting' ? null : state.code) };
     case 'web-viewer':
@@ -133,6 +160,11 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
   const onTerminalState = useCallback((snapshot: TerminalSnapshot) => void bridge.reportTerminal(snapshot).catch(() => {}), [bridge]);
 
   const agentName = state.agent ? AGENT_NAMES[state.agent] : 'Agent';
+  const waiting = state.suggestions.filter((s) => s.state === 'Waiting').length;
+  // A new suggestion is announced without taking focus from the terminal.
+  useEffect(() => {
+    if (state.arrived) showToast(`${state.arrived.from} suggests a prompt. Open Prompts to send, edit or decline it.`);
+  }, [state.arrived, showToast]);
   const terminal = state.agent === 'terminal';
   const statusBar = useMemo(() => statusBarInfo(state.timeline, state.timelineSupported), [state.timeline, state.timelineSupported]);
   const folderName = state.folder.split(/[\\/]/).filter(Boolean).at(-1) ?? state.folder;
@@ -189,6 +221,12 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
             dispatch({ type: 'limit', limit });
             void bridge.hostSetViewerLimit(limit);
           }}
+          suggestions={
+            state.suggestionsPossible
+              ? { allowed: state.suggestionsAllowed, onChange: (on) => void bridge.hostAllowSuggestions(on).catch((e) => showToast(errorMessage(e))) }
+              : undefined
+          }
+          agentName={agentName}
         />
         <LayoutControls host layout={shown} onLayout={setLayout} />
         <InviteCode
@@ -235,6 +273,23 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
         onResize={onResize}
         onThemeColors={onThemeColors}
         onTerminalState={onTerminalState}
+        prompts={
+          state.suggestionsPossible
+            ? {
+                badge: waiting,
+                content: (
+                  <SuggestionsInbox
+                    agentName={agentName}
+                    suggestions={state.suggestions}
+                    allowed={state.suggestionsAllowed}
+                    onAnswer={(suggestion, text) =>
+                      void bridge.hostAnswerSuggestion(suggestion.viewer, suggestion.id, text).catch((e) => showToast(errorMessage(e)))
+                    }
+                  />
+                ),
+              }
+            : undefined
+        }
       />
       <StatusBar info={statusBar} folder={folderName || undefined} />
       {confirmEnd && (

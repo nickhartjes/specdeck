@@ -2,8 +2,9 @@
 //! verify everything the host sends, apply terminal records strictly in order, and reconnect
 //! without losing anything while the session is open.
 //!
-//! The viewer has no way to send input: the only messages it can send are `Hello`, `Resend` and
-//! `Leave`.
+//! The viewer has no way to send input: besides `Hello`, `Resend` and `Leave` it can only send
+//! the host requests (`Send`), such as a suggested prompt, which reach the agent only if the host
+//! sends them from their own window.
 //!
 //! What messages mean is decided by [`ViewerState`], which the web viewer shares; this module is
 //! the connection around it.
@@ -12,7 +13,10 @@ use std::time::Duration;
 
 use datachannel::ConnectionState;
 use serde::Serialize;
-use specdeck_protocol::control::{self, Participant, RefusalReason, ViewerMessage};
+use specdeck_protocol::control::{
+    self, Outcome as ReplyOutcome, Participant, RefusalReason, Suggestion, ViewerMessage,
+    ViewerRequest,
+};
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
@@ -65,6 +69,21 @@ pub enum ViewerEvent {
     },
     Participants(Vec<Participant>),
     Status(AgentStatus),
+    /// What the host lets viewers send.
+    Allowed {
+        suggestions: bool,
+    },
+    /// A request was numbered and will be sent, now or once connected.
+    RequestSent {
+        id: u32,
+    },
+    /// Whether a request got through to the host.
+    Reply {
+        id: u32,
+        outcome: ReplyOutcome,
+    },
+    /// This viewer's suggestions and what became of each.
+    Suggestions(Vec<Suggestion>),
     /// The connection dropped; the viewer is reconnecting.
     Reconnecting,
     /// Not admitted; final.
@@ -149,6 +168,7 @@ pub struct ViewerSession {
 
 enum Control {
     Leave,
+    Request(ViewerRequest),
     /// Drop the connection and wait this long before reconnecting.
     Interrupt(Duration),
 }
@@ -168,6 +188,7 @@ impl ViewerSession {
             connected_at: None,
             status: status_tx,
             traffic: diag::Traffic::default(),
+            admitted: false,
         };
         diag::spawn(viewer.run(control_rx));
         (Self { control, status }, event_rx)
@@ -180,6 +201,12 @@ impl ViewerSession {
 
     pub fn leave(&self) {
         let _ = self.control.send(Control::Leave);
+    }
+
+    /// Suggests a prompt to the host. The viewer reports its id with
+    /// [`ViewerEvent::RequestSent`]; while disconnected it is sent once the viewer is back.
+    pub fn suggest(&self, text: String) {
+        let _ = self.control.send(Control::Request(ViewerRequest::Suggest { text }));
     }
 
     /// Drops the connection as a network outage of `outage` would, then reconnects, keeping the
@@ -207,6 +234,8 @@ struct Viewer {
     connected_at: Option<Instant>,
     status: watch::Sender<ViewerStatus>,
     traffic: diag::Traffic,
+    /// Whether the current connection has been welcomed; requests wait until then.
+    admitted: bool,
 }
 
 /// How one connection attempt ended.
@@ -306,6 +335,7 @@ impl Viewer {
                     _ = &mut until => break,
                     command = control.recv() => match command {
                         Some(Control::Interrupt(_)) => {}
+                        Some(Control::Request(request)) => { self.queue_request(request); }
                         Some(Control::Leave) | None => return,
                     },
                 }
@@ -339,6 +369,7 @@ impl Viewer {
         let mut connected = false;
         let mut signalling_closed = false;
         let mut traffic = diag::traffic_interval();
+        self.admitted = false;
         // Joining has one deadline across attempts; each reconnection attempt has its own.
         let deadline = if self.state.admitted_once() {
             Instant::now() + self.config.connect_timeout
@@ -352,6 +383,12 @@ impl Viewer {
                     // Reconnecting by hand while not connected yet would only start over.
                     Some(Control::Interrupt(outage)) if outage.is_zero() && !connected => {}
                     Some(Control::Interrupt(outage)) => return Outcome::Interrupted(outage),
+                    Some(Control::Request(request)) => {
+                        let message = self.queue_request(request);
+                        if let (true, Some(peer)) = (self.admitted, &mut peer) {
+                            let _ = peer.send(Channel::Control, &control::encode(&message));
+                        }
+                    }
                     Some(Control::Leave) | None => {
                         if let Some(mut peer) = peer.take() {
                             let _ = peer.send(Channel::Control, &control::encode(&ViewerMessage::Leave));
@@ -468,8 +505,16 @@ impl Viewer {
                             }
                         }
                         PeerEvent::Message(Channel::Control, bytes) => {
+                            let was_admitted = self.admitted;
                             if let Some(outcome) = self.handle_control(&bytes) {
                                 return outcome;
+                            }
+                            // Requests made while away, and ones the host did not answer before
+                            // the connection dropped, go out once welcomed.
+                            if self.admitted && !was_admitted {
+                                for request in self.state.unanswered_requests() {
+                                    let _ = current.send(Channel::Control, &control::encode(&request));
+                                }
                             }
                         }
                         PeerEvent::Message(Channel::Stream, bytes) => {
@@ -495,6 +540,7 @@ impl Viewer {
                 reconnected,
             } => {
                 self.status.send_modify(|status| status.phase = ViewerPhase::Connected);
+                self.admitted = true;
                 ViewerEvent::Welcome {
                     viewer_id,
                     agent,
@@ -506,6 +552,12 @@ impl Viewer {
             }
             ControlUpdate::Participants(participants) => ViewerEvent::Participants(participants),
             ControlUpdate::Status(status) => ViewerEvent::Status(status),
+            ControlUpdate::Allowed { suggestions } => ViewerEvent::Allowed { suggestions },
+            ControlUpdate::Reply { id, outcome } => {
+                diag::viewer_request_reply(outcome.as_str());
+                ViewerEvent::Reply { id, outcome }
+            }
+            ControlUpdate::Suggestions(mine) => ViewerEvent::Suggestions(mine),
             ControlUpdate::Refused(reason) => {
                 return Some(Outcome::Final(ViewerEvent::Refused(reason)));
             }
@@ -514,6 +566,16 @@ impl Viewer {
         };
         let _ = self.events.send(event);
         None
+    }
+
+    /// Numbers a request and keeps it until the host answers; returns the message to send.
+    fn queue_request(&mut self, request: ViewerRequest) -> ViewerMessage {
+        let kind = request.kind();
+        let ViewerRequest::Suggest { text } = &request;
+        diag::viewer_request_sent(kind, text.len());
+        let (id, message) = self.state.send_request(request);
+        let _ = self.events.send(ViewerEvent::RequestSent { id });
+        message
     }
 
     /// Applies a stream frame; returns a `Resend` request when records are missing or a frame

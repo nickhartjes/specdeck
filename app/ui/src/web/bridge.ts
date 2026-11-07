@@ -148,6 +148,8 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     hostNewCode: notInTheWebViewer,
     hostRemoveViewer: notInTheWebViewer,
     hostSetViewerLimit: notInTheWebViewer,
+    hostAllowSuggestions: notInTheWebViewer,
+    hostAnswerSuggestion: notInTheWebViewer,
     hostClose: notInTheWebViewer,
     joinSession: async (code, server, terminal, events) => {
       // Each page joins only through its own service (spec: Only the page's own service).
@@ -176,6 +178,10 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       connection?.leave();
       connection = null;
       return Promise.resolve();
+    },
+    suggestPrompt: async (text) => {
+      if (!connection) throw new Error('You are not in a session.');
+      connection.suggest(text);
     },
     takeJoinLink: () => Promise.resolve(null),
     // One page, one session: no other windows to start or title.

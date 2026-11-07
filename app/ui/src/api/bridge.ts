@@ -53,10 +53,16 @@ export interface Bridge {
   hostNewCode(): Promise<void>;
   hostRemoveViewer(viewerId: number): Promise<void>;
   hostSetViewerLimit(limit: number): Promise<void>;
+  /** Lets viewers suggest prompts, or stops them. */
+  hostAllowSuggestions(on: boolean): Promise<void>;
+  /** Types `text` (the suggestion, maybe edited) into the agent's prompt and submits it, or declines the suggestion when `text` is null. */
+  hostAnswerSuggestion(viewerId: number, id: number, text: string | null): Promise<void>;
   hostClose(): Promise<void>;
   /** Joins through `server`, from a link the user agreed to, or their own service when null. */
   joinSession(code: string, server: string | null, terminal: TerminalSink, events: (event: ViewEvent) => void): Promise<void>;
   leaveSession(): Promise<void>;
+  /** Suggests a prompt to the host of the watched session; fails for text the host would refuse. */
+  suggestPrompt(text: string): Promise<void>;
   /** The join link for this window that opened the app or came in since, once; null when there is none. */
   takeJoinLink(): Promise<JoinLink | null>;
   /** The host, join or recent-folder command a new window opened with, once; null when there is none. */

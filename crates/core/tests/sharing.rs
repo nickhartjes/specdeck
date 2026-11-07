@@ -14,12 +14,15 @@ use specdeck_core::environment::Environment;
 use specdeck_core::peer::LinkState;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession};
-use specdeck_core::sharing::{ServiceState, Sharing, SharingConfig, SharingEvent};
+use specdeck_core::sharing::{Answer, ServiceState, Sharing, SharingConfig, SharingEvent};
 use specdeck_core::viewer::{
     CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerPhase, ViewerSession,
 };
 use specdeck_protocol::AgentId;
-use specdeck_protocol::control::{PROTOCOL_VERSION, Participant, RefusalReason};
+use specdeck_protocol::control::{
+    MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant, RefusalReason,
+    SuggestionState,
+};
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::timeline::Entry;
@@ -294,13 +297,235 @@ async fn apps_that_speak_another_protocol_are_told_who_needs_to_update() {
     let mut hosted = host(&url, "nick").await;
     let code = ready(&mut hosted.events).await;
 
-    let (_older, mut older) = join_speaking(&url, &code, "anna", PROTOCOL_VERSION - 1);
+    let (_older, mut older) = join_speaking(&url, &code, "anna", MIN_VIEWER_PROTOCOL_VERSION - 1);
     let event = until(&mut older, &mut Seen::default(), |_, e| e.is_final()).await;
     assert_eq!(event, ViewerEvent::Refused(RefusalReason::ViewerOutdated));
 
     let (_newer, mut newer) = join_speaking(&url, &code, "bob", PROTOCOL_VERSION + 1);
     let event = until(&mut newer, &mut Seen::default(), |_, e| e.is_final()).await;
     assert_eq!(event, ViewerEvent::Refused(RefusalReason::HostOutdated));
+}
+
+/// Waits for the host's list of suggestions to satisfy `done`.
+async fn host_suggestions(
+    events: &mut UnboundedReceiver<SharingEvent>,
+    done: impl Fn(&[specdeck_core::sharing::HostSuggestion]) -> bool,
+) -> Vec<specdeck_core::sharing::HostSuggestion> {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(SharingEvent::Suggestions(list)) = events.recv().await
+                && done(&list)
+            {
+                return list;
+            }
+        }
+    })
+    .await
+    .expect("the host's suggestions did not change as expected")
+}
+
+fn is_reply(event: &ViewerEvent) -> Option<Outcome> {
+    match event {
+        ViewerEvent::Reply { outcome, .. } => Some(*outcome),
+        _ => None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_older_viewer_watches_without_receiving_newer_messages() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (_older, mut older) = join_speaking(&url, &code, "anna", MIN_VIEWER_PROTOCOL_VERSION);
+    let mut seen_older = Seen::default();
+    until(&mut older, &mut seen_older, |seen, _| seen.welcome.is_some()).await;
+    let (newer, mut newer_events) = join(&url, &code, "bob");
+    let mut seen_newer = Seen::default();
+    until(&mut newer_events, &mut seen_newer, |seen, _| seen.welcome.is_some()).await;
+
+    hosted.sharing.allow_suggestions(true);
+    until(&mut newer_events, &mut seen_newer, |_, e| {
+        *e == ViewerEvent::Allowed { suggestions: true }
+    })
+    .await;
+    newer.suggest("Add a test".into());
+    host_suggestions(&mut hosted.events, |list| list.len() == 1).await;
+    hosted.session.input(b"later\r").unwrap();
+
+    // The older viewer keeps following the session, admitted once and never told anything
+    // its version cannot read.
+    let mut newer_messages = Vec::new();
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let event = older.recv().await.expect("viewer stopped");
+            match &event {
+                ViewerEvent::Records(records) => {
+                    for record in records {
+                        if let Record::Output { bytes, .. } = record {
+                            seen_older.text.push_str(&String::from_utf8_lossy(bytes));
+                        }
+                    }
+                }
+                ViewerEvent::Allowed { .. }
+                | ViewerEvent::Reply { .. }
+                | ViewerEvent::Suggestions(_)
+                | ViewerEvent::Reconnecting
+                | ViewerEvent::Welcome { .. } => newer_messages.push(event.clone()),
+                _ => {}
+            }
+            if seen_older.text.contains("got:later") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the older viewer stopped following");
+    assert!(newer_messages.is_empty(), "{newer_messages:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn suggestions_pass_the_gate_and_reach_only_the_host() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut anna_events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    let event =
+        until(&mut anna_events, &mut seen, |_, e| matches!(e, ViewerEvent::Allowed { .. })).await;
+    assert_eq!(event, ViewerEvent::Allowed { suggestions: true }, "on when the session starts");
+    let (_bob, mut bob_events) = join(&url, &code, "bob");
+    until(&mut bob_events, &mut Seen::default(), |seen, _| seen.welcome.is_some()).await;
+
+    // Off: the host does not get it.
+    hosted.sharing.allow_suggestions(false);
+    until(&mut anna_events, &mut seen, |_, e| *e == ViewerEvent::Allowed { suggestions: false })
+        .await;
+    anna.suggest("while off".into());
+    let reply = until(&mut anna_events, &mut seen, |_, e| is_reply(e).is_some()).await;
+    assert_eq!(is_reply(&reply), Some(Outcome::Off));
+
+    hosted.sharing.allow_suggestions(true);
+    until(&mut anna_events, &mut seen, |_, e| *e == ViewerEvent::Allowed { suggestions: true })
+        .await;
+    for text in ["one", "two", "three", "four"] {
+        anna.suggest(text.into());
+    }
+    let mut outcomes = Vec::new();
+    while outcomes.len() < 4 {
+        let reply = until(&mut anna_events, &mut seen, |_, e| is_reply(e).is_some()).await;
+        outcomes.push(is_reply(&reply).unwrap());
+    }
+    assert_eq!(
+        outcomes,
+        [Outcome::Received, Outcome::Received, Outcome::Received, Outcome::RateLimited]
+    );
+    let list = host_suggestions(&mut hosted.events, |list| list.len() == 3).await;
+    let texts: Vec<_> = list.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(texts, ["one", "two", "three"]);
+    assert!(list.iter().all(|s| s.from == "anna" && s.state == SuggestionState::Waiting));
+
+    // Reconnecting does not refill the limit; on her return Anna is sent her own again.
+    anna.interrupt(Duration::from_millis(100));
+    let event = until(
+        &mut anna_events,
+        &mut seen,
+        |_, e| matches!(e, ViewerEvent::Suggestions(mine) if mine.len() == 3),
+    )
+    .await;
+    assert!(matches!(event, ViewerEvent::Suggestions(_)));
+    anna.suggest("five".into());
+    let reply = until(&mut anna_events, &mut seen, |_, e| is_reply(e).is_some()).await;
+    assert_eq!(is_reply(&reply), Some(Outcome::RateLimited));
+
+    // Bob never hears of Anna's suggestions.
+    hosted.session.input(b"sync\r").unwrap();
+    tokio::time::timeout(WAIT, async {
+        let mut text = String::new();
+        while let Some(event) = bob_events.recv().await {
+            match event {
+                ViewerEvent::Suggestions(mine) => assert!(mine.is_empty(), "{mine:?}"),
+                ViewerEvent::Reply { .. } => panic!("bob got a reply"),
+                ViewerEvent::Records(records) => {
+                    for record in records {
+                        if let Record::Output { bytes, .. } = record {
+                            text.push_str(&String::from_utf8_lossy(&bytes));
+                        }
+                    }
+                    if text.contains("got:sync") {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnected_viewer_sees_what_the_host_did() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    hosted.sharing.allow_suggestions(true);
+    let (anna, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Allowed { suggestions: true }).await;
+    anna.suggest("Add a test".into());
+    let list = host_suggestions(&mut hosted.events, |list| list.len() == 1).await;
+
+    anna.interrupt(Duration::from_secs(2));
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    let answered = hosted.sharing.answer_suggestion(list[0].viewer, list[0].id, Answer::Declined);
+    assert!(answered.await.unwrap());
+
+    let event = until(&mut events, &mut seen, |_, e| {
+        matches!(e, ViewerEvent::Suggestions(mine)
+            if mine.first().is_some_and(|s| s.state == SuggestionState::Declined))
+    })
+    .await;
+    assert!(matches!(event, ViewerEvent::Suggestions(_)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nothing_a_viewer_suggests_reaches_the_agent() {
+    const MARKER: &str = "zq-suggested-marker";
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("ready")).await;
+
+    // Off, then on and waiting, then answered: Sharing never types anything.
+    hosted.sharing.allow_suggestions(false);
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Allowed { suggestions: false }).await;
+    anna.suggest(format!("{MARKER} while off"));
+    until(&mut events, &mut seen, |_, e| is_reply(e) == Some(Outcome::Off)).await;
+    hosted.sharing.allow_suggestions(true);
+    anna.suggest(format!("{MARKER} waiting\nsecond line"));
+    let list = host_suggestions(&mut hosted.events, |list| list.len() == 1).await;
+    let sent = Answer::Sent { text: list[0].text.clone() };
+    assert!(
+        hosted.sharing.answer_suggestion(list[0].viewer, list[0].id, sent.clone()).await.unwrap()
+    );
+    assert!(
+        !hosted.sharing.answer_suggestion(list[0].viewer, list[0].id, sent).await.unwrap(),
+        "a suggestion is sent once"
+    );
+
+    hosted.session.input(b"sync\r").unwrap();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:sync")).await;
+    let log = hosted.session.log().read(0, usize::MAX).unwrap();
+    let output: String = log
+        .iter()
+        .filter_map(|r| match r {
+            Record::Output { bytes, .. } => Some(String::from_utf8_lossy(bytes).into_owned()),
+            Record::Resize { .. } => None,
+        })
+        .collect();
+    assert!(!output.contains(MARKER), "the agent saw a suggestion: {output:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

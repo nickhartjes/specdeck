@@ -59,10 +59,31 @@ pub enum Command {
     Verbose {
         enabled: bool,
     },
+    /// What viewers may send.
+    AllowRequests {
+        suggestions: bool,
+    },
+    /// The host's answer to a waiting suggestion; a sent one is typed into the agent's prompt.
+    AnswerSuggestion {
+        viewer_id: u32,
+        id: u32,
+        answer: SuggestionAnswer,
+    },
     /// Asks for [`Event::Status`].
     Status,
     /// Ends the session for everyone.
     End,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum SuggestionAnswer {
+    /// Typed into the agent's prompt and submitted; `text` is what the host's window shows,
+    /// edited or not.
+    Send {
+        text: String,
+    },
+    Decline,
 }
 
 /// From the session process.
@@ -120,6 +141,20 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Command>(remove).unwrap(),
             Command::RemoveViewer { viewer_id: 3 }
+        );
+        let answer = r#"{"type":"answer-suggestion","viewerId":2,"id":5,"answer":{"type":"send","text":"Add a test"}}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(answer).unwrap(),
+            Command::AnswerSuggestion {
+                viewer_id: 2,
+                id: 5,
+                answer: SuggestionAnswer::Send { text: "Add a test".into() },
+            }
+        );
+        let allow = r#"{"type":"allow-requests","suggestions":true}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(allow).unwrap(),
+            Command::AllowRequests { suggestions: true }
         );
         let notice = Event::Notice { notice: HostNotice::ViewerJoined("Anna".into()) };
         let json = serde_json::to_string(&notice).unwrap();
