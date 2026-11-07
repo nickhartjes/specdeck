@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use specdeck_core::browser::{BrowserAction, BrowserResult};
 use specdeck_core::environment::Environment;
 use specdeck_protocol::AgentId;
 
@@ -27,6 +28,10 @@ pub enum Command {
         /// The login shell's environment, as the app detected it.
         environment: Environment,
         verbose: bool,
+        /// The app runs browser actions for the session's agent (`claude-browser` design
+        /// decision 3); without it the session never sends [`Event::Browser`].
+        #[serde(default)]
+        browser: bool,
     },
     /// Shows the session in the app's window: a snapshot, then the terminal from the start.
     Attach,
@@ -71,6 +76,11 @@ pub enum Command {
     },
     /// Asks for [`Event::Status`].
     Status,
+    /// The answer to [`Event::Browser`] with the same `id`.
+    BrowserResult {
+        id: u64,
+        result: BrowserResult,
+    },
     /// Ends the session for everyone.
     End,
 }
@@ -105,6 +115,10 @@ pub enum Event {
         #[serde(default)]
         events: Vec<serde_json::Value>,
     },
+    /// Run `action` in the session's browser and answer with [`Command::BrowserResult`]. Sent
+    /// only to an app that started the session with `browser`. The next release must keep
+    /// reading it, or translate it in its adapter, for sessions this release started.
+    Browser { id: u64, action: BrowserAction },
     /// The session has ended; the process exits.
     Ended,
 }
@@ -132,6 +146,7 @@ mod tests {
             signalling_url: "wss://example.com/signal".into(),
             environment: [("PATH", "/bin")].into_iter().collect(),
             verbose: false,
+            browser: true,
         };
         let json = serde_json::to_string(&start).unwrap();
         assert!(json.starts_with(r#"{"type":"start","agent":"#), "{json}");
@@ -159,5 +174,40 @@ mod tests {
         let notice = Event::Notice { notice: HostNotice::ViewerJoined("Anna".into()) };
         let json = serde_json::to_string(&notice).unwrap();
         assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), notice);
+    }
+
+    #[test]
+    fn browser_messages_read_back() {
+        let ask = Event::Browser { id: 7, action: BrowserAction::Click { element: 4 } };
+        let json = serde_json::to_string(&ask).unwrap();
+        assert_eq!(json, r#"{"type":"browser","id":7,"action":{"action":"click","element":4}}"#);
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), ask);
+        let answer = Command::BrowserResult { id: 7, result: BrowserResult::error("gone") };
+        let json = serde_json::to_string(&answer).unwrap();
+        assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), answer);
+    }
+
+    /// A previous release's app sends `start` without the field: it offers no browser.
+    #[test]
+    fn start_without_browser_reads_as_off() {
+        let mut json = serde_json::to_value(Command::Start {
+            agent: AgentId::Terminal,
+            folder: "/tmp".into(),
+            cols: 80,
+            rows: 24,
+            username: "Nick".into(),
+            data_dir: "/tmp".into(),
+            signalling_url: "wss://example.com/signal".into(),
+            environment: Environment::default(),
+            verbose: false,
+            browser: true,
+        })
+        .unwrap();
+        json.as_object_mut().unwrap().remove("browser");
+        let Command::Start { browser, .. } = serde_json::from_value::<Command>(json).unwrap()
+        else {
+            panic!("not a start");
+        };
+        assert!(!browser);
     }
 }

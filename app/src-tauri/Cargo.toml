@@ -47,6 +47,17 @@ tracing = "0.1"
 # Starts session processes detached from the app.
 libc = "0.2"
 
+# Claude's browser (`claude-browser` design decision 5): WebKit's own calls for JavaScript with a
+# result and snapshots, and AppKit for the JPEG. All already in the tree through Tauri.
+[target.'cfg(target_os = "macos")'.dependencies]
+base64 = "0.23"
+block2 = "0.6"
+getrandom = "0.4"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSValue"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "objc2-core-graphics", "NSBitmapImageRep", "NSImage", "NSImageRep"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKSnapshotConfiguration", "WKWebView"] }
+
 [dev-dependencies]
 tempfile = "3"
 specdeck-server = { path = "../../crates/server" }

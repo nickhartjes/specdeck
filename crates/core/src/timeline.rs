@@ -160,6 +160,8 @@ const FILE_READING_TOOLS: [&str; 1] = ["Read"];
 const QUESTION_TOOL: &str = "AskUserQuestion";
 const PLAN_TOOL: &str = "ExitPlanMode";
 const HELPER_TOOLS: [&str; 2] = ["Agent", "Task"];
+/// SpecDeck's own browser (`agent-browser`): the tools of its MCP server.
+const BROWSER_TOOLS: &str = "mcp__specdeck__";
 /// A helper's report is cut to this many bytes, like a document's text.
 const MAX_REPORT_BYTES: usize = 200 * 1024;
 
@@ -361,6 +363,9 @@ impl TimelineBuilder {
                 }
             }
             PLAN_TOOL => "Claude has a plan for you to review".into(),
+            name if name.starts_with(BROWSER_TOOLS) => {
+                browser_permission_text(&name[BROWSER_TOOLS.len()..], input)
+            }
             _ => {
                 let summary = SUMMARY_FIELDS.iter().find_map(|field| {
                     let value = input.get(*field)?.as_str()?;
@@ -520,6 +525,33 @@ fn added_file(content: &str) -> DiffHunk {
 /// with several picks and anything the host typed joined by ", ".
 /// Questions and plans ask for permission to show their own dialog, so the host's choice there
 /// is not a permission decision.
+/// What Claude wants to do in its browser, in plain words (`agent-browser`, *Browser steps in
+/// plain words*).
+fn browser_permission_text(tool: &str, input: &Map<String, Value>) -> String {
+    let field = |key: &str| input.get(key).and_then(Value::as_str).unwrap_or_default();
+    match tool {
+        "navigate" => {
+            let url = field("url");
+            let address =
+                url.strip_prefix("https://").or(url.strip_prefix("http://")).unwrap_or(url);
+            let address =
+                if address.is_empty() { "a page".into() } else { cut(address, MAX_SUMMARY_CHARS) };
+            format!("Claude wants to open {address} in its browser")
+        }
+        "read_page" => "Claude wants to read the page in its browser".into(),
+        "click" => "Claude wants to click on the page in its browser".into(),
+        "type" => "Claude wants to type on the page in its browser".into(),
+        "press" => match field("key") {
+            "" => "Claude wants to press a key in its browser".into(),
+            key => format!("Claude wants to press {} in its browser", cut(key, 40)),
+        },
+        "screenshot" => "Claude wants to take a screenshot of its browser".into(),
+        "back" => "Claude wants to go back a page in its browser".into(),
+        "console" => "Claude wants to read its browser's console".into(),
+        other => format!("Claude wants to use {other} in its browser"),
+    }
+}
+
 fn asks_itself(tool_name: &str) -> bool {
     tool_name == QUESTION_TOOL || tool_name == PLAN_TOOL
 }
@@ -1080,6 +1112,30 @@ mod tests {
             "Claude wants to use WebFetch: https://example.com"
         );
         assert_eq!(text("Grep", json!({ "pattern": "TODO" })), "Claude wants to use Grep: TODO");
+        // Claude's browser, in plain words.
+        assert_eq!(
+            text("mcp__specdeck__navigate", json!({ "url": "http://localhost:5173/" })),
+            "Claude wants to open localhost:5173/ in its browser"
+        );
+        assert_eq!(
+            text("mcp__specdeck__press", json!({ "key": "Enter" })),
+            "Claude wants to press Enter in its browser"
+        );
+        for (tool, said) in [
+            ("read_page", "Claude wants to read the page in its browser"),
+            ("click", "Claude wants to click on the page in its browser"),
+            ("type", "Claude wants to type on the page in its browser"),
+            ("screenshot", "Claude wants to take a screenshot of its browser"),
+            ("back", "Claude wants to go back a page in its browser"),
+            ("console", "Claude wants to read its browser's console"),
+        ] {
+            assert_eq!(text(&format!("mcp__specdeck__{tool}"), json!({})), said);
+        }
+        // Another MCP server's tool keeps its name.
+        assert_eq!(
+            text("mcp__github__create_issue", json!({})),
+            "Claude wants to use mcp__github__create_issue"
+        );
         // Long or multi-line input is cut.
         let long = text("Bash", json!({ "command": "x".repeat(500) }));
         assert_eq!(long.chars().count(), "Claude wants to use Bash: ".len() + MAX_SUMMARY_CHARS);

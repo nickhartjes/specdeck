@@ -90,6 +90,46 @@ describe('summary steps', () => {
   });
 });
 
+describe("Claude's browser", () => {
+  const browser = (name: string, input: Record<string, unknown> = {}, status?: ToolStatus) => tool(`mcp__specdeck__${name}`, input, status);
+
+  it('says what one call did, with the address', () => {
+    const [opened] = steps([browser('navigate', { url: 'http://localhost:5173/login' })]);
+    expect(opened!.label).toBe('Opened localhost:5173/login in its browser');
+    // The details keep the tool's own name and input.
+    expect(opened!.tools[0]!.toolName).toBe('mcp__specdeck__navigate');
+  });
+
+  it('makes one step of a run of browser calls, and says what the last one does while it runs', () => {
+    const run = [
+      browser('navigate', { url: 'http://localhost:5173/login' }),
+      browser('type', { element: 2, text: 'anna@example.com' }),
+      browser('click', { element: 4 }),
+      browser('press', { key: 'Enter' }),
+      browser('screenshot', {}, 'running'),
+    ];
+    const [step] = steps(run);
+    expect(step!.label).toBe(
+      'Used its browser: opened localhost:5173/login, typed on the page, clicked on the page, pressed Enter, took a screenshot',
+    );
+    expect(step!.live).toBe('using its browser: taking a screenshot');
+  });
+
+  it('names every tool in plain words', () => {
+    const labels = ['read_page', 'back', 'console', 'screenshot'].map((name) => steps([browser(name)])[0]!.label);
+    expect(labels).toEqual([
+      'Read the page in its browser',
+      'Went back a page in its browser',
+      'Read the console in its browser',
+      'Took a screenshot in its browser',
+    ]);
+  });
+
+  it('keeps other MCP tools as they are', () => {
+    expect(steps([tool('mcp__github__create_issue', {})])[0]!.label).toBe('Used mcp__github__create_issue');
+  });
+});
+
 describe('live line', () => {
   it('says what the running step does, or what the agent waits for', () => {
     const running = turn([tool('Bash', { description: 'Run the test suite' }, 'running')]);

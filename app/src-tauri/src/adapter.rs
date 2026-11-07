@@ -144,6 +144,31 @@ mod tests {
         }
     }
 
+    /// The browser (`claude-browser`): a session of this release asks, and the app answers.
+    /// A session of the previous release was never offered a browser, so it never asks.
+    #[test]
+    fn browser_actions_come_only_from_sessions_of_this_release() {
+        use specdeck_core::browser::{BrowserAction, BrowserResult};
+        let own = Protocol::own();
+        let ask =
+            Frame::control(&Event::Browser { id: 1, action: BrowserAction::Screenshot }).unwrap();
+        assert_eq!(
+            event(own, &ask),
+            Some(Event::Browser { id: 1, action: BrowserAction::Screenshot })
+        );
+        let answer = Command::BrowserResult { id: 1, result: BrowserResult::text("ok") };
+        assert!(command(own, &answer).is_some());
+        for transcript in transcripts() {
+            if transcript.protocol == own {
+                continue;
+            }
+            let asked = sent(&transcript, "session").any(|message| message["type"] == "browser");
+            assert!(!asked, "protocol {}: a session asked for the browser", transcript.protocol.0);
+            let offered = sent(&transcript, "app").any(|message| message["browser"] == true);
+            assert!(!offered, "protocol {}: an app offered the browser", transcript.protocol.0);
+        }
+    }
+
     #[test]
     fn the_previous_release_gets_no_new_commands() {
         let previous = Protocol(Protocol::own().0 - 1);

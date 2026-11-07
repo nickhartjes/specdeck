@@ -67,6 +67,24 @@ describe('verbose logging setting', () => {
   });
 });
 
+describe('browser setting', () => {
+  it('is on by default on macOS and turns off at once', async () => {
+    const bridge = fakeBridge();
+    renderWith(bridge, <SettingsScreen />);
+    const toggle = await screen.findByRole('checkbox', { name: 'Browser' });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    expect(bridge.setBrowser).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+  });
+
+  it('is not offered on other platforms', async () => {
+    renderWith(fakeBridge('start', { getProfile: async () => ({ ...demoProfile, platform: 'windows' }) }), <SettingsScreen />);
+    await screen.findByRole('checkbox', { name: 'Diagnostics' });
+    expect(screen.queryByRole('checkbox', { name: 'Browser' })).toBeNull();
+  });
+});
+
 describe('update setting', () => {
   it('is on by default and turns off at once', async () => {
     const bridge = fakeBridge();

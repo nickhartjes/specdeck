@@ -4,17 +4,19 @@
 //! attached the session keeps running and keeps the notices for the next app, and after the
 //! grace period it ends itself as if the host had ended it.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
+use specdeck_core::browser::{BrowserAction, BrowserHandler, BrowserResult};
 use specdeck_core::peer::PeerConfig;
 use specdeck_diag::Diagnostics;
 use specdeck_local::{Compat, Connection, Frame, Frozen, Listener, Protocol, compat};
 use specdeck_protocol::AgentId;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::messages::{Command, Event, SuggestionAnswer};
 use crate::runtime::{HostNotice, HostRuntime, Observer, StartOptions};
@@ -24,6 +26,13 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How long an ended session gives sharing to tell its viewers before the process exits.
 const END_GRACE: Duration = Duration::from_secs(1);
+
+/// How long the app may take to run a browser action (`claude-browser` design decision 6): a
+/// page gets 30 seconds to load in the app, the rest answer at once.
+const PAGE_TIMEOUT: Duration = Duration::from_secs(35);
+const ACTION_TIMEOUT: Duration = Duration::from_secs(10);
+
+const BROWSER_UNAVAILABLE: &str = "The browser isn't available until SpecDeck is open again.";
 
 pub struct Options {
     /// The session's number in the app, which names its files.
@@ -62,6 +71,9 @@ struct Shared {
     connection: AtomicU64,
     /// Notices that came while no app was attached, for the next one.
     held: Mutex<Vec<HostNotice>>,
+    /// Browser actions sent to the app, by id, waiting for its answer.
+    browser: Mutex<HashMap<u64, oneshot::Sender<BrowserResult>>>,
+    browser_ids: AtomicU64,
     ended: Notify,
 }
 
@@ -70,6 +82,49 @@ impl Shared {
         if let (Some(app), Ok(frame)) = (&*self.app.lock().unwrap(), Frame::control(event)) {
             let _ = app.send(frame);
         }
+    }
+
+    /// Asks the attached app to run `action`; answers at once when no app is attached.
+    async fn ask_browser(&self, action: BrowserAction) -> BrowserResult {
+        let id = self.browser_ids.fetch_add(1, Ordering::SeqCst);
+        let timeout = if action.loads_page() { PAGE_TIMEOUT } else { ACTION_TIMEOUT };
+        let (answer, answered) = oneshot::channel();
+        {
+            // Registered and sent under the app's lock, so a detach in between fails it.
+            let app = self.app.lock().unwrap();
+            let Some(app) = &*app else { return BrowserResult::error(BROWSER_UNAVAILABLE) };
+            let Ok(frame) = Frame::control(&Event::Browser { id, action }) else {
+                return BrowserResult::error("The browser action could not be sent.");
+            };
+            self.browser.lock().unwrap().insert(id, answer);
+            if app.send(frame).is_err() {
+                self.browser.lock().unwrap().remove(&id);
+                return BrowserResult::error(BROWSER_UNAVAILABLE);
+            }
+        }
+        match tokio::time::timeout(timeout, answered).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => BrowserResult::error(BROWSER_UNAVAILABLE),
+            Err(_) => {
+                self.browser.lock().unwrap().remove(&id);
+                BrowserResult::error(format!(
+                    "The browser did not answer within {} seconds.",
+                    timeout.as_secs()
+                ))
+            }
+        }
+    }
+
+    /// The app's answer to a browser action.
+    fn browser_answered(&self, id: u64, result: BrowserResult) {
+        if let Some(answer) = self.browser.lock().unwrap().remove(&id) {
+            let _ = answer.send(result);
+        }
+    }
+
+    /// The app is gone: what it was asked will not be answered.
+    fn fail_browser_actions(&self) {
+        self.browser.lock().unwrap().clear();
     }
 
     fn runtime(&self) -> Option<Arc<HostRuntime>> {
@@ -108,6 +163,8 @@ pub async fn serve(options: Options) -> std::io::Result<()> {
         app: Mutex::new(None),
         connection: AtomicU64::new(0),
         held: Mutex::new(Vec::new()),
+        browser: Mutex::new(HashMap::new()),
+        browser_ids: AtomicU64::new(1),
         ended: Notify::new(),
     });
 
@@ -178,9 +235,11 @@ async fn handle(connection: Connection, shared: Arc<Shared>) {
     };
     let compat = compat(own, peer);
 
-    // This connection is the attached app from now on; the previous one is let go.
+    // This connection is the attached app from now on; the previous one is let go, with what it
+    // was asked to run in the browser.
     let number = shared.connection.fetch_add(1, Ordering::SeqCst) + 1;
     *shared.app.lock().unwrap() = Some(outgoing.clone());
+    shared.fail_browser_actions();
     tracing::info!(session = shared.options.id, protocol = peer.0, "session.app_attached");
     // What the tray shows now, then what happened while no app was attached.
     if let Some(summary) = shared.runtime().and_then(|runtime| runtime.summary()) {
@@ -214,6 +273,7 @@ async fn handle(connection: Connection, shared: Arc<Shared>) {
     // The app went away. If it was the attached one, the session runs on without it.
     if shared.connection.load(Ordering::SeqCst) == number {
         *shared.app.lock().unwrap() = None;
+        shared.fail_browser_actions();
         if let Some(runtime) = shared.runtime() {
             runtime.detach();
         }
@@ -252,6 +312,9 @@ async fn run(
     }
     if let Command::Start { .. } = command {
         return start(command, shared, outgoing).await;
+    }
+    if let Command::BrowserResult { id, result } = command {
+        return shared.browser_answered(id, result);
     }
     if compat == Compat::EndOnly {
         return;
@@ -327,7 +390,7 @@ async fn run(
             shared.send(&Event::Status { sharing, events });
             Ok(())
         }
-        Command::Start { .. } | Command::End => Ok(()),
+        Command::Start { .. } | Command::End | Command::BrowserResult { .. } => Ok(()),
     };
     if let Err(message) = result {
         reply_failed(outgoing, &message);
@@ -345,6 +408,7 @@ async fn start(command: Command, shared: &Arc<Shared>, outgoing: &mpsc::Unbounde
         signalling_url,
         environment,
         verbose,
+        browser,
     } = command
     else {
         return;
@@ -373,6 +437,7 @@ async fn start(command: Command, shared: &Arc<Shared>, outgoing: &mpsc::Unbounde
         data_dir,
         signalling_url,
         peer: shared.options.peer.clone(),
+        browser: browser.then(|| browser_handler(Arc::downgrade(shared))),
     };
     match HostRuntime::start(options, &environment, observer).await {
         Ok(runtime) => {
@@ -391,6 +456,20 @@ async fn start(command: Command, shared: &Arc<Shared>, outgoing: &mpsc::Unbounde
             shared.end();
         }
     }
+}
+
+/// Passes the agent's browser actions to the attached app. Holds the session weakly: the runtime
+/// that holds the handler is part of it.
+fn browser_handler(shared: Weak<Shared>) -> BrowserHandler {
+    Arc::new(move |action| {
+        let shared = shared.clone();
+        Box::pin(async move {
+            match shared.upgrade() {
+                Some(shared) => shared.ask_browser(action).await,
+                None => BrowserResult::error(BROWSER_UNAVAILABLE),
+            }
+        })
+    })
 }
 
 fn write_entry(shared: &Shared, agent: AgentId, folder: &std::path::Path) {

@@ -85,6 +85,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     checkUpdates: false,
     screenReader: false,
     verboseLogging: false,
+    browser: false,
   });
 
   const readJoinLink = (link: string): JoinLink => {
@@ -109,6 +110,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     setCheckUpdates: () => Promise.resolve(profile()),
     setScreenReader: () => Promise.resolve(profile()),
     setVerboseLogging: () => Promise.resolve(profile()),
+    setBrowser: () => Promise.resolve(profile()),
     updateStatus: () => Promise.resolve({ state: 'disabled' }),
     onUpdate: () => () => {},
     restartToUpdate: notInTheWebViewer,

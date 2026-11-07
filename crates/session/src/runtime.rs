@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use specdeck_core::browser::BrowserHandler;
 use specdeck_core::environment::Environment;
 use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
@@ -241,6 +242,8 @@ pub struct StartOptions {
     pub data_dir: PathBuf,
     pub signalling_url: String,
     pub peer: PeerConfig,
+    /// Runs the agent's browser actions (`agent-browser`); `None` gives the agent no browser.
+    pub browser: Option<BrowserHandler>,
 }
 
 impl HostRuntime {
@@ -257,7 +260,9 @@ impl HostRuntime {
             data_dir: options.data_dir,
         };
         let (session, mut session_events) =
-            HostSession::start(config, env).await.map_err(|error| error.to_string())?;
+            HostSession::start_with_browser(config, env, options.browser)
+                .await
+                .map_err(|error| error.to_string())?;
         let (sharing, mut sharing_events) = Sharing::start(
             session.view(),
             SharingConfig {

@@ -26,6 +26,8 @@ const SHELL = new Set(['Bash', 'PowerShell']);
 const READS = new Set(['Read', 'Glob', 'Grep', 'LS']);
 const CHANGES = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const SUBAGENTS = new Set(['Task', 'Agent']);
+/** SpecDeck's own browser (`agent-browser`): its MCP server's tools. */
+const BROWSER = 'mcp__specdeck__';
 
 /** Past tense and -ing form of verbs Claude starts command descriptions with. */
 const VERBS: Record<string, [string, string]> = {
@@ -71,8 +73,43 @@ function tenses(description: string): [string, string] {
   return [upperFirst(verb[0]) + tail, verb[1] + tail];
 }
 
-/** Which consecutive calls share a line: reads, changes, and the files of one plan. */
+/** An address as people say it: without `http://`, cut when long. */
+function address(url: string): string {
+  const bare = url.replace(/^https?:\/\//, '');
+  return bare.length > 60 ? `${bare.slice(0, 59)}…` : bare;
+}
+
+/** What one browser call did, past and -ing. */
+function browserAction(tool: ToolItem): [string, string] {
+  switch (tool.toolName.slice(BROWSER.length)) {
+    case 'navigate': {
+      const where = address(text(tool, 'url')) || 'a page';
+      return [`opened ${where}`, `opening ${where}`];
+    }
+    case 'read_page':
+      return ['read the page', 'reading the page'];
+    case 'click':
+      return ['clicked on the page', 'clicking on the page'];
+    case 'type':
+      return ['typed on the page', 'typing on the page'];
+    case 'press': {
+      const key = text(tool, 'key') || 'a key';
+      return [`pressed ${key}`, `pressing ${key}`];
+    }
+    case 'screenshot':
+      return ['took a screenshot', 'taking a screenshot'];
+    case 'back':
+      return ['went back a page', 'going back a page'];
+    case 'console':
+      return ['read the console', 'reading the console'];
+    default:
+      return [`used ${tool.toolName.slice(BROWSER.length)}`, `using ${tool.toolName.slice(BROWSER.length)}`];
+  }
+}
+
+/** Which consecutive calls share a line: reads, changes, the files of one plan, and the browser. */
 function group(tool: ToolItem): string | null {
+  if (tool.toolName.startsWith(BROWSER)) return 'browser';
   if (READS.has(tool.toolName)) return 'reads';
   if (!CHANGES.has(tool.toolName)) return null;
   const path = text(tool, 'file_path') || tool.changes[0]?.path || '';
@@ -93,6 +130,14 @@ function line(tools: ToolItem[], key: string | null, seenPlans: Set<string>): St
   if (key === 'changes') {
     const files = new Set(tools.map((t) => text(t, 'file_path') || t.changes[0]?.path)).size;
     return { ...base, label: `Changed ${plural(files, 'file')}`, live: `changing ${plural(files, 'file')}` };
+  }
+  if (key === 'browser') {
+    const actions = tools.map(browserAction);
+    if (actions.length === 1) {
+      const [past, ing] = actions[0]!;
+      return { ...base, label: `${upperFirst(past)} in its browser`, live: `${ing} in its browser` };
+    }
+    return { ...base, label: `Used its browser: ${actions.map(([past]) => past).join(', ')}`, live: `using its browser: ${actions.at(-1)![1]}` };
   }
   if (key?.startsWith('plan:')) {
     const plan = key.slice('plan:'.length);
