@@ -86,6 +86,8 @@ describe('menu commands', () => {
 
   it('File > Copy Invite Code copies it while hosting', async () => {
     const bridge = await setup('host');
+    // Once the code has arrived: before that the menu says it is not ready yet.
+    await screen.findAllByText('7K2M-9QXH-4TPA');
     act(() => menu({ id: 'copy-code' }));
     await waitFor(() => expect(bridge.copyText).toHaveBeenCalledWith('7K2M-9QXH-4TPA'));
   });

@@ -9,7 +9,10 @@ found=0
 
 check() {
   found=1
-  if "${@:3}" | grep -q "$2"; then
+  local listing
+  # Listed in full first: grep -q stopping early would fail the lister under pipefail.
+  listing=$("${@:3}")
+  if grep -q "$2" <<< "$listing"; then
     echo "ok       $1"
   else
     echo "missing  $1: no $2" >&2

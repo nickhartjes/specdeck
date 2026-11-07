@@ -88,6 +88,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
   # The tests need network access and a pty; they run in CI instead.
   doCheck = false;
 
+  # Hosted sessions run as this binary, which the app looks for next to itself.
+  postInstall = ''
+    test -x "$out/bin/specdeck-session"
+  '';
+
   # The tray icon loads the indicator library at run time.
   preFixup = ''
     gappsWrapperArgs+=(--prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ libayatana-appindicator ]})
