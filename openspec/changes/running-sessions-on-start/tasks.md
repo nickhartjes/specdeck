@@ -14,7 +14,7 @@
 
 ## 3. Integration
 
-- [ ] 3.1 In `just local-dev`, host two sessions with a viewer on one, close one session's window and open New Window: verify the start screen lists that session with its viewer count, that the count follows a viewer joining, that Open shows the session with its scrollback while the viewer stays connected, and that after `kill -9` and `just local-dev-host`, closing a reopened window lists its session again.
+- [x] 3.1 In `just local-dev`, host two sessions with a viewer on one, close one session's window and open New Window: verify the start screen lists that session with its viewer count, that the count follows a viewer joining, that Open shows the session with its scrollback while the viewer stays connected, and that after `kill -9` and `just local-dev-host`, closing a reopened window lists its session again.
 - [x] 3.2 Run `just check` and `mise exec node@24.22.2 -- openspec validate running-sessions-on-start --strict`, and verify both pass.
 
 ## Workflow follow-up
