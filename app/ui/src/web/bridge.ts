@@ -100,6 +100,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     screenReader: false,
     verboseLogging: false,
     browser: false,
+    screenshots: false,
   });
 
   const readJoinLink = (link: string): JoinLink => {
@@ -125,6 +126,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     setScreenReader: () => Promise.resolve(profile()),
     setVerboseLogging: () => Promise.resolve(profile()),
     setBrowser: () => Promise.resolve(profile()),
+    setScreenshots: () => Promise.resolve(profile()),
     updateStatus: () => Promise.resolve({ state: 'disabled' }),
     onUpdate: () => () => {},
     restartToUpdate: notInTheWebViewer,

@@ -55,6 +55,7 @@ export const demoProfile: Profile = {
   screenReader: false,
   verboseLogging: false,
   browser: true,
+  screenshots: true,
 };
 
 export const demoParticipants: Participant[] = [
@@ -327,6 +328,7 @@ export function demoBridge(screen: string): Bridge {
     setScreenReader: async (screenReader) => ({ ...profile, screenReader }),
     setVerboseLogging: async (verboseLogging) => ({ ...profile, verboseLogging }),
     setBrowser: async (browser) => ({ ...profile, browser }),
+    setScreenshots: async (screenshots) => ({ ...profile, screenshots }),
     // The start screen shows an update that is ready to install.
     updateStatus: async () => (screen === 'start' ? { state: 'ready', version: '1.2.1' } : { state: 'idle' }),
     onUpdate: () => () => {},

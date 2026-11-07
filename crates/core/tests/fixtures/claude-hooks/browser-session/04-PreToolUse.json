@@ -1,0 +1,20 @@
+{
+  "cwd": "/workspace/project",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "mcp_server": {
+    "name": "specdeck",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "39e0c42e-6b7e-430d-b341-2bd473a97e8b",
+  "session_id": "4b600686-8a82-49ba-b59b-f2e496928a8f",
+  "tool_input": {
+    "url": "http://localhost:5173/login"
+  },
+  "tool_name": "mcp__specdeck__navigate",
+  "tool_use_id": "toolu_01SCKiwcy5Mpt3qXefyoVNJC",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/4b600686-8a82-49ba-b59b-f2e496928a8f.jsonl"
+}

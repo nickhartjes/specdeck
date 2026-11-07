@@ -7,14 +7,18 @@ use specdeck_core::hooks::{HOOK_EVENTS, HookPayload};
 use specdeck_core::session_folder::SessionFolder;
 use specdeck_core::timeline::TimelineBuilder;
 use specdeck_protocol::timeline::{
-    Answer, DiffHunk, Entry, FileChangeKind, Permission, ToolOutcome, ToolStatus,
+    Answer, DiffHunk, Entry, FileChangeKind, LeftOut, Permission, ToolOutcome, ToolStatus,
 };
 
 /// The payloads of one recorded session, in order, without events the engine does not register.
 fn payloads(session: &str) -> Vec<HookPayload> {
     let dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-hooks").join(session);
-    let mut files: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
     files.sort();
     files
         .into_iter()
@@ -315,4 +319,74 @@ fn manual_compact_is_for_the_engine() {
     // Compaction adds no entries of its own.
     let kinds: Vec<String> = replay("compact-session").iter().map(kind).collect();
     assert_eq!(kinds, ["prompt", "response", "session-ended"]);
+}
+
+#[test]
+fn browser_session() {
+    let entries = replay("browser-session");
+    let screenshots: Vec<(Option<&str>, &str, u32)> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::ToolResult {
+                outcome: Some(ToolOutcome::Screenshot { image: Some(image), address, left_out }),
+                ..
+            } => {
+                assert_eq!(*left_out, None);
+                Some((address.as_deref(), image.media_type.as_str(), image.width))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        screenshots,
+        [(Some("localhost:5173/login"), "image/jpeg", 24), (None, "image/png", 24)]
+    );
+    // Both screenshots arrive as an array of content blocks with one base64 image.
+    let payloads = payloads("browser-session");
+    let images: Vec<(&str, &str)> = payloads
+        .iter()
+        .filter(|p| p["hook_event_name"] == "PostToolUse")
+        .flat_map(|p| {
+            let blocks = p["tool_response"].as_array().into_iter().flatten();
+            blocks.filter(|b| b["type"] == "image").map(|b| {
+                (p["tool_name"].as_str().unwrap(), b["source"]["media_type"].as_str().unwrap())
+            })
+        })
+        .collect();
+    assert_eq!(
+        images,
+        [
+            ("mcp__specdeck__screenshot", "image/jpeg"),
+            ("mcp__playwright__browser_take_screenshot", "image/png")
+        ]
+    );
+}
+
+#[test]
+fn browser_session_with_screenshots_turned_off() {
+    let mut builder = TimelineBuilder::new(SessionFolder::new("/workspace/project", None))
+        .with_screenshots(false);
+    let outcomes: Vec<ToolOutcome> = payloads("browser-session")
+        .into_iter()
+        .flat_map(|p| builder.handle(p).unwrap())
+        .filter_map(|entry| match entry {
+            Entry::ToolResult { outcome: Some(outcome), .. } => Some(outcome),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            ToolOutcome::Screenshot {
+                image: None,
+                address: Some("localhost:5173/login".into()),
+                left_out: Some(LeftOut::TurnedOff),
+            },
+            ToolOutcome::Screenshot {
+                image: None,
+                address: None,
+                left_out: Some(LeftOut::TurnedOff)
+            },
+        ]
+    );
 }

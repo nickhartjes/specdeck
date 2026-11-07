@@ -129,6 +129,25 @@ export function SettingsScreen() {
         </div>
       )}
       <div className="row">
+        <span id="settings-screenshots">Screenshots</span>
+        <div>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={profile.screenshots}
+              aria-labelledby="settings-screenshots"
+              aria-describedby="settings-screenshots-hint"
+              onChange={async (event) => setProfile(await bridge.setScreenshots(event.target.checked))}
+            />
+            Show screenshots in the timeline
+          </label>
+          <span id="settings-screenshots-hint" className="field-hint">
+            Pictures from Claude's browser and other tools, such as screenshots. Viewers see them too. Applies to sessions you
+            start from now on.
+          </span>
+        </div>
+      </div>
+      <div className="row">
         <span id="settings-verbose-logging">Diagnostics</span>
         <div>
           <label className="check">

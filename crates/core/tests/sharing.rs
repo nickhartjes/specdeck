@@ -25,7 +25,7 @@ use specdeck_protocol::control::{
 };
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
-use specdeck_protocol::timeline::Entry;
+use specdeck_protocol::timeline::{Entry, MAX_EVENT_JSON_BYTES, ToolOutcome};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -91,6 +91,7 @@ async fn host_agent(
         cols: 80,
         rows: 24,
         data_dir: data.path().to_owned(),
+        screenshots: true,
     };
     let (session, _session_events) = HostSession::start(config, &env).await.unwrap();
     let (sharing, events) = Sharing::start(
@@ -928,6 +929,87 @@ async fn a_very_large_file_change_reaches_viewers_cut_and_keeps_them_connected()
     assert_eq!(hunks[0].lines[0], "+const VALUE_0: &str = \"some generated line of code\";");
 
     // Still connected: live output keeps arriving.
+    hosted.session.input(b"after\r").unwrap();
+    until(&mut events, &mut seen, |seen, event| {
+        dropped(event);
+        seen.text.contains("got:after")
+    })
+    .await;
+}
+
+/// A fake Claude Code that, on the line "go", reports through its hooks a Playwright screenshot
+/// whose `PostToolUse` the test wrote to `shot.json` next to it, then echoes lines.
+const SCREENSHOT_AGENT: &str = r#"#!/bin/sh
+[ "$1" = "--settings" ] || { echo "no settings"; exit 9; }
+url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$2" | head -n 1)
+post() { curl -s -o /dev/null -X POST -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -H 'Content-Type: application/json' --data-binary "$1" "$url"; }
+echo ready
+read go
+post '{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"check the page"}'
+post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"mcp__playwright__browser_take_screenshot","tool_use_id":"s","tool_input":{}}'
+post "@$(dirname "$0")/shot.json"
+echo posted
+while read line; do echo "got:$line"; done
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_screenshot_reaches_viewers_made_smaller() {
+    use base64::Engine;
+    let url = signalling().await;
+    let mut hosted =
+        host_agent(&url, "nick", AgentId::ClaudeCode, "claude", SCREENSHOT_AGENT).await;
+    // A page-like PNG of 1600×1000, far over what one event may carry.
+    let page = image::RgbImage::from_fn(1600, 1000, |x, y| {
+        let grain = ((x * 7 + y * 13) ^ (x * y)) % 8;
+        image::Rgb([(x / 8 + grain) as u8, (y / 4) as u8, 200])
+    });
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgb8(page)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(png);
+    assert!(data.len() > 400 * 1024, "{} bytes", data.len());
+    let shot = serde_json::json!({
+        "hook_event_name": "PostToolUse", "prompt_id": "p1",
+        "tool_name": "mcp__playwright__browser_take_screenshot", "tool_use_id": "s", "tool_input": {},
+        "tool_response": [
+            { "type": "text", "text": "### Result" },
+            { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": data } }
+        ]
+    });
+    std::fs::write(hosted._dirs.0.path().join("shot.json"), shot.to_string()).unwrap();
+    let code = ready(&mut hosted.events).await;
+    let (_viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("ready")).await;
+
+    hosted.session.input(b"go\r").unwrap();
+    let dropped =
+        |event: &ViewerEvent| assert_ne!(event, &ViewerEvent::Reconnecting, "viewer dropped");
+    let result = until(&mut events, &mut seen, |_, event| {
+        dropped(event);
+        matches!(event, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::ToolResult { outcome: Some(_), .. }))
+    })
+    .await;
+    let ViewerEvent::Timeline { event, .. } = result else { unreachable!() };
+    assert!(!event.truncated);
+    assert!(serde_json::to_vec(&event).unwrap().len() <= MAX_EVENT_JSON_BYTES);
+    let Entry::ToolResult {
+        outcome: Some(ToolOutcome::Screenshot { image: Some(image), .. }), ..
+    } = event.entry
+    else {
+        panic!("no screenshot: {:?}", event.entry)
+    };
+    assert_eq!((image.media_type.as_str(), image.width, image.height), ("image/jpeg", 1280, 800));
+
+    // A viewer who joins afterwards gets it too.
+    let (_late, mut late_events) = join(&url, &code, "mo");
+    let mut late_seen = Seen::default();
+    until(&mut late_events, &mut late_seen, |_, event| {
+        matches!(event, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::ToolResult { outcome: Some(ToolOutcome::Screenshot { image: Some(_), .. }), .. }))
+    })
+    .await;
+
     hosted.session.input(b"after\r").unwrap();
     until(&mut events, &mut seen, |seen, event| {
         dropped(event);

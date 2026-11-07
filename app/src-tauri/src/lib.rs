@@ -170,6 +170,8 @@ struct Profile {
     verbose_logging: bool,
     /// New Claude Code sessions get SpecDeck's own browser.
     browser: bool,
+    /// New sessions show screenshots in the timeline.
+    screenshots: bool,
 }
 
 /// The agents to choose from, in display order: the coding agents, then Terminal.
@@ -230,6 +232,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
         screen_reader: settings.screen_reader,
         verbose_logging: settings.verbose_logging,
         browser: settings.browser,
+        screenshots: settings.screenshots,
     }
 }
 
@@ -487,6 +490,24 @@ async fn set_browser(
     {
         let mut settings = state.settings.lock().unwrap();
         settings.browser = enabled;
+        state.save(&settings);
+    }
+    settings_changed(&app);
+    Ok(profile(&state, window.label()))
+}
+
+/// Shows screenshots in the timelines of new sessions, or not; running sessions keep what they
+/// started with.
+#[tauri::command]
+async fn set_screenshots(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<Profile, String> {
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.screenshots = enabled;
         state.save(&settings);
     }
     settings_changed(&app);
@@ -777,10 +798,10 @@ async fn start_hosting(
     if !state.sessions.lock().unwrap().is_free(window.label()) {
         return Err("This window already shows a session. Open a new window for another.".into());
     }
-    let (username, verbose, browser) = {
+    let (username, verbose, browser, screenshots) = {
         let settings = state.settings.lock().unwrap();
         let username = settings.username.clone().ok_or("Set your name first.")?;
-        (username, settings.verbose_logging, settings.browser)
+        (username, settings.verbose_logging, settings.browser, settings.screenshots)
     };
     let id = state.sessions.lock().unwrap().next_id();
     let launch = client::Launch {
@@ -793,6 +814,7 @@ async fn start_hosting(
         environment: state.environment(),
         verbose,
         browser: browser::offered(agent, browser).then(|| browser::runner(&app, id)).flatten(),
+        screenshots,
     };
     let name = folder_name(&folder);
     // The menu-bar or tray icon shows the session from the start, and follows it.
@@ -2005,6 +2027,7 @@ pub fn run() {
             set_screen_reader,
             set_verbose_logging,
             set_browser,
+            set_screenshots,
             diagnostics_status,
             diagnostics_report_terminal,
             reconnect_viewer,

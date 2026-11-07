@@ -1,0 +1,39 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 20,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "playwright",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "39e0c42e-6b7e-430d-b341-2bd473a97e8b",
+  "session_id": "4b600686-8a82-49ba-b59b-f2e496928a8f",
+  "tool_input": {
+    "scale": "css"
+  },
+  "tool_name": "mcp__playwright__browser_take_screenshot",
+  "tool_response": [
+    {
+      "text": "### Result\n- [Screenshot of viewport](.playwright-mcp/page-2026-11-07T20-20-42-034Z.png)\n### Ran Playwright code\n```js\n// Screenshot viewport and save it as .playwright-mcp/page-2026-11-07T20-20-42-034Z.png\nawait page.screenshot({\n  path: '.playwright-mcp/page-2026-11-07T20-20-42-034Z.png',\n  scale: 'css',\n  type: 'png'\n});\n```",
+      "type": "text"
+    },
+    {
+      "source": {
+        "data": "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAGKADAAQAAAABAAAAGAAAAADiNXWtAAADqklEQVRIDaVVW4hUZRz/fd85Zy57yXEtXTOc3X1pMXwIESJIC5Kg6EEE6WHBh6AHobyAQfQm9tCDFvTgkwhBovTkrWWpBxVLkPBSsOWlcUdtc0TQxbmeOed8/f7frLs7M+fIit9wZr7zXX6/3/86CrNj+PX388YPdhoTfQSoQcA82Vrkr+I5c08pfVSl3G9vXf6pKBdlFUOj775tHHWILyPGPCuwIMwPpZRIK6jQfDz19y9nlCiPGv5ZMuepfv7kc8yIBWIVdTq10ckNrN4Lpd/jShukvEVhxGXz1IeCIarbB28rlUMQaJezrZ3gcjgMQuSW9MVtzWEJebVaswK6SKxgtdU1CQH9fMcY3ly/FlGU7DbPc3Hy59/x/ZHjaDb9LksEmxa0u0bkaa2x5cN3MLh8AFGH6+bkc+K5Gm4mh9MT5zE9/S8cx1m4zbkBCeKHKG8GgSULmkGMDHGjQl9PGtne/ngQruqkHc91cav4H374cQINEji0Km5I5qXSQtAZ6Nbp+FvckwD2ZNM4NfErvtp/GDOPK9Bd2TILkuppTWK+EwmCMMTKwRex78tP8NvFP/HNwaO8rroCKZipzAuSljHwSI6BnDaRwcVLk9aSN9a9BodBldgYo6w1tjBpqZPqFepnI0ilXPx1Ywonxs9jz6djWPPqMA4fOYV6o2mhlg0sweYPNlhQzXLSXoZRr/G9nSgxiwIW2qqVy/Hd17ux4qUBXLt5G3fullBrMN8JU601bJyEQTEBvEw//HK1y4WJBBHd09+b5e0sVfsYyb+ML3Ztmys8z/PEh4IvDHRffKATgyz3pMhC9iMZIX0v7UCKSZ4nFS6xVcphoJmqMUWZaIHkfau/LKz0hXMWEZXX/ZBCFNw0+xY/7RFIKDRRd+7CFZQrdfo6QGX2qdZDVOuRfWoNNrpGiAtXp/FwpoywWSF4Jzyty6/ZRFntysRSRyvkh4awevQtm4ZR6LM1MLBhk23cp4sC1CsVTN2ZRqM6g3r5PkMSWnfOf9EypUyJgCvmF8Wn9D+t+KdQwN3SY7heluBCUEdEkhaZZJOxvUouyJ9M5xBsl4E5xs3PpDW0DV6SK365BOpuGS/M1hFUxl71tGHjZ6JjWqXTB0hyO06BACjtUKXLXz7MFnvOEiXDyxkGvKBVz37n0b0bM7llI1codwNZlyZfW9xOK/NwPTR6rDg5Pmn/IR49KEwtfWX0OJNdEmGYuvsWB7fwFN2nUCLAIZ3JbC/+MT4pu/8DaRyOgbj7G74AAAAASUVORK5CYII=",
+        "media_type": "image/png",
+        "type": "base64"
+      },
+      "type": "image"
+    },
+    {
+      "text": "[Image: source: /home/user/.claude/projects/-workspace-project/4b600686-8a82-49ba-b59b-f2e496928a8f/tool-results/mcp-playwright-blob-1794082842037-87x1af.png]",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01WJtYwH8rWd9YGC2DG5Um7p",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/4b600686-8a82-49ba-b59b-f2e496928a8f.jsonl"
+}

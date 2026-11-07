@@ -99,3 +99,64 @@ describe('a long session', () => {
     expect(rendered.get('Working on 20')).toBe(1);
   });
 });
+
+describe('screenshots', () => {
+  const stamp = (n: number) => ({ outputSeq: n, at: 1_700_000_000_000 + n });
+  const image = { mediaType: 'image/jpeg', data: '/9j/4AAQ', width: 1280, height: 800 };
+  /** Claude opens a page and takes a screenshot in its browser; `outcome` is the screenshot's. */
+  function browsing(outcome: Record<string, unknown>): TimelineEvent[] {
+    const promptId = 'p';
+    return [
+      { ...stamp(1), kind: 'prompt', promptId, text: 'Check the login page' },
+      { ...stamp(2), kind: 'tool-call', promptId, toolUseId: 'nav', toolName: 'mcp__specdeck__navigate', input: { url: 'http://localhost:5173/login' } },
+      { ...stamp(3), kind: 'tool-result', promptId, toolUseId: 'nav', status: 'succeeded' },
+      { ...stamp(4), kind: 'tool-call', promptId, toolUseId: 'shot', toolName: 'mcp__specdeck__screenshot', input: {} },
+      { ...stamp(5), kind: 'tool-result', promptId, toolUseId: 'shot', status: 'succeeded', outcome: { kind: 'screenshot', ...outcome } } as TimelineEvent,
+    ];
+  }
+
+  for (const steps of ['summary', 'details'] as const) {
+    it(`shows a thumbnail with its page, ${steps === 'summary' ? 'in plain words' : 'with every step'}`, () => {
+      panel(browsing({ image, address: 'localhost:5173/login' }), steps);
+      const picture = screen.getByRole('img', { name: 'Screenshot of localhost:5173/login' });
+      expect(picture).toHaveAttribute('src', 'data:image/jpeg;base64,/9j/4AAQ');
+      expect(picture).toHaveAttribute('width', '240');
+      expect(picture).toHaveAttribute('height', '150');
+      expect(screen.getByText('localhost:5173/login', { selector: 'figcaption' })).toBeInTheDocument();
+    });
+  }
+
+  it('says why a screenshot is not shown', () => {
+    const reasons = {
+      'turned-off': "Screenshot: Screenshots aren't shown in this session.",
+      'too-large': 'Screenshot: Too large to show.',
+      unreadable: "Screenshot: Couldn't be shown.",
+    };
+    for (const [leftOut, said] of Object.entries(reasons)) {
+      const { unmount } = panel(browsing({ leftOut }), 'summary');
+      expect(screen.getByText(said)).toBeInTheDocument();
+      expect(screen.queryByRole('img')).toBeNull();
+      unmount();
+    }
+  });
+
+  it('calls a screenshot without a page just "Screenshot", and shows nothing but JPEG and PNG', () => {
+    const { unmount } = panel(browsing({ image }), 'details');
+    expect(screen.getByRole('img', { name: 'Screenshot' })).toBeInTheDocument();
+    unmount();
+    panel(browsing({ image: { ...image, mediaType: 'image/svg+xml' } }), 'details');
+    expect(screen.queryByRole('img')).toBeNull();
+    expect(screen.getByText("Screenshot: Couldn't be shown.")).toBeInTheDocument();
+  });
+
+  it('opens the screenshot on a click, and keeps its tab on a double click', async () => {
+    const onOpenScreenshot = vi.fn();
+    const props = { timelineSupported: true, agentName: 'Claude Code', steps: 'summary' as const, matches: new Set<string>(), current: null, onJump: () => {} };
+    render(<TimelinePanel model={buildTimeline(browsing({ image, address: 'localhost:5173/login' }))} {...props} onOpenScreenshot={onOpenScreenshot} />);
+    const button = screen.getByRole('button', { name: 'Screenshot of localhost:5173/login' });
+    await userEvent.click(button);
+    expect(onOpenScreenshot).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'shot' }), false);
+    await userEvent.dblClick(button);
+    expect(onOpenScreenshot).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'shot' }), true);
+  });
+});

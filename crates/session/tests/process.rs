@@ -174,6 +174,7 @@ fn start(folder: &Path, signalling_url: &str) -> Command {
         environment,
         verbose: false,
         browser: false,
+        screenshots: true,
     }
 }
 
@@ -312,6 +313,7 @@ async fn a_sent_suggestion_is_typed_as_one_prompt() {
         environment,
         verbose,
         browser: false,
+        screenshots: true,
     };
     let mut terminal = String::new();
     app.send(&start).await;
@@ -646,6 +648,7 @@ async fn browsing_session(app: &mut App, folder: &Path, url: &str, browser: bool
         environment,
         verbose: false,
         browser,
+        screenshots: true,
     })
     .await;
     app.until(&mut terminal, |event| matches!(event, Event::Started)).await;

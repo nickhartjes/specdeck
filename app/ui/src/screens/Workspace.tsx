@@ -9,11 +9,12 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { ArrowDown, FileDiff, FileText, SquareTerminal, X } from "lucide-react";
+import { ArrowDown, FileDiff, FileText, Image, SquareTerminal, X } from "lucide-react";
 import type { TimelineEvent, TerminalSnapshot } from "../api/types";
 import { Divider } from "../components/Divider";
 import { DiffTab } from "../components/DiffTab";
 import { DocumentTab } from "../components/DocumentTab";
+import { ScreenshotTab, screenshotTitle } from "../components/Screenshot";
 import { FilesPanel, isDocument } from "../components/FilesPanel";
 import { SearchBar } from "../components/SearchBar";
 import { TimelinePanel } from "../components/TimelinePanel";
@@ -41,7 +42,14 @@ import {
   type OpenTab,
   type Tabs,
 } from "../model/tabs";
-import { buildTimeline, turnText, type TouchedFile } from "../model/timeline";
+import {
+  buildTimeline,
+  turnText,
+  type TimelineModel,
+  type ToolItem,
+  type TouchedFile,
+} from "../model/timeline";
+import { screenshotOf } from "../model/steps";
 import { decodeTerminalStream } from "../terminal/stream";
 import { TerminalView, type TerminalHandle } from "../terminal/TerminalView";
 import { useMenu } from "../menu/menu";
@@ -234,6 +242,15 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
     const openChange = useCallback(
       (path: string, toolUseId: string) =>
         show(openTab(tabs, "diff", path, { focus: toolUseId })),
+      [show, tabs],
+    );
+    const openScreenshot = useCallback(
+      (item: ToolItem, keep: boolean) => {
+        const screenshot = screenshotOf(item);
+        if (!screenshot) return;
+        const title = screenshotTitle(screenshot);
+        show(openTab(tabs, "image", item.id, { keep, title }));
+      },
       [show, tabs],
     );
 
@@ -550,7 +567,7 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                     key={tab.id}
                     className="tab-panel"
                     role="tabpanel"
-                    aria-label={fileName(tab.path ?? "")}
+                    aria-label={tab.title ?? fileName(tab.path ?? "")}
                     hidden={tab.id !== tabs.active}
                     onWheel={() => keep(tab.id)}
                     onTouchMove={() => keep(tab.id)}
@@ -562,7 +579,11 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                       keep(tab.id)
                     }
                   >
-                    {tab.kind === "document" ? (
+                    {tab.kind === "image" ? (
+                      <ScreenshotTab
+                        screenshot={screenshotIn(model, tab.path!)}
+                      />
+                    ) : tab.kind === "document" ? (
                       <DocumentTab
                         path={tab.path!}
                         plan={planOf(
@@ -711,6 +732,7 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                 onJump={jumpToPrompt}
                 onStep={showTerminal}
                 onOpenChange={openChange}
+                onOpenScreenshot={openScreenshot}
               />
             </div>
           </aside>
@@ -738,7 +760,19 @@ const TAB_ICONS = {
   terminal: SquareTerminal,
   document: FileText,
   diff: FileDiff,
+  image: Image,
 };
+
+/** The screenshot of tool call `toolUseId`, if the timeline has one. */
+function screenshotIn(model: TimelineModel, toolUseId: string) {
+  for (const turn of model.turns) {
+    const item = turn.items.find(
+      (entry) => entry.kind === "tool" && entry.id === toolUseId,
+    );
+    if (item?.kind === "tool") return screenshotOf(item);
+  }
+  return null;
+}
 
 /** The tabs in the middle, like an editor's: a preview in italics, the terminal tab never closed. */
 function TabBar({
@@ -760,7 +794,7 @@ function TabBar({
       ? host
         ? "Terminal"
         : "Terminal, read-only"
-      : fileName(tab.path ?? "");
+      : (tab.title ?? fileName(tab.path ?? ""));
   const onKeyDown = (event: ReactKeyboardEvent, tab: OpenTab) => {
     const index = tabs.list.indexOf(tab);
     if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
@@ -799,8 +833,8 @@ function TabBar({
                     ? "Keeps its size while another tab is shown"
                     : undefined
                   : tab.preview
-                    ? `${tab.path}. Preview: replaced by the next file you open. Double-click to keep it.`
-                    : tab.path
+                    ? `${tab.title ?? tab.path}. Preview: replaced by the next file you open. Double-click to keep it.`
+                    : (tab.title ?? tab.path)
               }
               onClick={() => onSelect(tab.id)}
               onDoubleClick={() => onKeep(tab.id)}
