@@ -1,6 +1,19 @@
 # Design: the session window
 
-`workspace-mockup.html` is the target design for SpecDeck's session window. Open it in a browser. It is a clickable sketch with made-up data, and it is not the app. Nothing in it is decided until a change is proposed for it (`/opsx:propose`), and the OpenSpec specs then describe the behaviour. This file lists what the mockup shows, which issue each part belongs to, and what is still open.
+Two clickable designs, both with the same features. Open them in a browser.
+
+- **`workspace-mockup.html`**: the target layout in SpecDeck's current look. It follows the layout choices below: panels, tabs and layouts for each kind of person.
+- **`frontend-design-concept.html`**: the same window designed with Anthropic's `frontend-design` skill, as "a stage-manager's prompt book":
+  - paper and ink around a dark stage, the terminal;
+  - plum for everything the host asks;
+  - one highly legible type family;
+  - the timeline as a cue rail.
+
+  It departs from the layout choices in places: the layout follows the person, and it has no layout presets and no resizable panels. It is ahead of the mockup with the braindump, files for the project and the Markdown source view.
+
+Which look, and which of the concept's ideas, to take is still open.
+
+The details below describe `workspace-mockup.html`, except the braindump, files for the project and the Markdown source view, which are so far only in the concept. Both are clickable sketches; the mockup is one with made-up data, and it is not the app. Nothing in it is decided until a change is proposed for it (`/opsx:propose`), and the OpenSpec specs then describe the behaviour. This file lists what the mockup shows, which issue each part belongs to, and what is still open.
 
 ## Who uses the window
 
@@ -37,8 +50,11 @@ These came out of exploring the panels idea (the session that made the first ver
 
 | Part of the mockup | Issue | Open questions |
 |---|---|---|
-| Files panel: *Documents*, *Code* and *Shared* tabs; a code file shows *Changes* or *Whole file, changes marked* | #56 | Whole-file view next to the diff or instead of it? Syntax highlighting, given the installer-size limit? |
-| *Shared* tab: files people shared, *Share a file…*, and the host's *Put in the session folder* | #55 | Who may share; size and type limits; do files stay for late joiners? |
+| Files panel: *Documents*, *Code* and *Shared* tabs; a code file shows *Changes* or *Whole file, changes marked*; every Markdown file shows *Formatted* or *Source* | #56 | Whole-file view next to the diff or instead of it? Syntax highlighting, given the installer-size limit? |
+| *Shared* tab, *Shared with everyone*: files to look at together, and the host's *Put in the session folder* | #55 | Size and type limits; do files stay for late joiners? |
+| *Shared* tab, *Braindump for Claude*: everyone adds notes and files; the host gives them to Claude with an editable prompt | #61 (on #51) | Limits; does the braindump outlive the session? Can people remove their own items? |
+| *Shared* tab, *Files for the project*: a developer offers a file at a path; the host adds or declines it | #62 (on #51) | Never outside the session folder, never overwriting without the host confirming. |
+| *Add files or a note*: one dialog for all three, with a file picker, dropping files, or a note | #55, #61, #62 | |
 | *Prompts* tab: viewers suggest; the host sends (or edits first), keeps for later, or declines | #52 (on #51) | Who sees pending suggestions? Do kept suggestions outlive the session? |
 | *Ask to read*: a document and a time limit; a banner with who is reading or ready and a countdown | #53 (on #51) | "Not ready, I have a question"? Shown in the timeline afterwards? |
 | *Estimate*: hidden votes on cards, reveal, spread, vote again, keep the result in the timeline | #54 (on #51) | Does the host vote? Which card sets? Starting the vote was reported broken once and not reproduced. |
@@ -52,5 +68,5 @@ These came out of exploring the panels idea (the session that made the first ver
 ## Order
 
 1. **The window layout:** the three panels, tabs in the middle and layouts per kind of person. It needs no protocol change, and #55, #56 and the banner row depend on it.
-2. **#51**, the viewer-to-host channel, then #52, #53 and #54 on it.
+2. **#51**, the viewer-to-host channel, then #52, #53, #54, #61 and #62 on it.
 3. **#56, #55, #58, #59 and #57**, as each one is needed.

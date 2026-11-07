@@ -1,0 +1,1291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- A second design for the session window, made with the frontend-design skill; see README.md next to it. -->
+<title>SpecDeck Session Concept</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Concept: the window as a stage manager's prompt book. Paper and ink around a dark stage (the
+   terminal, where the agent acts). One bold element: the cue rail in the timeline, whose amber
+   light is the same light as the session's state lamp. Plum belongs to the host: everything the
+   host asks of viewers wears it. Type: Atkinson Hyperlegible Next for words, its Mono for code. */
+:root {
+  --paper: #e6ebe6; --sheet: #f8faf7; --sheet-2: #eef2ee; --hover: #e2e8e3;
+  --rule: #cbd4cf; --rule-strong: #a7b4ae;
+  --ink: #142b2a; --ink-2: #4a5f5c; --ink-3: #74878a;
+  --accent: #6a2c5e; --accent-hover: #58224d; --accent-ink: #ffffff; --accent-wash: #f2e5ef;
+  --cue: #9a5b00; --cue-light: #e39b1b; --cue-wash: #f7ebd5;
+  --attn: #b13e28; --attn-wash: #f8e2dc;
+  --ready: #2a6e4c; --ready-wash: #dcefe3;
+  --add-bg: #dcefe2; --add-ink: #1d6237; --del-bg: #f6e0dc; --del-ink: #992d21; --mark: #2a6e4c;
+  --stage: #102221; --stage-2: #183130; --stage-ink: #d6e3df; --stage-dim: #7e9893;
+  --stage-prompt: #e6abd8; --stage-ok: #8fd3a6; --stage-q: #f4a68f; --stage-cue: #f1b24a; --stage-rule: #2a4442;
+  --p-nick: #6a2c5e; --p-sanne: #2b6e61; --p-mo: #3a5a9c; --on-p: #ffffff;
+  --focus: #3a5a9c; --scrim: rgba(20, 43, 42, 0.18); --glow: rgba(227, 155, 27, 0.35);
+  --font: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  color-scheme: dark;
+  --paper: #0f1a1a; --sheet: #152322; --sheet-2: #0c1615; --hover: #1c2e2d;
+  --rule: #263a38; --rule-strong: #3a5350;
+  --ink: #dce7e3; --ink-2: #a0b2ae; --ink-3: #6f8480;
+  --accent: #d89dca; --accent-hover: #e6b4da; --accent-ink: #2a0f24; --accent-wash: #33202e;
+  --cue: #eaa63c; --cue-light: #f2b24b; --cue-wash: #392a12;
+  --attn: #f08a72; --attn-wash: #3c1f19;
+  --ready: #7bcb9c; --ready-wash: #173225;
+  --add-bg: #173323; --add-ink: #93d6aa; --del-bg: #3b1d1a; --del-ink: #f2a094; --mark: #7bcb9c;
+  --stage: #091312; --stage-2: #112120; --stage-ink: #d6e3df; --stage-dim: #6f8a85;
+  --stage-prompt: #e6abd8; --stage-ok: #8fd3a6; --stage-q: #f4a68f; --stage-cue: #f1b24a; --stage-rule: #22383a;
+  --p-nick: #d89dca; --p-sanne: #6cc2ae; --p-mo: #93adea; --on-p: #0f1a1a;
+  --focus: #93adea; --scrim: rgba(0, 0, 0, 0.45); --glow: rgba(242, 178, 75, 0.3);
+} }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #0f1a1a; --sheet: #152322; --sheet-2: #0c1615; --hover: #1c2e2d;
+  --rule: #263a38; --rule-strong: #3a5350;
+  --ink: #dce7e3; --ink-2: #a0b2ae; --ink-3: #6f8480;
+  --accent: #d89dca; --accent-hover: #e6b4da; --accent-ink: #2a0f24; --accent-wash: #33202e;
+  --cue: #eaa63c; --cue-light: #f2b24b; --cue-wash: #392a12;
+  --attn: #f08a72; --attn-wash: #3c1f19;
+  --ready: #7bcb9c; --ready-wash: #173225;
+  --add-bg: #173323; --add-ink: #93d6aa; --del-bg: #3b1d1a; --del-ink: #f2a094; --mark: #7bcb9c;
+  --stage: #091312; --stage-2: #112120; --stage-ink: #d6e3df; --stage-dim: #6f8a85;
+  --stage-prompt: #e6abd8; --stage-ok: #8fd3a6; --stage-q: #f4a68f; --stage-cue: #f1b24a; --stage-rule: #22383a;
+  --p-nick: #d89dca; --p-sanne: #6cc2ae; --p-mo: #93adea; --on-p: #0f1a1a;
+  --focus: #93adea; --scrim: rgba(0, 0, 0, 0.45); --glow: rgba(242, 178, 75, 0.3);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 400 13px/1.45 var(--font);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 12px;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+code { font-family: var(--mono); font-size: 0.92em; }
+svg { flex: none; }
+[hidden] { display: none !important; }
+
+.shell { display: flex; flex-direction: column; gap: 10px; min-height: calc(100dvh - 24px); max-width: 1600px; margin: 0 auto; }
+
+/* Concept controls, outside the window */
+.demo { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; color: var(--ink-2); font-size: 12px; }
+.demo .grp { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.who-pick { display: inline-flex; border: 1px solid var(--rule-strong); border-radius: 6px; overflow: hidden; background: var(--sheet); }
+.who-pick button { border: 0; background: none; padding: 5px 10px; display: inline-flex; gap: 6px; align-items: center; }
+.who-pick button + button { border-left: 1px solid var(--rule); }
+.who-pick button[aria-pressed="true"] { background: var(--ink); color: var(--sheet); }
+.who-pick small { color: inherit; opacity: 0.75; }
+.linkish { border: 0; background: none; padding: 4px 2px; color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 3px; }
+.linkish:hover { color: var(--ink); }
+
+/* Window */
+.win { flex: 1; display: flex; flex-direction: column; min-height: 620px; background: var(--sheet); border: 1px solid var(--rule-strong); border-radius: 10px; overflow: hidden; position: relative; }
+.bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--rule); flex-wrap: wrap; position: relative; }
+.lamp { width: 10px; height: 10px; border-radius: 50%; background: var(--cue-light); box-shadow: 0 0 0 4px var(--glow); }
+.lamp.waiting { background: var(--attn); box-shadow: 0 0 0 4px var(--attn-wash); }
+.lamp.ended { background: var(--ink-3); box-shadow: none; }
+.state { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.state b { font-weight: 700; font-size: 14px; }
+.state span { color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--rule-strong); color: var(--ink-2); }
+.spacer { flex: 1; }
+.people { display: flex; align-items: center; }
+.av { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--on-p); background: var(--p-nick); flex: none; }
+.av.Sanne { background: var(--p-sanne); } .av.Mo { background: var(--p-mo); }
+.people .av { border: 2px solid var(--sheet); margin-left: -5px; width: 26px; height: 26px; }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 5px; border: 1px solid var(--rule-strong); background: var(--sheet); white-space: nowrap; }
+.btn:hover { background: var(--hover); }
+.btn svg { width: 15px; height: 15px; }
+.btn.host { border-color: var(--accent); color: var(--accent); }
+.btn.host:hover { background: var(--accent-wash); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn.quiet { border-color: transparent; background: none; }
+.btn.quiet:hover { background: var(--hover); }
+.btn.small { padding: 3px 8px; font-size: 12px; }
+.btn.good { border-color: var(--ready); color: var(--ready); background: var(--ready-wash); }
+.btn.danger { border-color: var(--attn); color: var(--attn); }
+.btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.icon-btn { position: relative; width: 30px; height: 30px; padding: 0; justify-content: center; }
+.icon-btn[aria-pressed="true"] { background: var(--sheet-2); border-color: var(--rule-strong); }
+.count { position: absolute; top: -5px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--attn); color: var(--sheet); font-size: 10px; font-weight: 700; display: grid; place-items: center; }
+.count.inline { position: static; display: inline-grid; background: var(--accent); color: var(--accent-ink); margin-left: 4px; }
+
+/* Requests from the host: a strip under the toolbar */
+.standby:empty { display: none; }
+.req { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 14px; background: var(--accent-wash); border-bottom: 1px solid var(--rule); border-left: 4px solid var(--accent); }
+.req .what { display: flex; flex-direction: column; min-width: 200px; flex: 1; }
+.req .what b { font-weight: 700; }
+.req .what span { color: var(--ink-2); font-size: 12px; }
+.roll { display: flex; flex-wrap: wrap; gap: 6px; }
+.roll span { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 2px; border-radius: 999px; background: var(--sheet); font-size: 12px; color: var(--ink-2); }
+.roll span.done { color: var(--ready); background: var(--ready-wash); font-weight: 500; }
+.roll .av { width: 18px; height: 18px; font-size: 10px; }
+.clock { font-size: 18px; font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; }
+.clock.low { color: var(--attn); }
+.clock small { font-size: 12px; color: var(--ink-2); }
+.deck { display: flex; gap: 5px; flex-wrap: wrap; }
+.card { width: 34px; height: 46px; border-radius: 5px; border: 1px solid var(--rule-strong); background: var(--sheet); font-size: 15px; font-weight: 700; display: grid; place-items: center; }
+.card:hover { border-color: var(--accent); }
+.card[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); transform: translateY(-3px); }
+.spread { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; align-items: center; min-width: 220px; flex: 1; max-width: 380px; }
+.spread b { font-size: 15px; text-align: right; }
+.spread .row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
+.spread i { display: block; height: 10px; background: var(--accent); border-radius: 2px; }
+
+/* Narrow-screen pane switch */
+.panesw { display: none; border-bottom: 1px solid var(--rule); }
+.panesw button { flex: 1; border: 0; background: none; padding: 8px; color: var(--ink-2); border-bottom: 2px solid transparent; }
+.panesw button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 700; }
+
+/* Main grid */
+.main { flex: 1; display: grid; min-height: 0; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.files { grid-area: files; background: var(--sheet-2); border-right: 1px solid var(--rule); }
+.work { grid-area: work; }
+.cues { grid-area: cues; border-left: 1px solid var(--rule); }
+.win[data-who="po"] .cues { border-left: 0; border-right: 1px solid var(--rule); }
+.win[data-who="po"] .files { border-right: 0; border-left: 1px solid var(--rule); }
+.head { display: flex; align-items: center; gap: 4px; padding: 6px 8px 0; border-bottom: 1px solid var(--rule); min-height: 38px; flex-wrap: wrap; }
+.ptab { border: 0; background: none; padding: 6px 8px 7px; color: var(--ink-2); border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; gap: 5px; }
+.ptab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 700; }
+.scroll { flex: 1; overflow: auto; min-height: 0; }
+.foot { padding: 10px 12px; border-top: 1px solid var(--rule); color: var(--ink-2); font-size: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.toggle { display: inline-flex; border: 1px solid var(--rule-strong); border-radius: 5px; overflow: hidden; margin-bottom: 6px; }
+.toggle button { border: 0; background: var(--sheet); padding: 3px 9px; font-size: 12px; }
+.toggle button + button { border-left: 1px solid var(--rule); }
+.toggle button[aria-pressed="true"] { background: var(--ink); color: var(--sheet); }
+.toggle button[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+/* File lists */
+.flist { list-style: none; margin: 0; padding: 6px 0 12px; }
+.dir { padding: 10px 12px 3px; color: var(--ink-3); font-size: 11.5px; overflow-wrap: anywhere; }
+.fi { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 4px 12px 4px 20px; border: 0; background: none; text-align: left; }
+.fi:hover { background: var(--hover); }
+.fi[aria-current="true"] { background: var(--sheet); box-shadow: inset 3px 0 0 var(--ink); }
+.fi .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.fi .st { font-size: 11.5px; color: var(--ink-3); }
+.fi .st.A { color: var(--ready); } .fi .st.M { color: var(--cue); }
+.fi .pm { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.fi.faint .nm { color: var(--ink-3); }
+.fi .sub { display: block; font-size: 11.5px; color: var(--ink-3); }
+.fi .fresh { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); align-self: center; }
+.plus { color: var(--add-ink); } .minus { color: var(--del-ink); }
+
+.fgrp { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink); font-weight: 700; font-size: 12.5px; padding-top: 14px; }
+.grp-help { padding: 0 12px 4px; color: var(--ink-3); font-size: 11.5px; }
+.fi .who-st { display: block; font-size: 11.5px; color: var(--accent); }
+.fi .who-st.ok { color: var(--ready); }
+.drop { border: 1px dashed var(--rule-strong); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 6px; background: var(--sheet-2); }
+.drop.over { border-color: var(--accent); background: var(--accent-wash); }
+.drop input[type="file"] { max-width: 100%; }
+.pop .err { color: var(--attn); }
+.upimg { margin: 22px 28px; max-width: min(560px, calc(100% - 56px)); border: 1px solid var(--rule); border-radius: 6px; }
+
+/* Work area tabs and editor */
+.wtabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--rule); background: var(--sheet-2); min-height: 36px; }
+.wtab { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 12px; border-right: 1px solid var(--rule); color: var(--ink-2); white-space: nowrap; }
+.wtab > button { border: 0; background: none; padding: 8px 0; display: inline-flex; align-items: center; gap: 6px; color: inherit; }
+.wtab.on { background: var(--sheet); color: var(--ink); box-shadow: inset 0 2px 0 var(--ink); }
+.wtab.on.term { background: var(--stage); color: var(--stage-ink); box-shadow: inset 0 2px 0 var(--stage-cue); }
+.wtab .x { width: 20px; height: 20px; border: 0; background: none; border-radius: 4px; color: var(--ink-3); padding: 0; }
+.wtab .x:hover { background: var(--hover); color: var(--ink); }
+.wtab .ping { width: 7px; height: 7px; border-radius: 50%; background: var(--attn); }
+.wtab svg { width: 14px; height: 14px; }
+.editor { flex: 1; overflow: auto; min-height: 0; position: relative; }
+.filebar { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 8px 14px; background: var(--sheet); border-bottom: 1px solid var(--rule); color: var(--ink-2); font-size: 12px; }
+.filebar .path { color: var(--ink); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.filebar .toggle { margin: 0; }
+
+.code { font: 12.5px/1.6 var(--mono); padding: 8px 0 24px; min-width: max-content; }
+.ln { display: grid; grid-template-columns: 44px 18px auto; padding-right: 20px; }
+.ln .n { color: var(--ink-3); text-align: right; padding-right: 10px; user-select: none; }
+.ln .m { color: var(--ink-3); user-select: none; }
+.ln .t { white-space: pre; }
+.ln.add { background: var(--add-bg); } .ln.add .m, .ln.add .t { color: var(--add-ink); }
+.ln.del { background: var(--del-bg); } .ln.del .m, .ln.del .t { color: var(--del-ink); }
+.ln.mark { box-shadow: inset 3px 0 0 var(--mark); background: var(--add-bg); }
+.ln.flash, .tline.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { from { background: var(--cue-wash); } }
+
+.doc { max-width: 66ch; padding: 22px 28px 40px; font-size: 15px; line-height: 1.6; }
+.doc h1 { font-size: 24px; line-height: 1.2; font-weight: 700; margin: 0 0 14px; }
+.doc h2 { font-size: 16px; font-weight: 700; margin: 22px 0 6px; }
+.doc p { margin: 0 0 10px; }
+.doc ul { margin: 0 0 12px; padding-left: 20px; }
+.doc li { margin: 3px 0; }
+.doc li.task { list-style: none; margin-left: -20px; display: flex; gap: 8px; align-items: baseline; }
+.doc li.task.done span { color: var(--ink-2); text-decoration: line-through; text-decoration-color: var(--rule-strong); }
+.doc .new { position: relative; box-shadow: -14px 0 0 -11px var(--accent); }
+.doc .new::after { content: "New since you last read"; display: block; font-size: 11.5px; color: var(--accent); }
+.doc code { background: var(--sheet-2); padding: 1px 4px; border-radius: 3px; }
+.notice { max-width: 52ch; margin: 48px auto; padding: 0 20px; display: flex; flex-direction: column; gap: 6px; color: var(--ink-2); }
+.notice b { color: var(--ink); font-size: 15px; }
+.wire { margin: 22px 28px; max-width: 460px; border: 1px solid var(--rule-strong); border-radius: 6px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--sheet-2); }
+.wire .pill { align-self: flex-start; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--attn); color: var(--attn); font-size: 12px; }
+.wire i { display: block; height: 40px; background: var(--rule); border-radius: 3px; }
+.wire i + i { height: 70px; }
+
+/* The stage: the terminal */
+.term { background: var(--stage); color: var(--stage-ink); font: 12.5px/1.55 var(--mono); padding: 12px 16px 8px; min-height: 100%; display: flex; flex-direction: column; }
+.tline { white-space: pre-wrap; overflow-wrap: anywhere; min-height: 1.55em; }
+.tline.dim { color: var(--stage-dim); } .tline.ac { color: var(--stage-prompt); } .tline.ok, .tline.add { color: var(--stage-ok); }
+.tline.q { color: var(--stage-q); } .tline.wk { color: var(--stage-cue); }
+.tchoice { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 8px 2ch; align-items: flex-start; }
+.tchoice button { font: inherit; background: var(--stage-2); color: var(--stage-ink); border: 1px solid var(--stage-rule); border-radius: 4px; padding: 3px 10px; text-align: left; }
+.tchoice button:hover { border-color: var(--stage-cue); }
+.tinput { margin-top: auto; display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--stage-rule); padding-top: 8px; position: sticky; bottom: 0; background: var(--stage); }
+.tinput label { color: var(--stage-prompt); }
+.tinput input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--stage-ink); font: inherit; padding: 4px 0; }
+.tinput input::placeholder { color: var(--stage-dim); }
+.tinput .hint { color: var(--stage-dim); font-size: 11.5px; }
+.tro { margin-top: auto; border-top: 1px solid var(--stage-rule); padding-top: 8px; color: var(--stage-dim); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-family: var(--font); font-size: 12px; position: sticky; bottom: 0; background: var(--stage); }
+.tro button { border: 1px solid var(--stage-rule); background: var(--stage-2); color: var(--stage-ink); border-radius: 4px; padding: 3px 9px; }
+
+/* The cue rail: the timeline */
+.rail { padding: 14px 14px 24px 6px; }
+.cue { display: grid; grid-template-columns: 34px 1fr; column-gap: 8px; }
+.cue-no { font-size: 24px; line-height: 1; text-align: right; color: var(--ink-3); font-variant-numeric: tabular-nums; padding-top: 1px; }
+.cue-body { border-left: 2px solid var(--rule-strong); padding: 0 0 18px 14px; min-width: 0; }
+.cue:last-of-type .cue-body { padding-bottom: 8px; }
+.cue-who { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+.cue-who .av { width: 16px; height: 16px; font-size: 9px; }
+.cue-p { font-size: 14px; line-height: 1.4; margin: 3px 0 6px; }
+.win[data-who="po"] .cue-p { font-size: 15px; }
+.outcome { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; color: var(--ready); font-weight: 500; margin: 2px 0 6px; }
+.outcome .linkish { font-weight: 400; font-size: 12px; }
+.step { position: relative; width: 100%; display: flex; align-items: baseline; gap: 8px; text-align: left; border: 0; background: none; padding: 3px 6px; border-radius: 4px; color: var(--ink); }
+button.step:hover { background: var(--hover); }
+.step::before { content: ""; position: absolute; left: -20px; top: 8px; width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--ink-3); background: var(--sheet); }
+.step.k-edit::before, .step.k-write::before { background: var(--ink-2); border-color: var(--ink-2); }
+.step.k-run::before { border-radius: 2px; }
+.step.k-plan::before { background: var(--accent); border-color: var(--accent); }
+.step.cur { background: var(--cue-wash); }
+.step.cur::before { background: var(--cue-light); border-color: var(--cue); box-shadow: 0 0 0 4px var(--glow); }
+.step .lbl { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.step .go { font-size: 11.5px; color: var(--ink-3); }
+.step .pm { font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ev { position: relative; display: flex; gap: 8px; align-items: baseline; padding: 3px 6px; color: var(--ink); }
+.ev::before { content: ""; position: absolute; left: -20px; top: 8px; width: 10px; height: 10px; transform: rotate(45deg) scale(0.85); background: var(--accent); }
+.ev b { font-weight: 700; }
+.now { position: relative; padding: 4px 6px; color: var(--cue); font-weight: 500; font-variant-numeric: tabular-nums; }
+.now::before { content: ""; position: absolute; left: -20px; top: 8px; width: 10px; height: 10px; border-radius: 50%; background: var(--cue-light); box-shadow: 0 0 0 4px var(--glow); animation: cue 2.2s ease-in-out infinite; }
+.now.waiting { color: var(--attn); }
+.now.waiting::before { background: var(--attn); box-shadow: 0 0 0 4px var(--attn-wash); animation: none; }
+.now button { margin-left: 6px; }
+@keyframes cue { 50% { box-shadow: 0 0 0 7px var(--glow); } }
+.catchup { margin: 0 0 16px 42px; padding: 12px 14px; border: 1px solid var(--rule-strong); border-radius: 6px; background: var(--sheet-2); }
+.catchup h3 { margin: 0 0 6px; font-size: 14px; }
+.catchup ul { margin: 0; padding-left: 18px; }
+.catchup li { margin: 3px 0; }
+
+/* Prompts from viewers */
+.sugs { padding: 12px 14px 24px; display: flex; flex-direction: column; gap: 10px; }
+.sugs h3 { margin: 10px 0 0; font-size: 12px; font-weight: 700; color: var(--ink-2); }
+.sugs h3:first-child { margin-top: 0; }
+.sug { padding: 10px 0 10px 12px; border-left: 3px solid var(--rule-strong); }
+.sug.pending { border-left-color: var(--accent); }
+.sug.declined { opacity: 0.7; }
+.sug .top { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); flex-wrap: wrap; }
+.sug .top b { color: var(--ink); }
+.sug .state-w { margin-left: auto; font-size: 11.5px; }
+.sug .txt { margin: 5px 0 8px; font-size: 13.5px; }
+.sug textarea, .compose textarea, .pop textarea { width: 100%; min-height: 64px; resize: vertical; padding: 7px 9px; border: 1px solid var(--rule-strong); border-radius: 5px; background: var(--sheet); margin: 5px 0 8px; }
+.acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.compose { padding: 12px 14px; border-bottom: 1px solid var(--rule); }
+.compose .row { display: flex; align-items: center; gap: 10px; justify-content: space-between; flex-wrap: wrap; color: var(--ink-2); font-size: 12px; }
+.empty { color: var(--ink-3); margin: 0; }
+
+/* Popovers */
+.pop { position: absolute; top: calc(100% + 6px); right: 12px; z-index: 20; width: min(360px, calc(100vw - 40px)); background: var(--sheet); border: 1px solid var(--rule-strong); border-radius: 8px; padding: 14px; box-shadow: 0 12px 32px var(--scrim); display: flex; flex-direction: column; gap: 10px; }
+.pop h2 { margin: 0; font-size: 15px; }
+.pop p { margin: 0; color: var(--ink-2); font-size: 12px; }
+.pop label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-2); }
+.pop select { padding: 5px 7px; border: 1px solid var(--rule-strong); border-radius: 5px; background: var(--sheet); color: var(--ink); }
+.pop .chk { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.pop .chk input { margin-top: 3px; accent-color: var(--accent); }
+.pop .chk small { display: block; color: var(--ink-2); font-size: 12px; }
+.pop .end { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.notes { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; display: flex; flex-direction: column; }
+.notes li { padding: 7px 0; border-bottom: 1px solid var(--rule); font-size: 12.5px; }
+.notes li b { display: block; }
+.notes li span { color: var(--ink-2); }
+.notes li.unread b::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 6px; vertical-align: 1px; }
+.pop fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.pop legend { font-weight: 700; font-size: 13px; padding: 0 0 4px; }
+
+/* Status bar, toasts */
+.status { display: flex; gap: 4px 16px; align-items: center; flex-wrap: wrap; padding: 5px 12px; border-top: 1px solid var(--rule); color: var(--ink-2); font-size: 12px; background: var(--sheet-2); }
+.status .meter { display: inline-flex; align-items: center; gap: 6px; }
+.status .meter i { display: block; width: 46px; height: 5px; border-radius: 3px; background: var(--rule); overflow: hidden; }
+.status .meter i::after { content: ""; display: block; width: 38%; height: 100%; background: var(--ink-2); }
+.toasts { position: absolute; right: 14px; bottom: 40px; z-index: 30; display: flex; flex-direction: column; gap: 8px; width: min(320px, calc(100% - 28px)); pointer-events: none; }
+.toast { pointer-events: auto; background: var(--ink); color: var(--sheet); border-radius: 7px; padding: 10px 12px; box-shadow: 0 10px 28px var(--scrim); animation: rise 0.25s ease-out; }
+.toast b { display: block; }
+.toast span { font-size: 12px; opacity: 0.85; }
+@keyframes rise { from { transform: translateY(8px); opacity: 0; } }
+
+/* Recap */
+.recap { grid-column: 1 / -1; overflow: auto; padding: 28px max(20px, 6vw) 48px; }
+.recap-in { max-width: 70ch; }
+.recap h1 { font-size: 28px; line-height: 1.15; margin: 0 0 4px; font-weight: 700; }
+.recap .meta { color: var(--ink-2); margin-bottom: 24px; }
+.recap h2 { font-size: 15px; margin: 26px 0 8px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.recap ol, .recap ul { margin: 0; padding-left: 22px; font-size: 14px; }
+.recap li { margin: 6px 0; }
+.recap li small { display: block; color: var(--ink-2); font-size: 12.5px; }
+.recap .acts { margin-top: 28px; align-items: center; gap: 12px; color: var(--ink-2); font-size: 12px; }
+
+@media (max-width: 760px) {
+  .panesw { display: flex; }
+  .main { display: block; position: relative; }
+  .main > .pane { display: none; height: 100%; border: 0; }
+  .main[data-pane="files"] > .files, .main[data-pane="work"] > .work, .main[data-pane="cues"] > .cues { display: flex; }
+  .main.ended > .pane { display: none; }
+  .main > .recap { display: block; height: 100%; }
+  .win { min-height: 680px; }
+  .main { min-height: 480px; }
+  .hide-narrow { display: none !important; }
+  .bar .btn.host .lbl-long { display: none; }
+  .doc { padding: 16px 16px 32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .card[aria-pressed="true"] { transform: none; }
+}
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,500;0,700;1,400&display=swap">
+
+</head>
+<body>
+<div class="shell">
+  <div class="demo" aria-label="Concept controls">
+    <div class="grp"><span>Viewing as</span>
+      <div class="who-pick" id="whoPick" role="group" aria-label="Who you are">
+        <button type="button" data-v="host" aria-pressed="true"><span class="av" aria-hidden="true">N</span>Nick <small>host</small></button>
+        <button type="button" data-v="po" aria-pressed="false"><span class="av Sanne" aria-hidden="true">S</span>Sanne <small>product owner</small></button>
+        <button type="button" data-v="dev" aria-pressed="false"><span class="av Mo" aria-hidden="true">M</span>Mo <small>developer</small></button>
+      </div>
+    </div>
+    <div class="grp"><span>Make something happen</span>
+      <button type="button" class="linkish" id="simAsk">Claude asks Nick a question</button>
+      <button type="button" class="linkish" id="simSuggest">Sanne suggests a prompt</button>
+      <button type="button" class="linkish" id="simLate" aria-pressed="false">Join 40 minutes late</button>
+      <button type="button" class="linkish" id="simEnd">End the session</button>
+    </div>
+  </div>
+
+  <div class="win" id="win" data-who="host">
+    <header class="bar" id="bar">
+      <span class="lamp" id="lamp" aria-hidden="true"></span>
+      <div class="state"><b id="stateTitle">Working</b><span id="stateSub">specshare, hosted by you</span></div>
+      <span class="tag" id="roTag" hidden>Watching, read-only</span>
+      <span class="spacer"></span>
+      <div class="people hide-narrow" aria-label="In this session: Nick (host), Sanne and Mo"><span class="av">N</span><span class="av Sanne">S</span><span class="av Mo">M</span></div>
+      <div id="hostActs" style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="btn host" id="askRead" aria-haspopup="dialog"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5h4.5A1.5 1.5 0 018 5v8a1.5 1.5 0 00-1.5-1.5H2zM14 3.5H9.5A1.5 1.5 0 008 5v8a1.5 1.5 0 011.5-1.5H14z"/></svg>Ask to read</button>
+        <button type="button" class="btn host" id="askEstimate" aria-haspopup="dialog"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3.5" width="7" height="10" rx="1.2" transform="rotate(-8 5.5 8.5)"/><rect x="7" y="2.5" width="7" height="10" rx="1.2"/></svg>Estimate</button>
+        <button type="button" class="btn quiet icon-btn" id="sharingBtn" aria-haspopup="dialog" aria-label="Sharing settings" title="Sharing settings"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6"/><circle cx="10" cy="4.5" r="1.5"/><circle cx="6" cy="11.5" r="1.5"/></svg></button>
+        <button type="button" class="btn danger small" id="endBtn" aria-haspopup="dialog">End session</button>
+      </div>
+      <button type="button" class="btn quiet icon-btn" id="bellBtn" aria-haspopup="dialog" aria-label="Notifications" title="Notifications"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 11V7a4 4 0 018 0v4l1.3 1.5H2.7zM6.5 14h3"/></svg><span class="count" id="bellCount" hidden>0</span></button>
+      <button type="button" class="btn quiet icon-btn hide-narrow" id="tglFiles" aria-pressed="true" aria-label="Show files" title="Files"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M6 2.5v11"/></svg></button>
+      <button type="button" class="btn quiet icon-btn hide-narrow" id="tglCues" aria-pressed="true" aria-label="Show timeline and prompts" title="Timeline and prompts"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10 2.5v11"/></svg></button>
+      <div id="pop"></div>
+    </header>
+    <div class="standby" id="standby" aria-live="polite"></div>
+    <nav class="panesw" id="panesw" aria-label="Panels">
+      <button type="button" data-v="files" aria-pressed="false">Files</button>
+      <button type="button" data-v="work" aria-pressed="true">Session</button>
+      <button type="button" data-v="cues" aria-pressed="false">Timeline</button>
+    </nav>
+    <div class="main" id="main" data-pane="work">
+      <aside class="pane files" id="files" aria-label="Files">
+        <div class="head" role="tablist" id="filesTabs" aria-label="Files"></div>
+        <div class="scroll" id="filesBody"></div>
+        <div class="foot" id="filesFoot"></div>
+      </aside>
+      <section class="pane work" id="work" aria-label="Terminal and open files">
+        <div class="wtabs" id="wtabs" role="tablist" aria-label="Open"></div>
+        <div class="editor" id="editor" role="tabpanel"></div>
+      </section>
+      <aside class="pane cues" id="cues" aria-label="Timeline and prompts">
+        <div class="head" id="cuesHead"></div>
+        <div class="scroll" id="cuesBody"></div>
+      </aside>
+      <section class="recap" id="recap" hidden aria-label="Recap"></section>
+    </div>
+    <footer class="status">
+      <span>~/projects/specshare</span>
+      <span>Branch viewer-heartbeat, 5 files uncommitted</span>
+      <span class="spacer"></span>
+      <span>Opus 5.5</span>
+      <span class="meter"><i aria-hidden="true"></i>38% of context used</span>
+    </footer>
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || (v === false && !k.startsWith('aria-'))) continue;
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true && !k.startsWith('aria-') ? '' : String(v));
+  }
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(k));
+  return e;
+}
+const svg = (d) => { const t = document.createElement('template'); t.innerHTML = `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`; return t.content.firstChild; };
+const IC = {
+  file: '<path d="M4 1.5h5l3 3v10H4z"/><path d="M9 1.5v3h3"/>',
+  doc: '<path d="M4 1.5h5l3 3v10H4z"/><path d="M6 7.5h4M6 9.5h4M6 11.5h2.5"/>',
+  term: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6l2 2-2 2M8 10.5h3.5"/>',
+  share: '<path d="M8 10V2.5M5 5.5l3-3 3 3"/><path d="M3 9v4.5h10V9"/>',
+  image: '<rect x="2" y="3" width="12" height="10" rx="1.2"/><circle cx="6" cy="6.5" r="1.2"/><path d="M2.5 12l3.5-3.5 2.5 2.5 2-2 3 3"/>',
+  lock: '<rect x="3.5" y="7" width="9" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/>',
+  check: '<path d="M3 8.5l3 3 7-7"/>',
+};
+const PEOPLE = { host: 'Nick', po: 'Sanne', dev: 'Mo' };
+const av = (name, cls = '') => h('span', { class: 'av ' + name + ' ' + cls, 'aria-hidden': 'true' }, name[0]);
+const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+const base = (p) => p.split('/').pop();
+const dir = (p) => p.split('/').slice(0, -1).join('/');
+const isDoc = (p) => p.endsWith('.md');
+
+/* ---------- Session data: a Claude Code session adding a viewer heartbeat ---------- */
+const C = (t) => ({ k: 'ctx', t }), A = (t) => ({ k: 'add', t }), D = (t) => ({ k: 'del', t });
+const FILES = {
+  'openspec/changes/viewer-heartbeat/design.md': { st: 'A', fresh: true, md: [
+    '# Viewer heartbeat', '',
+    'Viewers cannot tell a quiet agent from a host that went away. A laptop that sleeps keeps the WebRTC connection open for up to 30 seconds before ICE gives up.', '',
+    '## Decision', '',
+    'The host sends `Heartbeat { at_ms }` every 3 seconds on the control channel. A viewer that misses three in a row shows the session as **unreachable** in the status pill.', '',
+    '+The interval is fixed, not a setting: nobody should have to tune it.', '',
+    '## Alternatives', '',
+    '- Rely on ICE consent freshness: too slow, and not visible to the UI.',
+    '- Heartbeat from the server: says nothing about the host app itself.',
+  ]},
+  'openspec/changes/viewer-heartbeat/tasks.md': { st: 'A', fresh: true, md: [
+    '# Tasks', '',
+    '## 1. Protocol', '', '- [x] 1.1 Add `Message::Heartbeat`', '- [x] 1.2 Treat it as a control message', '',
+    '## 2. Host', '', '- [x] 2.1 Send a heartbeat every 3 seconds', '- [ ] 2.2 Stop sending while the session is ending', '',
+    '## 3. Viewer', '', '- [ ] 3.1 Show "unreachable" after three missed heartbeats', '- [ ] 3.2 Recover when heartbeats return',
+  ]},
+  'crates/protocol/src/message.rs': { st: 'M', lines: [
+    C('use serde::{Deserialize, Serialize};'), C(''), C('use crate::Role;'), C(''),
+    C('#[derive(Debug, Clone, Serialize, Deserialize)]'), C('#[serde(tag = "type", rename_all = "camelCase")]'),
+    C('pub enum Message {'), C('    Hello { name: String, role: Role },'), C('    Frame { seq: u64, data: Vec<u8> },'),
+    D('    Bye,'), A('    Bye,'), A('    /// Sent by the host every 3 seconds. A viewer that misses'), A('    /// three in a row shows the session as unreachable.'), A('    Heartbeat { at_ms: u64 },'),
+    C('}'), C(''), C('impl Message {'), C('    pub fn is_control(&self) -> bool {'), D('        matches!(self, Message::Hello { .. } | Message::Bye)'), A('        matches!(self, Message::Hello { .. } | Message::Bye | Message::Heartbeat { .. })'), C('    }'), C('}'),
+  ]},
+  'crates/core/src/heartbeat.rs': { st: 'A', lines: [
+    A('//! Heartbeats from the host, so viewers notice a host that went away'), A('//! without closing the connection (sleep, lost network).'), A(''),
+    A('use std::time::{Duration, Instant};'), A(''), A('pub const INTERVAL: Duration = Duration::from_secs(3);'), A('pub const MISSED_BEFORE_UNREACHABLE: u32 = 3;'), A(''),
+    A('#[derive(Debug)]'), A('pub struct Watch {'), A('    last: Instant,'), A('}'), A(''),
+    A('impl Watch {'), A('    pub fn new(now: Instant) -> Self {'), A('        Self { last: now }'), A('    }'), A(''),
+    A('    pub fn beat(&mut self, now: Instant) {'), A('        self.last = now;'), A('    }'), A(''),
+    A('    pub fn unreachable(&self, now: Instant) -> bool {'), A('        now.duration_since(self.last) > INTERVAL * MISSED_BEFORE_UNREACHABLE'), A('    }'), A('}'),
+  ]},
+  'crates/core/src/session.rs': { st: 'M', lines: [
+    C('use crate::heartbeat;'), C('use crate::output::OutputLog;'), C('use specdeck_protocol::Message;'), C(''),
+    C('pub struct Session {'), C('    log: OutputLog,'), C('    peers: Vec<Peer>,'), A('    last_beat: Instant,'), C('}'), C(''),
+    C('impl Session {'), C('    pub fn tick(&mut self, now: Instant) {'), D('        self.flush(now);'), A('        self.flush(now);'), A('        if now.duration_since(self.last_beat) >= heartbeat::INTERVAL {'), A('            let at_ms = self.clock.millis(now);'), A('            self.broadcast(Message::Heartbeat { at_ms });'), A('            self.last_beat = now;'), A('        }'),
+    C('    }'), C(''), C('    fn broadcast(&mut self, message: Message) {'), C('        for peer in &mut self.peers {'), C('            peer.send(&message);'), C('        }'), C('    }'), C('}'),
+  ]},
+  'app/ui/src/components/StatusBar.tsx': { st: 'M', lines: [
+    C("import type { SessionState } from '../api/types';"), C(''),
+    C('export function StatusBar({ state }: { state: SessionState }) {'), C('  return ('), C('    <footer className="status-bar">'),
+    D('      <StatusPill live={state.live} />'), A('      <StatusPill live={state.live} unreachable={state.hostUnreachable} />'),
+    C('      <Folder path={state.folder} />'), C('    </footer>'), C('  );'), C('}'),
+  ]},
+  'Cargo.toml': { st: 'R', lines: [
+    C('[workspace]'), C('resolver = "2"'), C('members = ["crates/*", "app/src-tauri"]'), C(''), C('[workspace.package]'), C('version = "1.6.0"'), C('edition = "2024"'), C('license = "MIT"'),
+  ]},
+};
+const PROJECT = {
+  'README.md': { md: ['# SpecDeck', '', 'Run a coding agent with your team watching along.'] },
+  'crates/core/src/lib.rs': {}, 'crates/core/src/pty.rs': {}, 'crates/protocol/src/lib.rs': {}, 'app/ui/src/App.tsx': {}, '.env': { denied: true },
+};
+const SHARED = [
+  { id: 'shared/braindump/what-sanne-needs.md', name: 'what-sanne-needs.md', folder: 'braindump', by: 'Sanne', size: '1 KB', kind: 'md', when: '14 min ago', md: [
+    '# What I need from the heartbeat', '',
+    '- Customers on trains lose the host all the time. Say **reconnecting**, not "error".',
+    '- I want to see how long the host has been gone.',
+    '- Can the viewer keep reading the plan while the host is away?',
+  ]},
+  { id: 'shared/braindump/edge-cases.txt', name: 'edge-cases.txt', folder: 'braindump', by: 'Mo', size: '1 KB', kind: 'text', when: '8 min ago', text: [
+    'host laptop sleeps 25 s, comes back: viewer must not end the session',
+    'host on a train: ICE restarts every few minutes',
+    'clock skew between host and viewer: compare heartbeats by arrival, not at_ms',
+  ]},
+  { id: 'shared/heartbeat-wireframe.png', name: 'heartbeat-wireframe.png', folder: 'everyone', by: 'Sanne', size: '240 KB', kind: 'image', when: '12 min ago' },
+  { id: 'shared/acceptance-criteria.md', name: 'acceptance-criteria.md', folder: 'everyone', by: 'Sanne', size: '2 KB', kind: 'md', when: '9 min ago', md: [
+    '# Acceptance criteria: host unreachable', '',
+    '- A viewer sees **Host unreachable** within 10 seconds after the host\'s laptop sleeps.',
+    '- The terminal keeps the last output; nothing is cleared.',
+    '- When the host is back, the pill returns to **Working** without the viewer doing anything.',
+  ]},
+  { id: 'shared/ci-failure.log', name: 'ci-failure.log', folder: 'everyone', by: 'Mo', size: '18 KB', kind: 'text', when: '4 min ago', text: [
+    'thread \'viewer_reconnects\' panicked at crates/core/tests/sharing.rs:211:9:',
+    'assertion failed: viewer saw Ended before Unreachable',
+    'test result: FAILED. 19 passed; 1 failed',
+  ]},
+  { id: 'shared/project/sleep-trace.json', name: 'sleep-trace.json', folder: 'project', target: 'crates/core/tests/fixtures/sleep-trace.json', status: 'pending', by: 'Mo', size: '1 KB', kind: 'text', when: '2 min ago', text: [
+    '{', '  "host": "laptop-sleep",', '  "events": [', '    { "at_ms": 0, "type": "heartbeat" },', '    { "at_ms": 3000, "type": "heartbeat" },', '    { "at_ms": 31000, "type": "ice_failed" }', '  ]', '}',
+  ]},
+];
+const FOLDERS = [
+  ['braindump', 'Braindump for Claude', 'Notes and files from everyone. Nick gives them to Claude together, as one folder.'],
+  ['everyone', 'Shared with everyone', 'To look at together. Claude does not see these unless Nick puts one in the session folder.'],
+  ['project', 'Files for the project', 'Files someone wants added to the project. They go into Nick\'s copy of the code, so Nick decides.'],
+];
+const TERM = [
+  ['dim', '╭───────────────────────────────────────────────╮'],
+  ['dim', '│ ✻ Claude Code   ~/projects/specshare          │'],
+  ['dim', '╰───────────────────────────────────────────────╯'],
+  ['', ''],
+  ['ac', '> Viewers should notice within 10 seconds when the host goes away. Plan it as an OpenSpec change first.'],
+  ['', ''],
+  ['', '⏺ Read(crates/core/src/session.rs)', 'r1'], ['dim', '  ⎿  Read 214 lines'],
+  ['', '⏺ Read(crates/protocol/src/message.rs)', 'r2'], ['dim', '  ⎿  Read 88 lines'],
+  ['', '⏺ Read(Cargo.toml)', 'r3'], ['dim', '  ⎿  Read 31 lines'],
+  ['', '⏺ Write(openspec/changes/viewer-heartbeat/design.md)', 'w1'], ['dim', '  ⎿  Wrote 18 lines'],
+  ['', '⏺ Write(openspec/changes/viewer-heartbeat/tasks.md)', 'w2'], ['dim', '  ⎿  Wrote 14 lines'],
+  ['', '⏺ The plan is in openspec/changes/viewer-heartbeat. Starting on the protocol.'],
+  ['', ''],
+  ['ac', '> go ahead'],
+  ['', ''],
+  ['', '⏺ Update(crates/protocol/src/message.rs)', 'e1'], ['add', '  ⎿  +5 -2'],
+  ['', '⏺ Write(crates/core/src/heartbeat.rs)', 'e2'], ['add', '  ⎿  Wrote 26 lines'],
+  ['', '⏺ Update(crates/core/src/session.rs)', 'e3'], ['add', '  ⎿  +7 -1'],
+  ['', '⏺ Bash(cargo test -p specdeck-core heartbeat)', 'b1'], ['dim', '  ⎿  running 3 tests'],
+  ['ok', '     test result: ok. 3 passed; 0 failed'],
+  ['', '⏺ Update(app/ui/src/components/StatusBar.tsx)', 'e4'], ['add', '  ⎿  +1 -1'],
+  ['', '⏺ Update(openspec/changes/viewer-heartbeat/tasks.md)', 'e5'], ['add', '  ⎿  +3 -3'],
+  ['', ''],
+];
+const TIMELINE = [
+  { prompt: 'Viewers should notice within 10 seconds when the host goes away. Plan it as an OpenSpec change first.', outcome: 'Wrote a plan: Viewer heartbeat', steps: [
+    { k: 'read', d: 'Read <code>session.rs</code>', s: null, file: 'crates/core/src/session.rs', term: 'r1' },
+    { k: 'read', d: 'Read <code>message.rs</code>', s: null, file: 'crates/protocol/src/message.rs', term: 'r2' },
+    { k: 'read', d: 'Read <code>Cargo.toml</code>', s: 'Looked at 3 files to understand the session', file: 'Cargo.toml', term: 'r3' },
+    { k: 'plan', d: 'Wrote <code>design.md</code> and <code>tasks.md</code>', s: 'Proposed a plan: Viewer heartbeat', file: 'openspec/changes/viewer-heartbeat/design.md', term: 'w1' },
+  ]},
+  { prompt: 'go ahead', outcome: '4 files changed, the tests pass, 3 of 6 tasks done', steps: [
+    { k: 'edit', d: 'Updated <code>message.rs</code>', s: 'Added a heartbeat message', file: 'crates/protocol/src/message.rs', term: 'e1', p: 5, m: 2 },
+    { k: 'write', d: 'Created <code>heartbeat.rs</code>', s: null, file: 'crates/core/src/heartbeat.rs', term: 'e2', p: 26, m: 0 },
+    { k: 'edit', d: 'Updated <code>session.rs</code>', s: 'Made the host send it every 3 seconds', file: 'crates/core/src/session.rs', term: 'e3', p: 7, m: 1 },
+    { k: 'run', d: 'Ran <code>cargo test -p specdeck-core heartbeat</code>', s: 'Ran the heartbeat tests: all 3 pass', term: 'b1' },
+    { k: 'edit', d: 'Updated <code>StatusBar.tsx</code>', s: null, file: 'app/ui/src/components/StatusBar.tsx', term: 'e4', p: 1, m: 1 },
+    { k: 'edit', d: 'Updated <code>tasks.md</code>', s: 'Ticked off 3 of the 6 tasks', file: 'openspec/changes/viewer-heartbeat/tasks.md', term: 'e5', p: 3, m: 3 },
+  ]},
+];
+
+/* ---------- State ---------- */
+const S = {
+  who: 'host', late: false, ended: false, waiting: false, seconds: 14,
+  docks: { files: true, cues: true }, pane: 'work',
+  filesTab: 'code', cuesTab: 'timeline', detail: 'details', scope: 'touched',
+  tabs: ['terminal'], active: 'terminal', views: {}, mdView: {}, cur: null, expanded: new Set(),
+  settings: { code: 'whole', suggest: true, shareFiles: true, recap: true },
+  suggestions: [
+    { id: 1, from: 'Sanne', text: 'Also show the host as unreachable in the people list, not only in the status pill.', status: 'pending', when: '2 min ago' },
+    { id: 2, from: 'Mo', text: 'Add a test for a host that comes back after 9 seconds: the viewer should never show unreachable.', status: 'pending', when: 'just now' },
+    { id: 3, from: 'Sanne', text: 'Write a short note in the docs on what viewers see when the host\'s laptop sleeps.', status: 'kept', when: '15 min ago' },
+  ],
+  extra: [], termExtra: [], events: [], read: null, estimate: null, pop: null, editing: null, nextId: 10,
+  notes: [], notify: { waiting: true, request: true, suggestion: true, shared: false, ended: true },
+};
+const me = () => PEOPLE[S.who];
+const isHost = () => S.who === 'host';
+const host = isHost;
+const narrow = () => window.matchMedia('(max-width: 760px)').matches;
+const seen = new Set();
+
+/* ---------- Notifications ---------- */
+const KINDS = { waiting: 'Claude is waiting for the host', request: 'Nick asks you to read or estimate', suggestion: 'A viewer suggests a prompt', shared: 'Someone shares a file', ended: 'The session ends' };
+function notify(kind, title, text) {
+  S.notes.unshift({ title, text, kind, unread: true, when: 'just now' });
+  renderBell();
+  if (!S.notify[kind]) return;
+  const t = h('div', { class: 'toast', role: 'status' }, h('b', null, title), h('span', null, text));
+  $('#toasts').append(t);
+  setTimeout(() => t.remove(), 5200);
+}
+function renderBell() {
+  const n = S.notes.filter((x) => x.unread).length;
+  const c = $('#bellCount'); c.hidden = !n; c.textContent = String(n);
+  $('#bellBtn').setAttribute('aria-label', n ? `Notifications, ${n} new` : 'Notifications');
+}
+
+/* ---------- Layout ---------- */
+function layout() {
+  const main = $('#main'), win = $('#win');
+  win.dataset.who = S.who;
+  main.classList.toggle('ended', S.ended);
+  main.dataset.pane = S.pane;
+  $('#recap').hidden = !S.ended;
+  for (const id of ['files', 'work', 'cues']) $('#' + id).hidden = S.ended || (id !== 'work' && !narrow() && !S.docks[id]);
+  if (S.ended) { main.style.gridTemplateColumns = '1fr'; main.style.gridTemplateAreas = ''; }
+  else {
+    const f = S.docks.files, c = S.docks.cues;
+    if (S.who === 'po') {
+      const areas = [c && 'cues', 'work', f && 'files'].filter(Boolean);
+      main.style.gridTemplateAreas = `"${areas.join(' ')}"`;
+      main.style.gridTemplateColumns = areas.map((a) => a === 'cues' ? 'minmax(320px, 420px)' : a === 'files' ? '220px' : 'minmax(0, 1fr)').join(' ');
+    } else {
+      const areas = [f && 'files', 'work', c && 'cues'].filter(Boolean);
+      main.style.gridTemplateAreas = `"${areas.join(' ')}"`;
+      main.style.gridTemplateColumns = areas.map((a) => a === 'cues' ? 'minmax(280px, 350px)' : a === 'files' ? '230px' : 'minmax(0, 1fr)').join(' ');
+    }
+  }
+  $('#tglFiles').setAttribute('aria-pressed', String(S.docks.files));
+  $('#tglCues').setAttribute('aria-pressed', String(S.docks.cues));
+  for (const b of $('#panesw').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.pane));
+  $('#panesw').hidden = S.ended;
+}
+function showPane(p) { S.pane = p; if (!narrow() && p !== 'work') S.docks[p] = true; layout(); }
+
+/* ---------- Chrome ---------- */
+function workLabel() {
+  const last = S.extra[S.extra.length - 1];
+  if (!last) return 'Working on task 2.2';
+  return last.by ? `Working on ${last.by}'s suggestion` : 'Working on the new prompt';
+}
+function renderChrome() {
+  const host = isHost();
+  $('#lamp').className = 'lamp' + (S.ended ? ' ended' : S.waiting ? ' waiting' : '');
+  $('#stateTitle').textContent = S.ended ? 'Session ended' : S.waiting ? (host ? 'Claude is waiting for your answer' : 'Claude is waiting for Nick') : `${workLabel()}, ${S.seconds} s`;
+  $('#stateSub').textContent = host ? 'specshare, hosted by you' : 'specshare, hosted by Nick';
+  $('#roTag').hidden = host || S.ended;
+  $('#hostActs').hidden = !host || S.ended;
+  $('#simAsk').textContent = S.waiting ? 'Nick answers the question' : 'Claude asks Nick a question';
+  $('#simAsk').disabled = S.ended;
+  $('#simSuggest').disabled = S.ended;
+  $('#simLate').hidden = host;
+  $('#simLate').setAttribute('aria-pressed', String(S.late));
+  $('#simLate').textContent = S.late ? 'Back to joining on time' : 'Join 40 minutes late';
+  $('#simEnd').textContent = S.ended ? 'Back to the live session' : 'End the session';
+  for (const b of $('#whoPick').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.who));
+}
+
+/* ---------- Files pane ---------- */
+function renderFiles() {
+  const tabs = $('#filesTabs'); tabs.replaceChildren();
+  for (const [id, label, n] of [['docs', 'Documents', Object.keys(FILES).filter(isDoc).length], ['code', 'Code', Object.keys(FILES).filter((p) => !isDoc(p)).length], ['shared', 'Shared', SHARED.length]]) {
+    tabs.append(h('button', { type: 'button', class: 'ptab', role: 'tab', 'aria-selected': S.filesTab === id, onclick: () => { S.filesTab = id; renderFiles(); } }, label, h('span', { style: 'color:var(--ink-3);font-weight:400' }, String(n))));
+  }
+  const body = $('#filesBody'), foot = $('#filesFoot');
+  body.replaceChildren(); foot.replaceChildren();
+  const ul = h('ul', { class: 'flist' }); body.append(ul);
+  if (S.filesTab === 'shared') {
+    for (const [key, title, help] of FOLDERS) {
+      const items = SHARED.filter((f) => f.folder === key);
+      const fresh = items.filter((f) => !f.given).length;
+      ul.append(h('li', { class: 'dir fgrp' }, h('span', null, title),
+        key === 'braindump' && isHost() && fresh > 0 && h('button', { type: 'button', class: 'btn host small', 'aria-haspopup': 'dialog', id: 'giveBtn', onclick: () => openPop('give') }, `Give ${fresh} to Claude`)));
+      ul.append(h('li', { class: 'grp-help' }, help));
+      if (!items.length) ul.append(h('li', { class: 'grp-help' }, 'Nothing yet.'));
+      for (const f of items) {
+        const st = f.folder === 'project' ? ({ pending: ['', `Waiting for Nick, as ${f.target}`], added: ['ok', `Added as ${f.target}`], declined: ['', 'Nick declined it'] })[f.status]
+          : f.given ? ['ok', 'Given to Claude'] : null;
+        ul.append(h('li', null, h('button', { type: 'button', class: 'fi', 'aria-current': S.active === f.id, onclick: () => openFile(f.id) },
+          svg(f.kind === 'image' ? IC.image : IC.doc), h('span', { class: 'nm' }, f.name, h('span', { class: 'sub' }, `${f.by === me() ? 'You' : f.by}, ${f.when}, ${f.size}`), st && h('span', { class: 'who-st ' + st[0] }, st[1])))));
+      }
+    }
+    foot.append(S.settings.shareFiles || isHost()
+      ? h('button', { type: 'button', class: 'btn small', 'aria-haspopup': 'dialog', id: 'addBtn', onclick: () => openPop('add') }, svg(IC.share), 'Add files or a note')
+      : h('span', null, 'Nick has turned off adding files.'));
+    return;
+  }
+  const docs = S.filesTab === 'docs';
+  let paths = Object.keys(FILES).filter((p) => isDoc(p) === docs);
+  if (S.scope === 'all') paths = paths.concat(Object.keys(PROJECT).filter((p) => isDoc(p) === docs));
+  const groups = {};
+  for (const p of paths) (groups[dir(p) || 'Project folder'] = groups[dir(p) || 'Project folder'] || []).push(p);
+  for (const d of Object.keys(groups).sort()) {
+    ul.append(h('li', { class: 'dir' }, d));
+    for (const p of groups[d].sort()) {
+      const f = FILES[p], pr = PROJECT[p];
+      const adds = f && f.lines ? f.lines.filter((l) => l.k === 'add').length : 0, dels = f && f.lines ? f.lines.filter((l) => l.k === 'del').length : 0;
+      const fresh = f && f.fresh && !seen.has(p + S.who);
+      ul.append(h('li', null, h('button', { type: 'button', class: 'fi' + (f ? '' : ' faint'), 'aria-current': S.active === p, onclick: () => openFile(p), title: p },
+        svg(isDoc(p) ? IC.doc : IC.file), h('span', { class: 'nm' }, base(p)),
+        fresh && h('span', { class: 'fresh', title: 'New since you last read it' }),
+        f && f.lines && f.st !== 'R' && h('span', { class: 'pm' }, h('span', { class: 'plus' }, '+' + adds), ' ', h('span', { class: 'minus' }, '−' + dels)),
+        f ? h('span', { class: 'st ' + f.st }, { M: 'changed', A: 'new', R: 'read' }[f.st]) : pr && pr.denied ? svg(IC.lock) : null)));
+    }
+  }
+  if (docs) foot.append(h('span', null, 'Plans and specs, formatted for reading. Switch one to Source to see the Markdown. A dot means something is new since you last read it.'));
+  else {
+    const t = h('div', { class: 'toggle', role: 'group', 'aria-label': 'Which code' },
+      h('button', { type: 'button', 'aria-pressed': S.scope === 'touched', onclick: () => { S.scope = 'touched'; renderFiles(); } }, 'What Claude touched'),
+      h('button', { type: 'button', 'aria-pressed': S.scope === 'all', disabled: !isHost() && S.settings.code !== 'project', onclick: () => { S.scope = 'all'; renderFiles(); } }, 'Whole project'));
+    foot.append(t, h('span', null, S.scope === 'all' ? 'Grey files are fetched from Nick\'s computer when you open them.' : (!isHost() && S.settings.code !== 'project' ? 'Nick shares only the code Claude touched.' : 'Code Claude read or changed in this session.')));
+  }
+}
+/* ---------- Adding files: braindump, shared, or for the project ---------- */
+function sizeText(n) { return n < 1024 ? n + ' B' : Math.round(n / 1024) + ' KB'; }
+function readUpload(file) {
+  return new Promise((done) => {
+    const kind = file.type.startsWith('image/') ? 'image' : /\.(md|markdown)$/i.test(file.name) ? 'md' : 'text';
+    const size = sizeText(file.size);
+    if (kind === 'image') return done({ kind, size, url: URL.createObjectURL(file) });
+    if (file.size > 200 * 1024) return done({ kind: 'text', size, text: ['Too large to show here. Files up to 200 KB are sent whole.'] });
+    const r = new FileReader();
+    r.onload = () => { const lines = String(r.result).replace(/\r/g, '').split('\n'); done(kind === 'md' ? { kind, size, md: lines } : { kind, size, text: lines }); };
+    r.onerror = () => done({ kind: 'text', size, text: ['This file could not be read.'] });
+    r.readAsText(file);
+  });
+}
+function addToProject(f) {
+  const body = f.text || f.md || ['(A binary file: shown in the project, not here.)'];
+  FILES[f.target] = { st: 'A', by: f.by, lines: body.map((t) => A(t)) };
+  f.status = 'added';
+  S.events.push({ title: 'Added to the project:', text: `${f.target}, from ${f.by === 'Nick' ? 'Nick' : f.by}.` });
+}
+async function addUploads(files, dest, path, note) {
+  const added = [];
+  for (const file of files) {
+    const c = await readUpload(file);
+    const folder = dest;
+    const target = folder === 'project' ? (files.length > 1 || path.endsWith('/') || !path ? path.replace(/\/?$/, '/').replace(/^\/$/, '') + file.name : path) : null;
+    added.push({ id: `shared/${folder}/${S.nextId++}-${file.name}`, name: file.name, folder, by: me(), when: 'just now', target, status: folder === 'project' ? 'pending' : null, ...c });
+  }
+  if (note.trim()) {
+    const n = S.nextId++;
+    added.push({ id: `shared/braindump/${n}-note.md`, name: `${me().toLowerCase()}-note-${n}.md`, folder: dest === 'project' ? 'braindump' : dest, by: me(), when: 'just now', size: sizeText(note.length), kind: 'md', md: note.split('\n') });
+  }
+  SHARED.push(...added);
+  for (const f of added) if (f.folder === 'project' && isHost()) addToProject(f);
+  const where = { braindump: 'the braindump', everyone: 'Shared', project: 'Files for the project' }[dest];
+  notify('shared', added.length === 1 ? `Added ${added[0].name}` : `Added ${added.length} files`,
+    dest === 'project' && !isHost() ? 'Nick decides whether it goes into the project.' : `Everyone in the session sees it under ${where}.`);
+  S.filesTab = 'shared';
+  renderAll();
+  if (added[0]) openFile(added[0].id);
+}
+function giveBraindump(prompt) {
+  const items = SHARED.filter((f) => f.folder === 'braindump' && !f.given);
+  items.forEach((f) => { f.given = true; });
+  const from = [...new Set(items.map((f) => f.by))].join(', ');
+  S.events.push({ title: 'Gave the braindump to Claude:', text: `${items.length} files from ${from}, in shared/braindump/.` });
+  sendPrompt(prompt, null);
+}
+
+/* ---------- Work area: tabs and editor ---------- */
+function openFile(path, focus) {
+  if (!S.tabs.includes(path)) S.tabs.push(path);
+  S.active = path; seen.add(path + S.who);
+  if (narrow()) S.pane = 'work';
+  layout(); renderTabs(); renderEditor(focus); renderFiles();
+}
+function activate(id, focus) { S.active = id; if (narrow()) S.pane = 'work'; layout(); renderTabs(); renderEditor(focus); renderFiles(); }
+function closeTab(id) {
+  const i = S.tabs.indexOf(id); if (i < 0) return;
+  S.tabs.splice(i, 1);
+  if (S.active === id) S.active = S.tabs[Math.min(i, S.tabs.length - 1)] || null;
+  renderTabs(); renderEditor(); renderFiles();
+}
+function tabLabel(id) {
+  if (id === 'terminal') return isHost() ? 'Terminal' : 'Terminal, read-only';
+  const sh = SHARED.find((f) => f.id === id);
+  return sh ? sh.name : base(id);
+}
+function renderTabs() {
+  const bar = $('#wtabs'); bar.replaceChildren();
+  for (const id of S.tabs) {
+    const term = id === 'terminal', on = id === S.active, label = tabLabel(id);
+    const ping = term && S.waiting && !on;
+    bar.append(h('div', { class: 'wtab' + (on ? ' on' : '') + (term ? ' term' : '') },
+      h('button', { type: 'button', role: 'tab', 'aria-selected': on, onclick: () => activate(id), 'aria-label': label + (ping ? ', Claude is waiting' : '') },
+        svg(term ? IC.term : id.startsWith('shared/') ? IC.share : isDoc(id) ? IC.doc : IC.file), label, ping && h('span', { class: 'ping', 'aria-hidden': 'true' })),
+      !term ? h('button', { type: 'button', class: 'x', 'aria-label': 'Close ' + label, onclick: () => closeTab(id) }, '×') : h('span', { style: 'width:6px' })));
+  }
+}
+function renderEditor(focus) {
+  const ed = $('#editor'); ed.replaceChildren();
+  if (!S.active) { ed.append(h('div', { class: 'notice' }, h('b', null, 'Nothing open'), h('span', null, 'Pick a document or file on the right, or a step in the timeline.'))); return; }
+  if (S.active === 'terminal') {
+    ed.append(renderTerminal());
+    if (focus) { const l = ed.querySelector(`[data-id="${focus}"]`); if (l) { l.scrollIntoView({ block: 'center' }); l.classList.add('flash'); } }
+    else ed.scrollTop = ed.scrollHeight;
+    return;
+  }
+  const sh = SHARED.find((f) => f.id === S.active);
+  if (sh) return ed.append(renderShared(sh));
+  const path = S.active, f = FILES[path];
+  if (!f) return ed.append(notTouched(path));
+  const changesOnly = !isHost() && S.settings.code === 'changes';
+  if (f.st === 'R' && changesOnly) return ed.append(h('div', { class: 'notice' }, svg(IC.lock), h('b', null, 'Only changes are shared'), h('span', null, `Nick shares what Claude changes, not whole files. Claude only read ${base(path)}, so there is nothing to show.`)));
+  const canWhole = !changesOnly && f.lines && f.st !== 'R';
+  const view = f.md ? 'md' : f.st === 'R' ? 'full' : canWhole ? (S.views[path] || 'diff') : 'diff';
+  const adds = f.lines ? f.lines.filter((l) => l.k === 'add').length : 0, dels = f.lines ? f.lines.filter((l) => l.k === 'del').length : 0;
+  ed.append(h('div', { class: 'filebar' }, h('span', { class: 'path' }, path),
+    h('span', null, { M: 'Changed in this session', A: 'Created in this session', R: 'Read by Claude, not changed' }[f.st]),
+    f.lines && f.st !== 'R' && h('span', null, h('span', { class: 'plus' }, '+' + adds), ' ', h('span', { class: 'minus' }, '−' + dels)),
+    h('span', { class: 'spacer' }),
+    f.lines && f.st !== 'R' && h('div', { class: 'toggle', role: 'group', 'aria-label': 'How to show the file', title: canWhole ? '' : 'Nick shares changes only' },
+      h('button', { type: 'button', 'aria-pressed': view === 'diff', onclick: () => { S.views[path] = 'diff'; renderEditor(); } }, 'Changes'),
+      h('button', { type: 'button', 'aria-pressed': view === 'full', disabled: !canWhole, onclick: () => { S.views[path] = 'full'; renderEditor(); } }, 'Whole file, changes marked')),
+    f.md && mdToggle(path)));
+  if (f.md) return ed.append(mdBody(path, f.md));
+  const code = h('div', { class: 'code', role: 'group', 'aria-label': view === 'diff' ? 'Changes' : 'Whole file' });
+  let n = 0, first = null;
+  for (const l of f.lines) {
+    if (view === 'full' && l.k === 'del') continue;
+    const num = l.k === 'del' ? '' : ++n;
+    const cls = view === 'diff' ? (l.k !== 'ctx' ? ' ' + l.k : '') : (l.k === 'add' && f.st !== 'R' ? ' mark' : '');
+    const row = h('div', { class: 'ln' + cls }, h('span', { class: 'n' }, String(num)), h('span', { class: 'm' }, view === 'diff' ? (l.k === 'add' ? '+' : l.k === 'del' ? '−' : '') : ''), h('span', { class: 't' }, l.t || ' '));
+    if (!first && l.k !== 'ctx') first = row;
+    code.append(row);
+  }
+  ed.append(code);
+  if (focus && first) { first.scrollIntoView({ block: 'center' }); first.classList.add('flash'); }
+}
+function renderTerminal() {
+  const box = h('div', { class: 'term', role: 'log', 'aria-label': 'Terminal output' });
+  for (const [cls, text, id] of TERM.concat(S.termExtra)) box.append(h('div', { class: 'tline ' + cls, 'data-id': id || null }, text || ' '));
+  if (S.ended) box.append(h('div', { class: 'tline dim' }, 'The session has ended.'));
+  else if (S.waiting) {
+    box.append(h('div', { class: 'tline q' }, '⏺ Should a viewer that comes back after "unreachable" replay the output it missed?'));
+    if (isHost()) box.append(h('div', { class: 'tchoice' }, h('button', { type: 'button', onclick: () => answer(1) }, '1. Yes, replay from the last frame it saw'), h('button', { type: 'button', onclick: () => answer(2) }, '2. No, jump to live')));
+    else box.append(h('div', { class: 'tline dim' }, '  1. Yes, replay from the last frame it saw'), h('div', { class: 'tline dim' }, '  2. No, jump to live'));
+  } else box.append(h('div', { class: 'tline wk', id: 'spin' }, `✻ ${workLabel()}… (${S.seconds}s, esc to interrupt)`));
+  if (S.ended) return box;
+  if (isHost()) {
+    const inp = h('input', { id: 'tin', type: 'text', autocomplete: 'off', placeholder: S.waiting ? 'Type 1 or 2, or answer in your own words' : 'Type to Claude and press Enter' });
+    box.append(h('form', { class: 'tinput', onsubmit: (e) => { e.preventDefault(); const v = inp.value.trim(); if (!v) return; inp.value = ''; if (S.waiting) answer(v === '2' ? 2 : v === '1' ? 1 : v); else sendPrompt(v, null); } },
+      h('label', { for: 'tin' }, '>'), inp, h('span', { class: 'hint hide-narrow' }, 'Viewers see what you type')));
+  } else {
+    box.append(h('div', { class: 'tro' }, svg(IC.lock), h('span', null, 'Only Nick types here.'),
+      S.settings.suggest && h('button', { type: 'button', onclick: () => { S.cuesTab = 'prompts'; showPane('cues'); renderCues(); const t = $('#sugText'); if (t) t.focus(); } }, 'Suggest a prompt to Nick')));
+  }
+  return box;
+}
+function renderShared(f) {
+  const box = h('div');
+  const host = isHost();
+  let what, acts = [];
+  if (f.folder === 'braindump') {
+    what = f.given ? 'In the braindump, given to Claude' : 'In the braindump for Claude';
+  } else if (f.folder === 'project') {
+    what = { pending: `Wants to be added as ${f.target}`, added: `Added to the project as ${f.target}`, declined: 'Nick declined adding it' }[f.status];
+    if (host && f.status === 'pending') acts = [
+      h('button', { type: 'button', class: 'btn primary small', onclick: () => { addToProject(f); notify('shared', 'Added to the project', `${f.target} is in your copy now, and Claude can use it.`); renderAll(); renderEditor(); } }, 'Add to the project'),
+      h('button', { type: 'button', class: 'btn quiet small', onclick: () => { f.status = 'declined'; renderAll(); renderEditor(); } }, 'Decline')];
+    if (!host && f.status === 'pending') acts = [h('span', null, 'Waiting for Nick.')];
+  } else {
+    what = 'Shared with everyone';
+    if (host) acts = [h('button', { type: 'button', class: 'btn small', onclick: () => notify('shared', 'Put in the session folder', `${f.name} is in shared/ now, so Claude can read it.`) }, 'Put in the session folder')];
+  }
+  box.append(h('div', { class: 'filebar' }, h('span', { class: 'path' }, f.name), h('span', null, `From ${f.by === me() ? 'you' : f.by}, ${f.when}, ${f.size}. ${what}.`), h('span', { class: 'spacer' }),
+    ...acts, f.kind === 'md' && mdToggle(f.id)));
+  if (f.kind === 'md') box.append(mdBody(f.id, f.md));
+  else if (f.kind === 'text') { const code = h('div', { class: 'code' }); f.text.forEach((t, i) => code.append(h('div', { class: 'ln' }, h('span', { class: 'n' }, String(i + 1)), h('span', { class: 'm' }), h('span', { class: 't' }, t || ' ')))); box.append(code); }
+  else if (f.url) box.append(h('img', { class: 'upimg', src: f.url, alt: f.name }));
+  else box.append(h('div', { class: 'wire', role: 'img', 'aria-label': 'Wireframe: the status pill says Host unreachable, reconnecting' }, h('span', { class: 'pill' }, 'Host unreachable, reconnecting'), h('i'), h('i')));
+  return box;
+}
+function mdToggle(key) {
+  const v = S.mdView[key] || 'formatted';
+  return h('div', { class: 'toggle', role: 'group', 'aria-label': 'How to show the document' },
+    h('button', { type: 'button', 'aria-pressed': v === 'formatted', onclick: () => { S.mdView[key] = 'formatted'; renderEditor(); } }, 'Formatted'),
+    h('button', { type: 'button', 'aria-pressed': v === 'source', onclick: () => { S.mdView[key] = 'source'; renderEditor(); } }, 'Source'));
+}
+function mdBody(key, lines) { return (S.mdView[key] || 'formatted') === 'source' ? renderSource(lines) : renderMd(lines); }
+/** The Markdown as written, with lines new since you last read it marked. */
+function renderSource(lines) {
+  const code = h('div', { class: 'code', role: 'group', 'aria-label': 'Markdown source' });
+  lines.forEach((raw, i) => {
+    const isNew = raw.startsWith('+');
+    code.append(h('div', { class: 'ln' + (isNew ? ' mark' : ''), title: isNew ? 'New since you last read it' : null }, h('span', { class: 'n' }, String(i + 1)), h('span', { class: 'm' }), h('span', { class: 't' }, (isNew ? raw.slice(1) : raw) || ' ')));
+  });
+  return code;
+}
+function renderMd(lines) {
+  const box = h('article', { class: 'doc' }); let ul = null;
+  const inline = (s) => { const sp = h('span'); s.split(/(`[^`]+`|\*\*[^*]+\*\*)/).forEach((p) => sp.append(p.startsWith('`') ? h('code', null, p.slice(1, -1)) : p.startsWith('**') ? h('strong', null, p.slice(2, -2)) : p)); return sp; };
+  for (let raw of lines) {
+    const isNew = raw.startsWith('+'); if (isNew) raw = raw.slice(1);
+    let e = null;
+    if (raw.startsWith('# ')) { ul = null; e = h('h1', null, inline(raw.slice(2))); }
+    else if (raw.startsWith('## ')) { ul = null; e = h('h2', null, inline(raw.slice(3))); }
+    else if (/^- \[[ x]\] /.test(raw)) { if (!ul) box.append(ul = h('ul')); const done = raw[3] === 'x'; ul.append(h('li', { class: 'task' + (done ? ' done' : '') }, h('input', { type: 'checkbox', checked: done, disabled: true, 'aria-label': done ? 'Done' : 'To do' }), inline(raw.slice(6)))); continue; }
+    else if (raw.startsWith('- ')) { if (!ul) box.append(ul = h('ul')); ul.append(h('li', null, inline(raw.slice(2)))); continue; }
+    else if (raw.trim()) { ul = null; e = h('p', null, inline(raw)); }
+    else { ul = null; continue; }
+    if (isNew) e.classList.add('new');
+    box.append(e);
+  }
+  return box;
+}
+function notTouched(path) {
+  const p = PROJECT[path];
+  if (p && p.denied) return h('div', { class: 'notice' }, svg(IC.lock), h('b', null, 'Never shared'), h('span', null, `${path} is on the host's list of private files, so it is never listed for viewers or sent.`));
+  if (p && p.md) return renderMd(p.md);
+  return h('div', { class: 'notice' }, svg(IC.file), h('b', null, 'Not touched in this session'),
+    h('span', null, isHost() ? 'Viewers can open this file only while you share the whole project. Your app reads it from disk when they ask.' : `Opening ${base(path)} asks Nick's app for the file. It reads it from disk and sends the current text.`));
+}
+
+/* ---------- Timeline and prompts ---------- */
+function renderCues() {
+  const head = $('#cuesHead'); head.replaceChildren();
+  const pending = S.suggestions.filter((s) => s.status === 'pending').length;
+  head.append(h('div', { role: 'tablist', 'aria-label': 'Timeline and prompts', style: 'display:flex' },
+    h('button', { type: 'button', class: 'ptab', role: 'tab', 'aria-selected': S.cuesTab === 'timeline', onclick: () => { S.cuesTab = 'timeline'; renderCues(); } }, 'Timeline'),
+    h('button', { type: 'button', class: 'ptab', role: 'tab', 'aria-selected': S.cuesTab === 'prompts', onclick: () => { S.cuesTab = 'prompts'; renderCues(); } }, 'Prompts', isHost() && pending > 0 && h('span', { class: 'count inline', 'aria-label': pending + ' waiting' }, String(pending)))));
+  head.append(h('span', { class: 'spacer' }));
+  if (S.cuesTab === 'timeline') head.append(h('div', { class: 'toggle', role: 'group', 'aria-label': 'How much detail' },
+    h('button', { type: 'button', 'aria-pressed': S.detail === 'summary', onclick: () => { S.detail = 'summary'; renderCues(); } }, 'In short'),
+    h('button', { type: 'button', 'aria-pressed': S.detail === 'details', onclick: () => { S.detail = 'details'; renderCues(); } }, 'Every step')));
+  $('#cuesBody').replaceChildren(S.cuesTab === 'timeline' ? renderTimeline() : renderPrompts());
+}
+function renderTimeline() {
+  const box = h('div', { class: 'rail' });
+  const collapse = !isHost() && S.late;
+  if (collapse) box.append(h('div', { class: 'catchup' }, h('h3', null, 'You joined 40 minutes in. So far:'),
+    h('ul', null, h('li', null, 'Nick asked for a way for viewers to notice when the host goes away.'),
+      h('li', null, 'Claude wrote a plan, Viewer heartbeat. It is under Documents.'),
+      h('li', null, '4 files changed, the tests pass, and 3 of the 6 tasks are done.')),
+    h('button', { type: 'button', class: 'btn small', style: 'margin-top:8px', onclick: () => { S.filesTab = 'docs'; openFile('openspec/changes/viewer-heartbeat/design.md'); } }, 'Read the plan')));
+  const turns = TIMELINE.concat(S.extra);
+  const noTerm = S.who === 'po';
+  turns.forEach((t, ti) => {
+    const last = ti === turns.length - 1;
+    const folded = collapse && !last && !S.expanded.has(ti);
+    const body = h('div', { class: 'cue-body' },
+      h('div', { class: 'cue-who' }, av('Nick'), t.by ? `Suggested by ${t.by}, sent by Nick` : 'Nick asked'),
+      h('div', { class: 'cue-p' }, t.prompt));
+    if (folded || S.detail === 'summary' || (last && !t.steps.length && S.extra.includes(t))) {
+      if (t.outcome !== 'Working on it') body.append(h('div', { class: 'outcome' }, svg(IC.check), h('span', null, t.outcome),
+        folded && h('button', { type: 'button', class: 'linkish', onclick: () => { S.expanded.add(ti); renderCues(); } }, `Show the ${t.steps.length} steps`)));
+    }
+    if (!folded) t.steps.forEach((s, si) => {
+      if (S.detail === 'summary' && s.s === null) return;
+      const id = ti + '.' + si;
+      const lbl = h('span', { class: 'lbl' }); lbl.innerHTML = S.detail === 'summary' ? s.s : s.d;
+      const target = s.file ? 'open' : noTerm ? null : 'terminal';
+      const kids = [lbl, s.p != null && S.detail === 'details' && h('span', { class: 'pm' }, h('span', { class: 'plus' }, '+' + s.p), ' ', h('span', { class: 'minus' }, '−' + s.m)), target && h('span', { class: 'go' }, target === 'open' ? 'Open' : 'Terminal')];
+      body.append(target
+        ? h('button', { type: 'button', class: `step k-${s.k}` + (S.cur === id ? ' cur' : ''), onclick: () => { S.cur = id; renderCues(); if (s.file) openFile(s.file, true); else activate('terminal', s.term); } }, ...kids)
+        : h('div', { class: `step k-${s.k}` }, ...kids));
+    });
+    box.append(h('div', { class: 'cue' }, h('div', { class: 'cue-no', 'aria-label': 'Prompt ' + (ti + 1) }, String(ti + 1)), body));
+  });
+  const tail = h('div', { class: 'cue-body', style: 'grid-column:2' });
+  for (const ev of S.events) tail.append(h('div', { class: 'ev' }, h('span', null, h('b', null, ev.title), ' ', ev.text)));
+  if (S.ended) tail.append(h('div', { class: 'ev' }, h('span', null, h('b', null, 'Session ended.'), ' The recap is ready.')));
+  else if (S.waiting) tail.append(h('div', { class: 'now waiting' }, 'Claude asks Nick: replay what a returning viewer missed?', isHost() && h('button', { type: 'button', class: 'btn small', onclick: () => activate('terminal') }, 'Answer')));
+  else tail.append(h('div', { class: 'now', id: 'now' }, `${workLabel()}, ${S.seconds} s`));
+  box.append(h('div', { class: 'cue' }, h('div'), tail));
+  return box;
+}
+function renderPrompts() {
+  const box = h('div');
+  if (!isHost()) {
+    if (!S.settings.suggest) return h('div', { class: 'sugs' }, h('p', { class: 'empty' }, 'Nick has turned off suggestions for this session.'));
+    const ta = h('textarea', { id: 'sugText', 'aria-label': 'Prompt to suggest', placeholder: 'What should Claude do next? Nick decides whether to send it.' });
+    box.append(h('form', { class: 'compose', onsubmit: (e) => { e.preventDefault(); suggest(ta.value); } }, ta,
+      h('div', { class: 'row' }, h('span', null, 'Only Nick sees it until he sends it.'), h('button', { type: 'submit', class: 'btn primary small' }, 'Suggest to Nick'))));
+  }
+  const list = h('div', { class: 'sugs' });
+  const group = (title, items, empty) => { list.append(h('h3', null, title)); items.length ? items.forEach((s) => list.append(sugItem(s))) : list.append(h('p', { class: 'empty' }, empty)); };
+  if (isHost()) {
+    group('Waiting for you', S.suggestions.filter((s) => s.status === 'pending'), 'No suggestions are waiting.');
+    group('Kept for later', S.suggestions.filter((s) => s.status === 'kept'), 'Nothing kept for later.');
+    const done = S.suggestions.filter((s) => s.status === 'sent' || s.status === 'declined');
+    if (done.length) group('Handled', done, '');
+  } else group('Your suggestions', S.suggestions.filter((s) => s.from === me()), 'You have not suggested anything yet.');
+  box.append(list);
+  return box;
+}
+const STATUS = { pending: 'Waiting for Nick', sent: 'Sent to Claude', kept: 'Kept for later', declined: 'Declined' };
+function sugItem(s) {
+  const editing = S.editing === s.id;
+  const ta = editing ? h('textarea', { 'aria-label': 'Edit the prompt before sending' }, s.text) : null;
+  const el = h('div', { class: 'sug ' + s.status }, h('div', { class: 'top' }, av(s.from), h('b', null, s.from === me() ? 'You' : s.from), h('span', null, s.when), h('span', { class: 'state-w' }, STATUS[s.status])),
+    editing ? ta : h('div', { class: 'txt' }, s.text));
+  if (isHost() && (s.status === 'pending' || s.status === 'kept')) el.append(h('div', { class: 'acts' },
+    h('button', { type: 'button', class: 'btn primary small', onclick: () => accept(s, ta ? ta.value : s.text) }, editing ? 'Send edited prompt' : 'Send to Claude'),
+    editing ? h('button', { type: 'button', class: 'btn small', onclick: () => { S.editing = null; renderCues(); } }, 'Cancel edit') : h('button', { type: 'button', class: 'btn small', onclick: () => { S.editing = s.id; renderCues(); const t = $('#cuesBody textarea'); if (t) t.focus(); } }, 'Edit first'),
+    s.status === 'pending' && !editing && h('button', { type: 'button', class: 'btn small', onclick: () => { s.status = 'kept'; renderCues(); } }, 'Keep for later'),
+    !editing && h('button', { type: 'button', class: 'btn quiet small', onclick: () => { s.status = 'declined'; renderCues(); } }, 'Decline')));
+  if (isHost() && s.status === 'declined') el.append(h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn quiet small', onclick: () => { s.status = 'pending'; renderCues(); } }, 'Undo decline')));
+  return el;
+}
+function sendPrompt(text, by) {
+  S.waiting = false; S.seconds = 0;
+  for (const x of S.extra) if (x.outcome === 'Working on it') x.outcome = 'Done';
+  S.extra.push({ prompt: text, by, outcome: 'Working on it', steps: [] });
+  S.termExtra.push(['ac', '> ' + text], ['', '']);
+  renderAll(); if (S.active === 'terminal') renderEditor();
+}
+function accept(s, text) { s.status = 'sent'; s.text = text; S.editing = null; sendPrompt(text, s.from); }
+function suggest(text) {
+  text = text.trim(); if (!text) return;
+  const s = { id: S.nextId++, from: me(), text, status: 'pending', when: 'just now' };
+  S.suggestions.push(s); renderCues();
+  setTimeout(() => { if (s.status !== 'pending' || S.who === 'host') return; s.status = 'kept'; notify('request', 'Nick kept your suggestion for later', 'He will come back to it in this session.'); renderCues(); }, 6000);
+}
+function answer(choice) {
+  const text = choice === 1 ? 'Yes, replay from the last frame it saw' : choice === 2 ? 'No, jump to live' : choice;
+  S.waiting = false; S.seconds = 0;
+  S.termExtra.push(['ac', '> ' + (typeof choice === 'number' ? String(choice) : choice)], ['', '⏺ Noted. Adding it to the design and continuing with task 2.2.'], ['', '']);
+  S.events.push({ title: 'Nick answered Claude:', text: text + '.' });
+  renderAll(); if (S.active === 'terminal') renderEditor();
+}
+
+/* ---------- Read and confirm ---------- */
+function startRead(file, limit) {
+  const viewers = ['Sanne', 'Mo'];
+  const r = S.read = { file, limit, left: limit, ready: new Set(), viewers };
+  for (const [who, after] of [['Mo', 6000], ['Sanne', 11000]]) setTimeout(() => { if (S.read === r && who !== me()) { r.ready.add(who); renderStandby(); } }, after);
+  renderStandby();
+}
+function endRead(timeUp) {
+  const r = S.read; if (!r) return;
+  S.events.push({ title: `Read ${tabLabel(r.file)}:`, text: `${r.ready.size} of ${r.viewers.length} ready${timeUp ? ' when the time was up' : ''}.` });
+  S.read = null; renderStandby(); renderCues();
+}
+function readStrip() {
+  const r = S.read;
+  const clock = r.limit ? h('span', { class: 'clock' + (r.left <= 30 ? ' low' : ''), id: 'readClock', 'aria-label': 'Time left' }, fmt(r.left)) : h('span', { class: 'clock' }, h('small', null, 'No time limit'));
+  if (isHost()) return h('div', { class: 'req' },
+    h('div', { class: 'what' }, h('b', null, `You asked everyone to read ${tabLabel(r.file)}`), h('span', null, `${r.ready.size} of ${r.viewers.length} ready`)),
+    h('div', { class: 'roll' }, ...r.viewers.map((v) => h('span', { class: r.ready.has(v) ? 'done' : '' }, av(v), r.ready.has(v) ? `${v}, ready` : `${v}, reading`))),
+    clock, h('button', { type: 'button', class: 'btn primary small', onclick: () => endRead(false) }, 'Go on'));
+  const ready = r.ready.has(me());
+  return h('div', { class: 'req' },
+    h('div', { class: 'what' }, h('b', null, `Nick asks you to read ${tabLabel(r.file)}`), h('span', null, ready ? 'Nick can see you are ready.' : 'Say when you are done, so Nick knows when to go on.')),
+    clock, h('button', { type: 'button', class: 'btn small', onclick: () => { S.filesTab = r.file.startsWith('shared/') ? 'shared' : 'docs'; openFile(r.file); } }, 'Open it'),
+    ready ? h('button', { type: 'button', class: 'btn good small', 'aria-pressed': 'true', onclick: () => { r.ready.delete(me()); renderStandby(); } }, svg(IC.check), 'Ready')
+      : h('button', { type: 'button', class: 'btn primary small', onclick: () => { r.ready.add(me()); renderStandby(); } }, 'I\'m ready'));
+}
+
+/* ---------- Estimate ---------- */
+const DECK = ['1', '2', '3', '5', '8', '13', '?', '☕'];
+function startEstimate(task) {
+  const e = S.estimate = { task, votes: {}, revealed: false };
+  let delay = 3000;
+  for (const [who, v] of Object.entries({ Sanne: '5', Mo: '8', Nick: '5' })) {
+    if (who === me()) continue;
+    setTimeout(() => { if (S.estimate === e && !e.revealed) { e.votes[who] = v; renderStandby(); autoReveal(); } }, delay); delay += 2500;
+  }
+  renderStandby();
+}
+function autoReveal() {
+  const e = S.estimate; if (!e || isHost() || e.revealed) return;
+  if (Object.keys(e.votes).length === 3) setTimeout(() => { if (S.estimate === e) { e.revealed = true; renderStandby(); } }, 2000);
+}
+function estimateStrip() {
+  const e = S.estimate, names = ['Nick', 'Sanne', 'Mo'], mine = e.votes[me()], n = Object.keys(e.votes).length;
+  const what = h('div', { class: 'what' }, h('b', null, `How big is this? ${e.task}`), h('span', null, e.revealed ? 'Votes revealed.' : `${n} of 3 voted. Votes stay hidden until Nick reveals them.`));
+  if (!e.revealed) return h('div', { class: 'req' }, what,
+    h('div', { class: 'deck', role: 'group', 'aria-label': 'Your vote' }, ...DECK.map((c) => h('button', { type: 'button', class: 'card', 'aria-pressed': mine === c, 'aria-label': c === '☕' ? 'I need a break' : c === '?' ? 'No idea' : c + ' points', onclick: () => { e.votes[me()] = c; renderStandby(); autoReveal(); } }, c))),
+    h('div', { class: 'roll' }, ...names.map((p) => h('span', { class: e.votes[p] ? 'done' : '' }, av(p), e.votes[p] ? `${p}, voted` : p))),
+    isHost() && h('button', { type: 'button', class: 'btn primary small', disabled: !n, onclick: () => { e.revealed = true; renderStandby(); } }, 'Reveal votes'),
+    isHost() && h('button', { type: 'button', class: 'btn quiet small', onclick: () => { S.estimate = null; renderStandby(); } }, 'Stop voting'));
+  const counts = {}; for (const [p, v] of Object.entries(e.votes)) (counts[v] = counts[v] || []).push(p);
+  const max = Math.max(...Object.values(counts).map((x) => x.length));
+  const top = Object.entries(counts).sort((a, b) => b[1].length - a[1].length)[0][0];
+  const nums = Object.values(e.votes).filter((v) => /^\d+$/.test(v)).map(Number);
+  const agree = !nums.length || Math.min(...nums) === Math.max(...nums);
+  return h('div', { class: 'req' }, what,
+    h('div', { class: 'spread', role: 'img', 'aria-label': Object.entries(counts).map(([v, p]) => `${v}: ${p.join(' and ')}`).join('; ') },
+      ...DECK.filter((c) => counts[c]).flatMap((c) => [h('b', null, c), h('div', { class: 'row' }, h('i', { style: `width:${(counts[c].length / max) * 60}%` }), counts[c].join(', '))])),
+    h('span', { style: 'color:var(--ink-2);font-size:12px;max-width:26ch' }, agree ? 'Everyone agrees.' : `The votes run from ${Math.min(...nums)} to ${Math.max(...nums)}. Talk it through, then vote again.`),
+    isHost() && h('button', { type: 'button', class: 'btn small', onclick: () => startEstimate(e.task) }, 'Vote again'),
+    isHost() && h('button', { type: 'button', class: 'btn primary small', onclick: () => { S.events.push({ title: 'Estimated:', text: `${e.task}, ${top} points.` }); S.estimate = null; renderStandby(); renderCues(); } }, `Keep ${top} points`),
+    !isHost() && h('span', { style: 'color:var(--ink-2);font-size:12px' }, 'Nick decides what to keep.'));
+}
+function renderStandby() {
+  const b = $('#standby'); b.replaceChildren();
+  if (S.ended) return;
+  if (S.read) b.append(readStrip());
+  if (S.estimate) b.append(estimateStrip());
+}
+
+/* ---------- Popovers ---------- */
+function closePop() { const k = S.pop; S.pop = null; $('#pop').replaceChildren(); const o = { read: '#askRead', estimate: '#askEstimate', sharing: '#sharingBtn', bell: '#bellBtn', end: '#endBtn', add: '#addBtn', give: '#giveBtn' }[k]; if (o && $(o)) $(o).focus(); }
+function openPop(kind) {
+  if (S.pop === kind) return closePop();
+  S.pop = kind;
+  const pop = $('#pop'); pop.replaceChildren();
+  const cancel = h('button', { type: 'button', class: 'btn small', onclick: closePop }, 'Cancel');
+  let title, body;
+  if (kind === 'read') {
+    title = 'Ask everyone to read';
+    const docs = Object.keys(FILES).filter(isDoc).concat(SHARED.filter((f) => f.kind === 'md').map((f) => f.id));
+    const sel = h('select', { id: 'readWhat' }, ...docs.map((p) => h('option', { value: p, selected: p.endsWith('design.md') }, tabLabel(p))));
+    const lim = h('select', { id: 'readLimit' }, h('option', { value: '0' }, 'No time limit'), h('option', { value: '120' }, '2 minutes'), h('option', { value: '300', selected: true }, '5 minutes'), h('option', { value: '600' }, '10 minutes'));
+    body = [h('label', { class: 'f' }, 'What to read', sel), h('label', { class: 'f' }, 'Time to read', lim), h('p', null, 'Sanne and Mo get a request at the top of their window and say when they are ready.'),
+      h('div', { class: 'end' }, cancel, h('button', { type: 'button', class: 'btn primary small', id: 'readGo', onclick: () => { startRead(sel.value, Number(lim.value)); closePop(); } }, 'Ask Sanne and Mo'))];
+  } else if (kind === 'estimate') {
+    title = 'Ask how big a task is';
+    const ta = h('textarea', { id: 'estTask', rows: 2, 'aria-label': 'Task' }, 'Task 3.1: show "unreachable" after three missed heartbeats');
+    body = [ta, h('p', null, 'Everyone votes with cards. Votes stay hidden until you reveal them.'),
+      h('div', { class: 'end' }, cancel, h('button', { type: 'button', class: 'btn primary small', id: 'estGo', onclick: () => { startEstimate(ta.value.trim() || 'This task'); closePop(); } }, 'Start voting'))];
+  } else if (kind === 'add') {
+    title = 'Add files or a note';
+    const input = h('input', { type: 'file', id: 'upFiles', multiple: true, 'aria-label': 'Files to add' });
+    const dest = h('select', { id: 'upDest' },
+      h('option', { value: 'braindump' }, 'To the braindump for Claude'),
+      h('option', { value: 'everyone' }, 'Share with everyone'),
+      h('option', { value: 'project' }, host() ? 'Add to the project' : 'Add to the project, if Nick agrees'));
+    const path = h('input', { type: 'text', id: 'upPath', placeholder: 'crates/core/tests/fixtures/', autocomplete: 'off', style: 'padding:5px 7px;border:1px solid var(--rule-strong);border-radius:5px;background:var(--sheet)' });
+    const pathLabel = h('label', { class: 'f', hidden: true }, 'Where in the project (a folder, or a file name for one file)', path);
+    const note = h('textarea', { id: 'upNote', rows: 3, placeholder: 'Or write a note: ideas, questions, what Claude should know.', 'aria-label': 'Note' });
+    const help = h('p', null, 'Everyone adds to one folder. When it is complete, Nick gives the whole folder to Claude.');
+    const err = h('p', { class: 'err', role: 'alert' });
+    dest.addEventListener('change', () => {
+      pathLabel.hidden = dest.value !== 'project';
+      note.hidden = dest.value === 'project';
+      help.textContent = { braindump: 'Everyone adds to one folder. When it is complete, Nick gives the whole folder to Claude.', everyone: 'For people to look at. Claude does not see it unless Nick puts it in the session folder.', project: host() ? 'The file goes into your copy of the project, where Claude can use it.' : 'For a file Nick does not have: a fixture, a log, a missing file. It goes into his copy of the code only when he agrees.' }[dest.value];
+    });
+    const drop = h('div', { class: 'drop' }, input, h('span', { style: 'font-size:12px;color:var(--ink-2)' }, 'Or drop files here. Text and Markdown up to 200 KB are sent whole.'));
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer && e.dataTransfer.files.length) input.files = e.dataTransfer.files; });
+    body = [h('label', { class: 'f' }, 'Where it goes', dest), drop, pathLabel, note, help, err,
+      h('div', { class: 'end' }, cancel, h('button', { type: 'button', class: 'btn primary small', id: 'upGo', onclick: async () => {
+        const files = [...(input.files || [])];
+        if (!files.length && !(dest.value !== 'project' && note.value.trim())) { err.textContent = dest.value === 'project' ? 'Choose a file to add to the project.' : 'Choose a file or write a note first.'; return; }
+        closePop();
+        await addUploads(files, dest.value, path.value.trim(), dest.value === 'project' ? '' : note.value);
+      } }, 'Add'))];
+  } else if (kind === 'give') {
+    title = 'Give the braindump to Claude';
+    const items = SHARED.filter((f) => f.folder === 'braindump' && !f.given);
+    const ta = h('textarea', { id: 'giveText', rows: 5, 'aria-label': 'Prompt for Claude' }, `Read everything in shared/braindump/ (${items.map((f) => f.name).join(', ')}). Turn it into a short list of requirements for the heartbeat work, and ask me about anything that is unclear or contradicts the plan.`);
+    body = [h('p', null, `The ${items.length} files are copied into shared/braindump/ in the session folder, then this prompt goes to Claude. Edit it first if you like.`), ta,
+      h('div', { class: 'end' }, cancel, h('button', { type: 'button', class: 'btn primary small', id: 'giveGo', onclick: () => { const t = ta.value.trim(); if (!t) return; closePop(); giveBraindump(t); } }, 'Give to Claude'))];
+  } else if (kind === 'sharing') {
+    title = 'What viewers may see and do';
+    const st = S.settings;
+    const chk = (key, label, help) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: st[key], onchange: (e) => { st[key] = e.target.checked; renderAll(); renderEditor(); } }), h('span', null, label, h('small', null, help)));
+    const code = h('select', { id: 'setCode', onchange: (e) => { st.code = e.target.value; if (st.code !== 'project' && !isHost()) S.scope = 'touched'; renderAll(); renderEditor(); } },
+      h('option', { value: 'changes', selected: st.code === 'changes' }, 'Only the changes Claude makes'),
+      h('option', { value: 'whole', selected: st.code === 'whole' }, 'Changed files, whole, with changes marked'),
+      h('option', { value: 'project', selected: st.code === 'project' }, 'Any file in the project'));
+    body = [h('label', { class: 'f' }, 'Code viewers can open', code),
+      chk('suggest', 'Viewers can suggest prompts', 'Nothing reaches Claude until you send it.'),
+      chk('shareFiles', 'Viewers can add files and notes', 'To the braindump, to share, or offered for the project. You decide what goes into the project.'),
+      chk('recap', 'Viewers can save a recap', 'Prompts, plans and decisions, after the session ends.'),
+      h('p', null, 'Private files, such as .env, are never shared.'),
+      h('div', { class: 'end' }, h('button', { type: 'button', class: 'btn primary small', onclick: closePop }, 'Done'))];
+  } else if (kind === 'end') {
+    title = 'End the session for everyone?';
+    body = [h('p', null, 'Claude stops, viewers are disconnected, and everyone gets the recap. The terminal output is not kept.'),
+      h('div', { class: 'end' }, h('button', { type: 'button', class: 'btn small', onclick: closePop }, 'Keep going'), h('button', { type: 'button', class: 'btn primary small', onclick: () => { closePop(); setEnded(true); } }, 'End session'))];
+  } else {
+    title = 'Notifications';
+    S.notes.forEach((x) => { x.wasUnread = x.unread; x.unread = false; });
+    renderBell();
+    body = [S.notes.length ? h('ul', { class: 'notes' }, ...S.notes.map((x) => h('li', { class: x.wasUnread ? 'unread' : '' }, h('b', null, x.title), h('span', null, x.text)))) : h('p', null, 'Nothing yet. Requests from Nick, questions from Claude and new suggestions show up here.'),
+      h('fieldset', null, h('legend', null, 'Also pop up when'), ...Object.entries(KINDS).filter(([k]) => isHost() ? k !== 'request' : k !== 'suggestion').map(([k, label]) =>
+        h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: S.notify[k], onchange: (e) => { S.notify[k] = e.target.checked; } }), h('span', null, label)))),
+      h('div', { class: 'end' }, h('button', { type: 'button', class: 'btn small', onclick: closePop }, 'Close'))];
+  }
+  pop.append(h('div', { class: 'pop', role: 'dialog', 'aria-label': title }, h('h2', null, title), ...body));
+  const first = pop.querySelector('select, textarea, input, .btn.primary'); if (first) first.focus();
+}
+
+/* ---------- Recap ---------- */
+function renderRecap() {
+  const r = $('#recap'); r.replaceChildren();
+  if (!S.ended) return;
+  const turns = TIMELINE.concat(S.extra);
+  const allowed = isHost() || S.settings.recap;
+  r.append(h('div', { class: 'recap-in' },
+    h('h1', null, 'Viewer heartbeat, planned and half built'),
+    h('div', { class: 'meta' }, 'specshare, hosted by Nick, with Sanne and Mo. Ended just now after 52 minutes.'),
+    h('h2', null, 'Prompts and what came of them'),
+    h('ol', null, ...turns.map((t) => h('li', null, t.prompt, h('small', null, (t.by ? `Suggested by ${t.by}. ` : '') + (t.outcome === 'Working on it' ? 'Stopped when the session ended.' : t.outcome))))),
+    h('h2', null, 'Plans and documents'),
+    h('ul', null, h('li', null, 'Viewer heartbeat, ', h('code', null, 'design.md'), h('small', null, 'A heartbeat every 3 seconds. Unreachable after three missed.')),
+      h('li', null, h('code', null, 'tasks.md'), h('small', null, '3 of 6 tasks done')),
+      ...SHARED.filter((f) => f.kind === 'md').map((f) => h('li', null, h('code', null, f.name), h('small', null, `Shared by ${f.by}`)))),
+    S.events.length > 0 && h('h2', null, 'Decisions'),
+    S.events.length > 0 && h('ul', null, ...S.events.map((e) => h('li', null, e.title + ' ' + e.text))),
+    h('h2', null, 'Files changed'),
+    h('ul', null, ...Object.entries(FILES).filter(([, f]) => f.st !== 'R').map(([p, f]) => h('li', null, h('code', null, p), h('small', null, f.st === 'A' ? 'Created' : 'Changed')))),
+    h('div', { class: 'acts' },
+      allowed ? h('button', { type: 'button', class: 'btn primary', onclick: () => notify('ended', 'Recap saved', 'specshare-recap-2026-11-07.md. In this concept nothing is written to disk.') }, 'Save recap') : h('span', null, 'Nick did not allow saving a recap of this session.'),
+      h('span', null, 'The recap holds no code and no terminal output.'))));
+}
+function setEnded(on) {
+  S.ended = on; S.read = null; S.estimate = null; S.waiting = false;
+  if (on) notify('ended', 'The session has ended', isHost() || S.settings.recap ? 'The recap is ready to save.' : 'Nick did not allow saving a recap.');
+  renderAll(); renderEditor();
+}
+
+/* ---------- People ---------- */
+function setWho(v) {
+  S.who = v; S.editing = null; if (S.pop) closePop();
+  if (v === 'host') S.late = false;
+  if (!isHost() && S.settings.code !== 'project') S.scope = 'touched';
+  S.docks = { files: true, cues: true };
+  if (v === 'po') { S.filesTab = 'docs'; S.detail = 'summary'; S.tabs = ['openspec/changes/viewer-heartbeat/design.md']; S.active = S.tabs[0]; S.pane = 'cues'; }
+  else if (v === 'dev') { S.filesTab = 'code'; S.detail = 'details'; S.tabs = ['terminal', 'crates/protocol/src/message.rs']; S.active = 'crates/protocol/src/message.rs'; S.pane = 'work'; }
+  else { S.filesTab = 'code'; S.detail = 'details'; S.tabs = ['terminal']; S.active = 'terminal'; S.pane = 'work'; }
+  S.tabs.forEach((t) => seen.add(t + v));
+  renderAll(); renderEditor();
+}
+function renderAll() { layout(); renderChrome(); renderFiles(); renderTabs(); renderCues(); renderStandby(); renderRecap(); renderBell(); }
+
+$('#whoPick').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setWho(b.dataset.v); });
+$('#panesw').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) showPane(b.dataset.v); });
+$('#tglFiles').onclick = () => { S.docks.files = !S.docks.files; layout(); };
+$('#tglCues').onclick = () => { S.docks.cues = !S.docks.cues; layout(); };
+$('#askRead').onclick = () => openPop('read');
+$('#askEstimate').onclick = () => openPop('estimate');
+$('#sharingBtn').onclick = () => openPop('sharing');
+$('#endBtn').onclick = () => openPop('end');
+$('#bellBtn').onclick = () => openPop('bell');
+$('#simAsk').onclick = () => {
+  if (S.waiting) return answer(1);
+  S.waiting = true; renderAll(); if (S.active === 'terminal') renderEditor();
+  notify('waiting', isHost() ? 'Claude is waiting for you' : 'Claude is waiting for Nick', isHost() ? 'It asks a question in the terminal.' : 'Nick answers in the terminal.');
+};
+$('#simSuggest').onclick = () => {
+  S.suggestions.push({ id: S.nextId++, from: 'Sanne', text: 'Can the people list show who is reading the plan right now?', status: 'pending', when: 'just now' });
+  if (isHost()) notify('suggestion', 'Sanne suggests a prompt', 'Open Prompts to send, edit, keep or decline it.');
+  renderCues();
+};
+$('#simLate').onclick = () => { S.late = !S.late; S.expanded.clear(); renderChrome(); renderCues(); if (S.late && narrow()) showPane('cues'); };
+$('#simEnd').onclick = () => setEnded(!S.ended);
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.pop) closePop(); });
+document.addEventListener('click', (e) => { if (S.pop && !e.target.closest('#pop') && !e.target.closest('[aria-haspopup]')) closePop(); });
+window.matchMedia('(max-width: 760px)').addEventListener?.('change', () => layout());
+
+setInterval(() => {
+  const r = S.read;
+  if (r && r.limit) { r.left = Math.max(0, r.left - 1); if (!r.left) endRead(true); else { const c = document.getElementById('readClock'); if (c) { c.textContent = fmt(r.left); c.classList.toggle('low', r.left <= 30); } } }
+  if (S.waiting || S.ended) return;
+  S.seconds++;
+  const sp = document.getElementById('spin'); if (sp) sp.textContent = `✻ ${workLabel()}… (${S.seconds}s, esc to interrupt)`;
+  const nw = document.getElementById('now'); if (nw) nw.textContent = `${workLabel()}, ${S.seconds} s`;
+  $('#stateTitle').textContent = `${workLabel()}, ${S.seconds} s`;
+}, 1000);
+
+if (narrow()) S.pane = 'work';
+setWho('host');
+</script>
+</body>
+</html>
