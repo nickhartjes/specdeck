@@ -34,8 +34,8 @@
 
 ## 6. Packaging
 
-- [ ] 6.1 Ship `specdeck-session` as an external binary (`bundle.externalBin` in `tauri.conf.json`) and build it for every target in `.github/workflows/release.yml`. Verify a local `just package` contains it next to the app, and record each installer's size against the 25 MB limit in the PR.
-- [ ] 6.2 Include the binary in the Nix package (`nix/package.nix`), the `.deb` and the AppImage, and check the Homebrew cask needs no change (design's Open Questions). Verify `nix build` and the `.deb` contain it.
+- [x] 6.1 Ship `specdeck-session` as an external binary (`bundle.externalBin` in `tauri.conf.json`) and build it for every target in `.github/workflows/release.yml`. Verify a local `just package` contains it next to the app, and record each installer's size against the 25 MB limit in the PR.
+- [x] 6.2 Include the binary in the Nix package (`nix/package.nix`), the `.deb` and the AppImage, and check the Homebrew cask needs no change (design's Open Questions). Verify `nix build` and the `.deb` contain it.
 
 ## 7. Docs
 
@@ -44,6 +44,6 @@
 ## 8. Integration
 
 - [ ] 8.1 With `just local-dev`, host two sessions with a viewer on each, choose Restart to update with a locally served update (or kill the app and start it again where an update server is not available), and verify the viewers stay connected throughout and both windows reopen. Record the result in the PR.
-- [ ] 8.2 Add a CI job that drives the previous release's session-process frames (a frozen transcript) through the app's adapter. Verify it passes in CI.
-- [ ] 8.3 Run `just check` and verify it passes.
-- [ ] 8.4 Run `mise exec node@24.22.2 -- openspec validate session-processes --strict` and verify it passes.
+- [x] 8.2 Add a CI job that drives the previous release's session-process frames (a frozen transcript) through the app's adapter. Verify it passes in CI.
+- [x] 8.3 Run `just check` and verify it passes.
+- [x] 8.4 Run `mise exec node@24.22.2 -- openspec validate session-processes --strict` and verify it passes.
