@@ -11,6 +11,7 @@ import type {
   HostEvent,
   JoinLink,
   Profile,
+  RunningSession,
   ServiceCheck,
   TerminalSnapshot,
   UpdateState,
@@ -64,6 +65,14 @@ export interface Bridge {
   /** Reads a link pasted into the start screen. */
   readJoinLink(link: string): Promise<JoinLink>;
   copyText(text: string): Promise<void>;
+  /** The hosted sessions that run without a window. */
+  runningSessions(): Promise<RunningSession[]>;
+  /** Shows listed session `id` in this window; fails with a message when it got a window or ended meanwhile. */
+  openRunningSession(id: number): Promise<void>;
+  /** Ends listed session `id` for everyone: one an older SpecDeck started. */
+  endRunningSession(id: number): Promise<void>;
+  /** Calls `handler` with the whole list whenever it may have changed; returns a function that stops listening. */
+  onRunningSessions(handler: (sessions: RunningSession[]) => void): () => void;
   /** Tells the app the start screen can be used; scripts/measure-footprint times this. */
   startScreenShown(): Promise<void>;
   /** The terminal's state, for diagnostics. */

@@ -7,7 +7,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exportFileName } from '../model/diagnostics';
 import type { Bridge } from './bridge';
 import type { MenuCommand } from '../menu/menu';
-import type { AgentVersion, DiagnosticsStatus, HostEvent, JoinLink, Profile, ServiceCheck, UpdateState, ViewEvent } from './types';
+import type { AgentVersion, DiagnosticsStatus, HostEvent, JoinLink, Profile, RunningSession, ServiceCheck, UpdateState, ViewEvent } from './types';
 
 function channel<T>(handler: (message: T) => void): Channel<T> {
   const ch = new Channel<T>();
@@ -48,6 +48,14 @@ export const tauriBridge: Bridge = {
   setSharingService: (service) => invoke<Profile>('set_sharing_service', { service }),
   checkSharingService: (service) => invoke<ServiceCheck>('check_sharing_service', { service }),
   removeRecentFolder: (path) => invoke<Profile>('remove_recent_folder', { path }),
+  runningSessions: () => invoke<RunningSession[]>('running_sessions'),
+  openRunningSession: (id) => invoke('open_running_session', { id }),
+  endRunningSession: (id) => invoke('end_running_session', { id }),
+  onRunningSessions: (handler) => {
+    // Sent to every window at once (`running-sessions-on-start` design decision 2).
+    const stop = listen<RunningSession[]>('running-sessions', (event) => handler(event.payload));
+    return () => void stop.then((unlisten) => unlisten());
+  },
   chooseFolder: async () => {
     const folder = await open({ directory: true, multiple: false, title: 'Choose the folder the agent works in' });
     return typeof folder === 'string' ? folder : null;

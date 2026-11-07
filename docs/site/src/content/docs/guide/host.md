@@ -61,6 +61,8 @@ If you set up your own Claude Code status line, it keeps showing in the terminal
 | **Copy Invite Code** | Copies the code, also while the window is closed |
 | **End Session…** | Ends the session for everyone, after asking |
 
+The start screen also lists every session you host that has no window, under **Running sessions**, with what the agent is doing and how many people watch. **Open** shows the session in that window. This helps where there is no tray icon, such as GNOME without the AppIndicator extension.
+
 Quitting SpecDeck (**⌘Q** on macOS, **File › Quit** elsewhere) while you host asks first, because it ends the session for everyone. With several sessions open, it asks once for all of them.
 
 ## When SpecDeck restarts or stops
@@ -71,7 +73,7 @@ From SpecDeck 1.7.0, each session you host runs on its own, apart from the app. 
 - crashes, or
 - is force quit, for example from Activity Monitor or Task Manager.
 
-Your viewers notice nothing. Start SpecDeck again and it opens a window for each session, with the whole terminal and timeline so far and the same invite code.
+Your viewers notice nothing. Start SpecDeck again and it opens a window for each session, with the whole terminal and timeline so far and the same invite code. If you close one of those windows, the session shows under **Running sessions** on the start screen.
 
 If SpecDeck is not started again within **10 minutes**, the session ends itself as if you had ended it: the agent stops, viewers see that the session ended, and the invite code stops working. Quitting SpecDeck still ends every session you host, after asking, and so does logging out or shutting down your computer.
 

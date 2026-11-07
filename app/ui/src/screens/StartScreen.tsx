@@ -8,6 +8,7 @@ import {
   FolderOpen,
   LogIn,
   Pi,
+  Radio,
   Sparkles,
   SquareTerminal,
   X,
@@ -15,10 +16,12 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentInfo, Profile } from '../api/types';
+import type { AgentId, AgentInfo, Profile, RunningSession } from '../api/types';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { initials } from '../components/PeoplePanel';
 import { formatCode, isCompleteCode, isJoinLink } from '../model/code';
 import type { MenuCommand } from '../menu/menu';
+import { AGENT_NAMES, endingText } from './HostScreen';
 
 interface Props {
   profile: Profile;
@@ -54,12 +57,104 @@ export function StartScreen({ profile, onProfile, onHosting, onJoin, initialCode
           </div>
           <NameBadge profile={profile} onProfile={onProfile} />
         </header>
+        <RunningSessions onOpened={onHosting} />
         <div className="cards">
           <HostCard profile={profile} onProfile={onProfile} onHosting={onHosting} command={command} onCommandDone={onCommandDone} />
           <JoinCard onJoin={onJoin} initialCode={initialCode} error={joinError} command={command} onCommandDone={onCommandDone} />
         </div>
       </div>
     </main>
+  );
+}
+
+function viewersText(viewers: number): string {
+  return viewers === 0 ? 'No viewers yet' : viewers === 1 ? '1 viewer' : `${viewers} viewers`;
+}
+
+/** Hosted sessions that run without a window (`running-sessions-on-start`); nothing when there are none. */
+function RunningSessions({ onOpened }: { onOpened: () => void }) {
+  const bridge = useBridge();
+  const [sessions, setSessions] = useState<RunningSession[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [ending, setEnding] = useState<RunningSession | null>(null);
+  useEffect(() => {
+    let live = true;
+    // Listening first, so a change while the list loads is not missed.
+    const stop = bridge.onRunningSessions((list) => live && setSessions(list));
+    void bridge
+      .runningSessions()
+      .then((list) => live && setSessions(list))
+      .catch(() => {});
+    return () => {
+      live = false;
+      stop();
+    };
+  }, [bridge]);
+
+  const open = async (session: RunningSession) => {
+    setError(null);
+    try {
+      await bridge.openRunningSession(session.id);
+      onOpened();
+    } catch (e) {
+      // It got a window or ended meanwhile; the list refreshes by itself.
+      setError(errorMessage(e));
+    }
+  };
+  const end = async () => {
+    const session = ending;
+    setEnding(null);
+    if (!session) return;
+    setError(null);
+    try {
+      await bridge.endRunningSession(session.id);
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  };
+
+  if (sessions.length === 0 && !error) return null;
+  return (
+    <section className="card running" aria-labelledby="running-title">
+      <div>
+        <h2 id="running-title">Running sessions</h2>
+        <p className="lead">These keep running without a window; viewers are still connected.</p>
+      </div>
+      {sessions.length > 0 && (
+        <ul className="recent">
+          {sessions.map((session) => (
+            <li key={session.id}>
+              <div className="open">
+                <Radio aria-hidden />
+                <span className="name">{session.folder}</span>
+                <span className="path">
+                  {session.controllable ? session.state : 'Started by an older SpecDeck'} · {viewersText(session.viewers)}
+                </span>
+              </div>
+              {session.controllable ? (
+                <button className="btn small" aria-label={`Open ${session.folder}`} onClick={() => void open(session)}>
+                  Open
+                </button>
+              ) : (
+                <button className="btn small danger" aria-label={`End ${session.folder}`} onClick={() => setEnding(session)}>
+                  End…
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && (
+        <span className="error-text" role="alert">
+          {error}
+        </span>
+      )}
+      {ending && (
+        <ConfirmDialog title="End the session for everyone?" confirm="End session" danger onConfirm={() => void end()} onCancel={() => setEnding(null)}>
+          <p>{endingText(ending.agent === 'terminal' ? 'The shell' : AGENT_NAMES[ending.agent], ending.viewers)}</p>
+        </ConfirmDialog>
+      )}
+    </section>
   );
 }
 

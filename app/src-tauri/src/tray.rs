@@ -63,7 +63,7 @@ pub struct Entry {
 }
 
 /// The first line of the menu: what the agent is doing.
-fn state_line(agent: AgentId, summary: &Summary) -> String {
+pub fn state_line(agent: AgentId, summary: &Summary) -> String {
     let agent_name = agent.display_name();
     match summary.status {
         AgentStatus::Exited if agent == AgentId::Terminal => "The shell has exited".into(),

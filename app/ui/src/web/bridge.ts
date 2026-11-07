@@ -120,6 +120,11 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     setSharingService: notInTheWebViewer,
     checkSharingService: notInTheWebViewer,
     removeRecentFolder: notInTheWebViewer,
+    // It hosts nothing, so nothing runs without a window.
+    runningSessions: () => Promise.resolve([]),
+    openRunningSession: notInTheWebViewer,
+    endRunningSession: notInTheWebViewer,
+    onRunningSessions: () => () => {},
     chooseFolder: notInTheWebViewer,
     startHosting: notInTheWebViewer,
     hostAttach: notInTheWebViewer,

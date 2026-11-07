@@ -61,6 +61,18 @@ export interface View {
   steps: Steps;
 }
 
+/** A hosted session that runs without a window, as the start screen lists it (`running-sessions-on-start`). */
+export interface RunningSession {
+  id: number;
+  folder: string;
+  agent: AgentId;
+  /** What the agent is doing, in the tray's words. */
+  state: string;
+  viewers: number;
+  /** False for a session an older SpecDeck started, which can only be ended. */
+  controllable: boolean;
+}
+
 export interface Profile {
   username: string | null;
   recentFolders: RecentFolder[];

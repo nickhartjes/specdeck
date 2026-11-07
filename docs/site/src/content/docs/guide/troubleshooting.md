@@ -26,7 +26,7 @@ SpecDeck 1.0 cannot open links from newer versions. Paste the link into **Join a
 
 ## A session says "Started by an older SpecDeck"
 
-Sessions you host keep running through an update in the version that started them. SpecDeck shows and controls sessions started by the version before it. A session started by an even older version, for example when you updated twice while it ran, has no window: it is listed in the menu-bar or tray menu with **End Session…** only. Its viewers stay connected until you end it there or quit SpecDeck.
+Sessions you host keep running through an update in the version that started them. SpecDeck shows and controls sessions started by the version before it. A session started by an even older version, for example when you updated twice while it ran, has no window: it is listed in the menu-bar or tray menu with **End Session…** only, and under **Running sessions** on the start screen with **End…** only. Its viewers stay connected until you end it there or quit SpecDeck.
 
 ## Sharing is unavailable
 

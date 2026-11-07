@@ -1,8 +1,8 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { demoProfile } from '../api/demo';
-import type { Profile } from '../api/types';
+import type { Profile, RunningSession } from '../api/types';
 import { fakeBridge, renderWith } from '../test/helpers';
 import { StartScreen } from './StartScreen';
 
@@ -196,5 +196,87 @@ describe('start screen', () => {
     await userEvent.clear(field);
     await userEvent.type(field, 'Nicolaas{Enter}');
     expect(bridge.setUsername).toHaveBeenCalledWith('Nicolaas');
+  });
+});
+
+describe('running sessions', () => {
+  const shop: RunningSession = { id: 2, folder: 'shop', agent: 'claude-code', state: 'Claude Code is working', viewers: 2, controllable: true };
+  const old: RunningSession = { id: 5, folder: 'legacy', agent: 'terminal', state: 'Session is live', viewers: 1, controllable: false };
+
+  /** The start screen with `sessions` running without a window, and a way to send it a new list. */
+  function running(sessions: RunningSession[], overrides = {}) {
+    let send: (list: RunningSession[]) => void = () => {};
+    const result = setup(
+      {},
+      {
+        runningSessions: vi.fn(async () => sessions),
+        onRunningSessions: (handler: (list: RunningSession[]) => void) => {
+          send = handler;
+          return () => {};
+        },
+        ...overrides,
+      },
+    );
+    return { ...result, send: (list: RunningSession[]) => send(list) };
+  }
+
+  it('shows no list while nothing runs without a window', async () => {
+    const { bridge } = running([]);
+    await waitFor(() => expect(bridge.runningSessions).toHaveBeenCalled());
+    expect(screen.queryByRole('heading', { name: 'Running sessions' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Host a session' })).toBeInTheDocument();
+  });
+
+  it('lists a session with what its agent does and who watches', async () => {
+    running([shop]);
+    const list = await screen.findByRole('region', { name: 'Running sessions' });
+    expect(within(list).getByText('shop')).toBeInTheDocument();
+    expect(within(list).getByText('Claude Code is working · 2 viewers')).toBeInTheDocument();
+    expect(within(list).getByRole('button', { name: 'Open shop' })).toBeInTheDocument();
+  });
+
+  it('follows the list as it changes', async () => {
+    const { send } = running([shop]);
+    await screen.findByText('Claude Code is working · 2 viewers');
+    act(() => send([{ ...shop, viewers: 3, state: 'Claude Code is waiting for you' }]));
+    expect(screen.getByText('Claude Code is waiting for you · 3 viewers')).toBeInTheDocument();
+    act(() => send([]));
+    expect(screen.queryByRole('region', { name: 'Running sessions' })).not.toBeInTheDocument();
+  });
+
+  it('opens a session in this window', async () => {
+    const { bridge, onHosting } = running([shop]);
+    await userEvent.click(await screen.findByRole('button', { name: 'Open shop' }));
+    expect(bridge.openRunningSession).toHaveBeenCalledWith(2);
+    await waitFor(() => expect(onHosting).toHaveBeenCalled());
+  });
+
+  it('says so when the session was opened elsewhere first', async () => {
+    const { onHosting, send } = running([shop], {
+      openRunningSession: vi.fn(async () => Promise.reject('This session is already open in another window.')),
+    });
+    await userEvent.click(await screen.findByRole('button', { name: 'Open shop' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('This session is already open in another window.');
+    // The app sends the list without it; the message stays.
+    act(() => send([]));
+    expect(screen.getByRole('alert')).toHaveTextContent('already open');
+    expect(screen.queryByRole('button', { name: 'Open shop' })).not.toBeInTheDocument();
+    expect(onHosting).not.toHaveBeenCalled();
+  });
+
+  it('offers only End for a session an older SpecDeck started, and asks first', async () => {
+    const { bridge } = running([old]);
+    expect(await screen.findByText('Started by an older SpecDeck · 1 viewer')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open legacy' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'End legacy' }));
+    const dialog = screen.getByRole('alertdialog', { name: 'End the session for everyone?' });
+    expect(dialog).toHaveTextContent('The shell stops, and 1 viewer is disconnected. The invite code stops working.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(bridge.endRunningSession).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'End legacy' }));
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }));
+    expect(bridge.endRunningSession).toHaveBeenCalledWith(5);
   });
 });

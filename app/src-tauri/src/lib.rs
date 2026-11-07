@@ -7,6 +7,7 @@ mod client;
 mod menu;
 mod migrate;
 mod notify;
+mod running;
 mod services;
 mod sessions;
 mod settings;
@@ -656,15 +657,74 @@ fn folder_name(folder: &Path) -> String {
 
 /// Puts hosted session `id` in the tray, brings it up to date, or with `None` takes it out.
 fn update_tray(app: &AppHandle, id: SessionId, entry: Option<tray::Entry>) {
-    let state = app.state::<AppState>();
-    let mut entries = state.tray.lock().unwrap();
-    match entry {
-        Some(entry) => drop(entries.insert(id, entry)),
-        None => drop(entries.remove(&id)),
+    {
+        let state = app.state::<AppState>();
+        let mut entries = state.tray.lock().unwrap();
+        match entry {
+            Some(entry) => drop(entries.insert(id, entry)),
+            None => drop(entries.remove(&id)),
+        }
+        // Under the lock, so two sessions changing at once cannot show an older list last.
+        let entries: Vec<_> = entries.values().cloned().collect::<Vec<_>>();
+        let _ = tray::refresh(app, &entries);
     }
-    // Under the lock, so two sessions changing at once cannot show an older list last.
-    let entries: Vec<_> = entries.values().cloned().collect::<Vec<_>>();
-    let _ = tray::refresh(app, &entries);
+    running_changed(app);
+}
+
+/// The hosted sessions without a window, for the start screen (`running-sessions-on-start`).
+fn running_list(app: &AppHandle) -> Vec<running::RunningSession> {
+    let state = app.state::<AppState>();
+    // One lock at a time: the tray's entries first, then the sessions.
+    let entries = state.tray.lock().unwrap().clone();
+    let sessions = state.sessions.lock().unwrap();
+    running::list(&entries, &sessions)
+}
+
+/// Tells every window the list may have changed; start screens follow it (design decision 2).
+fn running_changed(app: &AppHandle) {
+    let _ = app.emit("running-sessions", running_list(app));
+}
+
+/// The start screen's list of hosted sessions without a window.
+#[tauri::command]
+async fn running_sessions(app: AppHandle) -> Result<Vec<running::RunningSession>, String> {
+    Ok(running_list(&app))
+}
+
+/// Shows listed session `id` in this window, in place of the start screen (design decision 3).
+#[tauri::command]
+async fn open_running_session(
+    app: AppHandle,
+    window: WebviewWindow,
+    id: SessionId,
+) -> Result<(), String> {
+    let opened = {
+        let state = app.state::<AppState>();
+        let mut sessions = state.sessions.lock().unwrap();
+        running::check_open(&sessions, window.label(), id).map(|()| {
+            sessions.attach(window.label(), id);
+            sessions.name(id).map(str::to_owned)
+        })
+    };
+    // Also when refused: the list was out of date, so refresh it where it shows.
+    running_changed(&app);
+    let name = opened?;
+    let _ = window.set_title(&session_window_title(name.as_deref()));
+    refresh_menu(&app);
+    session_changed(&app);
+    Ok(())
+}
+
+/// Ends listed session `id`, one an older SpecDeck started, for everyone (design decision 4).
+#[tauri::command]
+async fn end_running_session(app: AppHandle, id: SessionId) -> Result<(), String> {
+    let checked = running::check_end(&app.state::<AppState>().sessions.lock().unwrap(), id);
+    match checked {
+        // end_session updates the tray, which sends the new list.
+        Ok(()) => end_session(&app, id),
+        Err(_) => running_changed(&app),
+    }
+    checked
 }
 
 /// A hosted session's summary changed; ignored once the session has left the tray.
@@ -746,6 +806,8 @@ async fn start_hosting(
         update_tray(&app, id, None);
         return Err(error);
     }
+    // Its tray entry went up before it had a window (design decision 2).
+    running_changed(&app);
     set_window_title(&window, Some(&name));
     session_changed(&app);
     let mut settings = state.settings.lock().unwrap();
@@ -1085,6 +1147,8 @@ async fn find_sessions(app: &AppHandle) -> Vec<SessionId> {
             reopen.push(id);
         }
     }
+    // Their tray entries went up before the app held them (design decision 2).
+    running_changed(app);
     remove_leftover_session_files(&paths.data_dir, &live);
     for unused in client::unused_runtimes(&paths.runtime_dir, &versions) {
         let _ = std::fs::remove_dir_all(unused);
@@ -1283,6 +1347,10 @@ fn open_session_window(app: &AppHandle, label: &str, attach: Option<SessionId>) 
         sessions.attach(label, id);
         sessions.name(id).map(str::to_owned)
     });
+    if attach.is_some() {
+        // It has a window again: start screens stop listing it.
+        running_changed(app);
+    }
     let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::default())
         .title(session_window_title(name.as_deref()))
         .inner_size(1200.0, 800.0)
@@ -1835,7 +1903,11 @@ pub fn run() {
                     // A hosted session keeps running without its window; watching ends with it.
                     let closed = state.sessions.lock().unwrap().window_closed(window.label());
                     match closed {
-                        Some(Session::Host(host)) => host.detach(),
+                        Some(Session::Host(host)) => {
+                            host.detach();
+                            // Now it runs without a window: start screens list it.
+                            running_changed(window.app_handle());
+                        }
                         Some(Session::Viewer(viewer)) => {
                             viewer.leave();
                             session_changed(window.app_handle());
@@ -1881,6 +1953,9 @@ pub fn run() {
             take_join_link,
             take_start_command,
             set_session_title,
+            running_sessions,
+            open_running_session,
+            end_running_session,
             start_screen_shown,
         ])
         .build(tauri::generate_context!())

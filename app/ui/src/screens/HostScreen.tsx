@@ -81,7 +81,7 @@ export function hostReducer(state: State, event: HostEvent | { type: 'limit'; li
 }
 
 /** What ending the session does; `running` is the agent or shell still to stop, if any. */
-function endingText(running: string | null, viewers: number): string {
+export function endingText(running: string | null, viewers: number): string {
   const effects = [
     running && `${running} stops`,
     viewers > 0 && `${viewers === 1 ? '1 viewer is' : `${viewers} viewers are`} disconnected`,
