@@ -1079,8 +1079,6 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 [[package]]
 name = "datachannel"
 version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c29e35372e6c3ba1c5a30d3c0a06af13a251149a0bc044abd10acd30dd733094"
 dependencies = [
  "datachannel-sys",
  "derive_more",
