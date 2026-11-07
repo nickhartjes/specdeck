@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/protocol", "crates/core", "crates/diag", "crates/local", "crates/server", "crates/session", "crates/web", "app/src-tauri"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "1.6.0"
@@ -14,3 +15,8 @@ specdeck-core = { path = "crates/core" }
 specdeck-diag = { path = "crates/diag" }
 specdeck-local = { path = "crates/local" }
 specdeck-session = { path = "crates/session" }
+
+# datachannel 0.16.1 with a fix for a use-after-free when a connection is dropped during its
+# Closed callback (#60); see vendor/datachannel/PATCHED.md.
+[patch.crates-io]
+datachannel = { path = "vendor/datachannel" }
