@@ -9,7 +9,7 @@ Two clickable designs, both with the same features. Open them in a browser.
   - one highly legible type family;
   - the timeline as a cue rail.
 
-  It departs from the layout choices in places: the layout follows the person, and it has no layout presets and no resizable panels. It is ahead of the mockup with the braindump, files for the project and the Markdown source view.
+  It departs from the layout choices in places: the layout follows the person, and it has no layout presets. Its panels can be resized, per person. It is ahead of the mockup with the braindump, files for the project and the Markdown source view.
 
 Which look, and which of the concept's ideas, to take is still open.
 

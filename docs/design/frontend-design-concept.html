@@ -143,6 +143,12 @@ svg { flex: none; }
 .spread .row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
 .spread i { display: block; height: 10px; background: var(--accent); border-radius: 2px; }
 
+/* Dividers between the panels: drag them, or focus one and use the arrow keys */
+.main .files, .main .cues { border-left: 0; border-right: 0; }
+.split { background: var(--rule); cursor: col-resize; position: relative; touch-action: none; }
+.split::after { content: ""; position: absolute; inset: 0 -4px; }
+.split:hover, .split:focus-visible, .split.dragging { background: var(--accent); outline: none; }
+
 /* Narrow-screen pane switch */
 .panesw { display: none; border-bottom: 1px solid var(--rule); }
 .panesw button { flex: 1; border: 0; background: none; padding: 8px; color: var(--ink-2); border-bottom: 2px solid transparent; }
@@ -350,6 +356,7 @@ button.step:hover { background: var(--hover); }
   .panesw { display: flex; }
   .main { display: block; position: relative; }
   .main > .pane { display: none; height: 100%; border: 0; }
+  .main > .split { display: none; }
   .main[data-pane="files"] > .files, .main[data-pane="work"] > .work, .main[data-pane="cues"] > .cues { display: flex; }
   .main.ended > .pane { display: none; }
   .main > .recap { display: block; height: 100%; }
@@ -417,10 +424,12 @@ button.step:hover { background: var(--hover); }
         <div class="scroll" id="filesBody"></div>
         <div class="foot" id="filesFoot"></div>
       </aside>
+      <div class="split" id="splitA" role="separator" aria-orientation="vertical" tabindex="0"></div>
       <section class="pane work" id="work" aria-label="Terminal and open files">
         <div class="wtabs" id="wtabs" role="tablist" aria-label="Open"></div>
         <div class="editor" id="editor" role="tabpanel"></div>
       </section>
+      <div class="split" id="splitB" role="separator" aria-orientation="vertical" tabindex="0"></div>
       <aside class="pane cues" id="cues" aria-label="Timeline and prompts">
         <div class="head" id="cuesHead"></div>
         <div class="scroll" id="cuesBody"></div>
@@ -601,6 +610,8 @@ const TIMELINE = [
 const S = {
   who: 'host', late: false, ended: false, waiting: false, seconds: 14,
   docks: { files: true, cues: true }, pane: 'work',
+  // Panel widths in pixels, per layout: Sanne's timeline is wider and on the left.
+  widths: { host: { files: 230, cues: 340 }, dev: { files: 230, cues: 340 }, po: { files: 220, cues: 400 } },
   filesTab: 'code', cuesTab: 'timeline', detail: 'details', scope: 'touched',
   tabs: ['terminal'], active: 'terminal', views: {}, mdView: {}, cur: null, expanded: new Set(),
   settings: { code: 'whole', suggest: true, shareFiles: true, recap: true },
@@ -642,23 +653,64 @@ function layout() {
   main.dataset.pane = S.pane;
   $('#recap').hidden = !S.ended;
   for (const id of ['files', 'work', 'cues']) $('#' + id).hidden = S.ended || (id !== 'work' && !narrow() && !S.docks[id]);
+  for (const id of ['splitA', 'splitB']) $('#' + id).hidden = true;
   if (S.ended) { main.style.gridTemplateColumns = '1fr'; main.style.gridTemplateAreas = ''; }
   else {
-    const f = S.docks.files, c = S.docks.cues;
-    if (S.who === 'po') {
-      const areas = [c && 'cues', 'work', f && 'files'].filter(Boolean);
-      main.style.gridTemplateAreas = `"${areas.join(' ')}"`;
-      main.style.gridTemplateColumns = areas.map((a) => a === 'cues' ? 'minmax(320px, 420px)' : a === 'files' ? '220px' : 'minmax(0, 1fr)').join(' ');
-    } else {
-      const areas = [f && 'files', 'work', c && 'cues'].filter(Boolean);
-      main.style.gridTemplateAreas = `"${areas.join(' ')}"`;
-      main.style.gridTemplateColumns = areas.map((a) => a === 'cues' ? 'minmax(280px, 350px)' : a === 'files' ? '230px' : 'minmax(0, 1fr)').join(' ');
+    // Side panels in order, the middle between them, a divider next to each shown side panel.
+    const [left, right] = S.who === 'po' ? ['cues', 'files'] : ['files', 'cues'];
+    const w = S.widths[S.who];
+    const areas = [], cols = [];
+    if (S.docks[left]) { areas.push(left, 'splitA'); cols.push(w[left] + 'px', '5px'); }
+    areas.push('work'); cols.push('minmax(240px, 1fr)');
+    if (S.docks[right]) { areas.push('splitB', right); cols.push('5px', w[right] + 'px'); }
+    main.style.gridTemplateAreas = `"${areas.join(' ')}"`;
+    main.style.gridTemplateColumns = cols.join(' ');
+    SPLITS.splitA = S.docks[left] ? { pane: left, sign: 1 } : null;
+    SPLITS.splitB = S.docks[right] ? { pane: right, sign: -1 } : null;
+    for (const id of ['splitA', 'splitB']) {
+      const el = $('#' + id), sp = SPLITS[id];
+      el.hidden = !sp || narrow();
+      if (!sp) continue;
+      el.style.gridArea = id;
+      const name = sp.pane === 'files' ? 'files' : 'timeline';
+      el.setAttribute('aria-label', `Resize the ${name} panel`);
+      el.setAttribute('aria-valuenow', String(w[sp.pane]));
+      el.setAttribute('aria-valuemin', String(MIN_W)); el.setAttribute('aria-valuemax', String(MAX_W));
     }
   }
   $('#tglFiles').setAttribute('aria-pressed', String(S.docks.files));
   $('#tglCues').setAttribute('aria-pressed', String(S.docks.cues));
   for (const b of $('#panesw').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.pane));
   $('#panesw').hidden = S.ended;
+}
+/* Which panel each divider resizes, and in which direction; set by layout(). */
+const SPLITS = { splitA: null, splitB: null };
+const MIN_W = 180, MAX_W = 620;
+function resize(id, delta) {
+  const sp = SPLITS[id]; if (!sp) return;
+  const w = S.widths[S.who];
+  w[sp.pane] = Math.round(Math.max(MIN_W, Math.min(MAX_W, w[sp.pane] + sp.sign * delta)));
+  layout();
+}
+for (const id of ['splitA', 'splitB']) {
+  const el = document.getElementById(id);
+  el.addEventListener('pointerdown', (e) => {
+    const sp = SPLITS[id]; if (!sp) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId); el.classList.add('dragging');
+    let x = e.clientX;
+    const move = (ev) => { resize(id, ev.clientX - x); x = ev.clientX; };
+    const up = () => { el.classList.remove('dragging'); el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  });
+  el.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 64 : 16;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); resize(id, -step); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); resize(id, step); }
+  });
+  // A double click puts the panel back at its usual width.
+  el.addEventListener('dblclick', () => { const sp = SPLITS[id]; if (!sp) return; S.widths[S.who][sp.pane] = { files: 230, cues: S.who === 'po' ? 400 : 340 }[sp.pane]; layout(); });
 }
 function showPane(p) { S.pane = p; if (!narrow() && p !== 'work') S.docks[p] = true; layout(); }
 
