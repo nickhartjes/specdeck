@@ -9,11 +9,11 @@ Two clickable designs, both with the same features. Open them in a browser.
   - one highly legible type family;
   - the timeline as a cue rail.
 
-  It departs from the layout choices in places: the layout follows the person, and it has no layout presets. Its panels can be resized, per person. It is ahead of the mockup with the braindump, files for the project and the Markdown source view.
+  It departs from the layout choices in places: the layout follows the person, and it has no layout presets. Its panels can be resized, per person. It is ahead of the mockup with the braindump, files for the project, the Markdown source view, shared links, Claude's browser and the host's app.
 
 Which look, and which of the concept's ideas, to take is still open.
 
-The details below describe `workspace-mockup.html`, except the braindump, files for the project and the Markdown source view, which are so far only in the concept. Both are clickable sketches; the mockup is one with made-up data, and it is not the app. Nothing in it is decided until a change is proposed for it (`/opsx:propose`), and the OpenSpec specs then describe the behaviour. This file lists what the mockup shows, which issue each part belongs to, and what is still open.
+The details below describe `workspace-mockup.html`, except the braindump, files for the project, the Markdown source view, shared links, Claude's browser and the host's app, which are so far only in the concept. Both are clickable sketches; the mockup is one with made-up data, and it is not the app. Nothing in it is decided until a change is proposed for it (`/opsx:propose`), and the OpenSpec specs then describe the behaviour. This file lists what the mockup shows, which issue each part belongs to, and what is still open.
 
 ## Who uses the window
 
@@ -64,7 +64,9 @@ These came out of exploring the panels idea (the session that made the first ver
 | *Joined late*: a "so far" card, and earlier prompts folded to their outcome | #58 | Who writes the summary: the app from the timeline, or the agent? |
 | Notifications: pop-ups inside the window, and in the concept a bell with a list and switches for each kind | #59 | Which kinds are on by default? |
 | Light and dark: both designs have a light and a dark palette; the app gets a *Light / Dark / System* choice | #65 | The agent's colours are chosen for the host's terminal background: what a viewer with another theme sees. |
-| Not in the designs yet: a shared link (for example an Excalidraw room to draw together), Claude's browser screenshots in the timeline, and opening the host's dev server | #66, #67, #68 | Links that carry a key are left out of the recap; #68 only after a security review. |
+| *Shared* tab, *Links* (concept only): a link card that opens in your own browser; an Excalidraw room to draw together, *for this session only* because its link holds the key; `localhost` refused | #66 | Should every link with a `#` part default to *for this session only*? |
+| Timeline (concept only): Claude's browser steps, with a screenshot that opens as a tab; *Viewers see Claude's browser* in the sharing settings | #67 | Which browser tools first; is the image always in the hook payload? |
+| Bar and sharing settings (concept only): *Let viewers open localhost:5173*, a marker with *Stop*, *Open Nick's app* for viewers, each with their own page | #68 | The web viewer can't open a local port; only after a security review. |
 | *End the session*: the recap with prompts and outcomes, plans and documents, decisions and changed files, and *Save recap* | #57 | Who may keep what; where it is saved. |
 
 #51 is the channel from viewers to the host that #52, #53, #54, #61, #62 and #64 need (and #66 when viewers share links), with the host in control. #60 is a bug (a rare crash in the WebRTC library on macOS) that is best fixed before the larger work.

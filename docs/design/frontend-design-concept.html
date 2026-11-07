@@ -196,6 +196,33 @@ svg { flex: none; }
 .drop.over { border-color: var(--accent); background: var(--accent-wash); }
 .drop input[type="file"] { max-width: 100%; }
 .pop .err { color: var(--attn); }
+/* Links, Claude's browser and the host's app */
+.step.k-web::before { border-radius: 3px; border-color: var(--p-mo); background: var(--sheet); }
+.thumb { display: block; width: 132px; margin-top: 5px; border: 1px solid var(--rule-strong); border-radius: 4px; overflow: hidden; background: var(--sheet-2); }
+.thumb .tb { display: block; height: 7px; background: var(--rule); }
+.thumb .tp { display: inline-block; margin: 6px 6px 4px; padding: 1px 5px; border-radius: 999px; border: 1px solid var(--attn); color: var(--attn); font-size: 8px; }
+.thumb i { display: block; height: 9px; margin: 3px 6px; background: var(--rule); border-radius: 2px; }
+.step .lbl .muted { display: block; color: var(--ink-3); font-size: 11.5px; }
+.browser { margin: 22px 28px; max-width: 640px; border: 1px solid var(--rule-strong); border-radius: 8px; overflow: hidden; background: var(--sheet); }
+.browser .url { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--sheet-2); border-bottom: 1px solid var(--rule); font: 12px var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.browser .url::before { content: ""; width: 34px; height: 8px; flex: none; background: radial-gradient(circle, var(--rule-strong) 3px, transparent 3.5px) 0 0 / 12px 8px repeat-x; }
+.browser .page { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.browser .page .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.browser .page i { display: block; height: 14px; background: var(--rule); border-radius: 3px; }
+.browser .page i.l { height: 90px; }
+.apppill { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--ready); color: var(--ready); font-size: 12px; }
+.apppill.down { border-color: var(--attn); color: var(--attn); }
+.under { margin: -10px 28px 22px; max-width: 640px; color: var(--ink-2); font-size: 12px; }
+.linkcard { margin: 22px 28px; max-width: 560px; border: 1px solid var(--rule-strong); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px; background: var(--sheet-2); }
+.linkcard .site { font-size: 16px; font-weight: 700; }
+.linkcard .addr { font: 12px var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.linkcard p { margin: 0; max-width: 60ch; }
+.linkcard .secret { display: flex; gap: 6px; align-items: flex-start; color: var(--accent); font-size: 12.5px; }
+.portbar { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.portbar .tag.open { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+.pop input.txt { padding: 5px 7px; border: 1px solid var(--rule-strong); border-radius: 5px; background: var(--sheet); }
+.pop .portrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.pop .portrow input[type="number"] { width: 7ch; }
 .upimg { margin: 22px 28px; max-width: min(560px, calc(100% - 56px)); border: 1px solid var(--rule); border-radius: 6px; }
 
 /* Work area tabs and editor */
@@ -374,9 +401,9 @@ button.step:hover { background: var(--hover); }
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,500;0,700;1,400&display=swap">
-
 </head>
 <body>
+
 <div class="shell">
   <div class="demo" aria-label="Concept controls">
     <div class="grp"><span>Viewing as</span>
@@ -390,6 +417,8 @@ button.step:hover { background: var(--hover); }
       <button type="button" class="linkish" id="simAsk">Claude asks Nick a question</button>
       <button type="button" class="linkish" id="simSuggest">Sanne suggests a prompt</button>
       <button type="button" class="linkish" id="simLate" aria-pressed="false">Join 40 minutes late</button>
+      <button type="button" class="linkish" id="simLink">Nick shares an Excalidraw room</button>
+      <button type="button" class="linkish" id="simPort">Nick opens the app to viewers</button>
       <button type="button" class="linkish" id="simEnd">End the session</button>
     </div>
   </div>
@@ -399,6 +428,7 @@ button.step:hover { background: var(--hover); }
       <span class="lamp" id="lamp" aria-hidden="true"></span>
       <div class="state"><b id="stateTitle">Working</b><span id="stateSub">specshare, hosted by you</span></div>
       <span class="tag" id="roTag" hidden>Watching, read-only</span>
+      <div class="portbar" id="portBar" hidden></div>
       <span class="spacer"></span>
       <div class="people hide-narrow" aria-label="In this session: Nick (host), Sanne and Mo"><span class="av">N</span><span class="av Sanne">S</span><span class="av Mo">M</span></div>
       <div id="hostActs" style="display:flex;gap:6px;flex-wrap:wrap">
@@ -469,6 +499,8 @@ const IC = {
   image: '<rect x="2" y="3" width="12" height="10" rx="1.2"/><circle cx="6" cy="6.5" r="1.2"/><path d="M2.5 12l3.5-3.5 2.5 2.5 2-2 3 3"/>',
   lock: '<rect x="3.5" y="7" width="9" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2"/>',
   check: '<path d="M3 8.5l3 3 7-7"/>',
+  link: '<path d="M6.5 9.5l3-3"/><path d="M7 4.5l1-1a2.5 2.5 0 013.5 3.5l-1 1M9 11.5l-1 1A2.5 2.5 0 014.5 9l1-1"/>',
+  globe: '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>',
 };
 const PEOPLE = { host: 'Nick', po: 'Sanne', dev: 'Mo' };
 const av = (name, cls = '') => h('span', { class: 'av ' + name + ' ' + cls, 'aria-hidden': 'true' }, name[0]);
@@ -559,6 +591,10 @@ const SHARED = [
     '{', '  "host": "laptop-sleep",', '  "events": [', '    { "at_ms": 0, "type": "heartbeat" },', '    { "at_ms": 3000, "type": "heartbeat" },', '    { "at_ms": 31000, "type": "ice_failed" }', '  ]', '}',
   ]},
 ];
+const LINKS = [
+  { id: 'link:1', title: 'Staging: the viewer with the new pill', url: 'https://staging.specdeck.dev/s/demo', by: 'Mo', when: '6 min ago', secret: false },
+];
+const EXCALIDRAW = 'https://excalidraw.com/#room=5c1e2a9b7d40f3a1e8c6,Q3h9vX2mL0pR7tY4wB8nKs';
 const FOLDERS = [
   ['braindump', 'Braindump for Claude', 'Notes and files from everyone. Nick gives them to Claude together, as one folder.'],
   ['everyone', 'Shared with everyone', 'To look at together. Claude does not see these unless Nick puts one in the session folder.'],
@@ -586,6 +622,8 @@ const TERM = [
   ['', '⏺ Bash(cargo test -p specdeck-core heartbeat)', 'b1'], ['dim', '  ⎿  running 3 tests'],
   ['ok', '     test result: ok. 3 passed; 0 failed'],
   ['', '⏺ Update(app/ui/src/components/StatusBar.tsx)', 'e4'], ['add', '  ⎿  +1 -1'],
+  ['', '⏺ playwright - Navigate to a URL (url: "http://localhost:5173/s/demo?sleep=12")', 'p1'], ['dim', '  ⎿  Page title: SpecDeck viewer'],
+  ['', '⏺ playwright - Take a screenshot', 'p2'], ['dim', '  ⎿  [Image: 1280×800]'],
   ['', '⏺ Update(openspec/changes/viewer-heartbeat/tasks.md)', 'e5'], ['add', '  ⎿  +3 -3'],
   ['', ''],
 ];
@@ -602,6 +640,8 @@ const TIMELINE = [
     { k: 'edit', d: 'Updated <code>session.rs</code>', s: 'Made the host send it every 3 seconds', file: 'crates/core/src/session.rs', term: 'e3', p: 7, m: 1 },
     { k: 'run', d: 'Ran <code>cargo test -p specdeck-core heartbeat</code>', s: 'Ran the heartbeat tests: all 3 pass', term: 'b1' },
     { k: 'edit', d: 'Updated <code>StatusBar.tsx</code>', s: null, file: 'app/ui/src/components/StatusBar.tsx', term: 'e4', p: 1, m: 1 },
+    { k: 'web', d: 'Opened <code>localhost:5173/s/demo</code> in its browser', s: null, term: 'p1' },
+    { k: 'web', d: 'Took a screenshot of the viewer', s: 'Checked it in the browser: the viewer says Host unreachable', term: 'p2', shot: 'shot:1' },
     { k: 'edit', d: 'Updated <code>tasks.md</code>', s: 'Ticked off 3 of the 6 tasks', file: 'openspec/changes/viewer-heartbeat/tasks.md', term: 'e5', p: 3, m: 3 },
   ]},
 ];
@@ -614,13 +654,15 @@ const S = {
   widths: { host: { files: 230, cues: 340 }, dev: { files: 230, cues: 340 }, po: { files: 220, cues: 400 } },
   filesTab: 'code', cuesTab: 'timeline', detail: 'details', scope: 'touched',
   tabs: ['terminal'], active: 'terminal', views: {}, mdView: {}, cur: null, expanded: new Set(),
-  settings: { code: 'whole', suggest: true, shareFiles: true, recap: true },
+  settings: { code: 'whole', suggest: true, shareFiles: true, recap: true, shots: true },
+  // The host's app, opened to viewers on one port (#68). Each person's page has its own state.
+  port: { on: false, num: 5173 }, app: { host: false, po: false, dev: false },
   suggestions: [
     { id: 1, from: 'Sanne', text: 'Also show the host as unreachable in the people list, not only in the status pill.', status: 'pending', when: '2 min ago' },
     { id: 2, from: 'Mo', text: 'Add a test for a host that comes back after 9 seconds: the viewer should never show unreachable.', status: 'pending', when: 'just now' },
     { id: 3, from: 'Sanne', text: 'Write a short note in the docs on what viewers see when the host\'s laptop sleeps.', status: 'kept', when: '15 min ago' },
   ],
-  extra: [], termExtra: [], events: [], read: null, estimate: null, pop: null, editing: null, nextId: 10,
+  links: LINKS, extra: [], termExtra: [], events: [], read: null, estimate: null, pop: null, editing: null, nextId: 10,
   lastDeck: 'fibonacci', notes: [], notify: { waiting: true, request: true, suggestion: true, shared: false, ended: true },
 };
 const me = () => PEOPLE[S.who];
@@ -735,18 +777,32 @@ function renderChrome() {
   $('#simLate').textContent = S.late ? 'Back to joining on time' : 'Join 40 minutes late';
   $('#simEnd').textContent = S.ended ? 'Back to the live session' : 'End the session';
   for (const b of $('#whoPick').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.who));
+  $('#simLink').disabled = S.ended || S.links.some((l) => l.url === EXCALIDRAW);
+  $('#simPort').disabled = S.ended;
+  $('#simPort').textContent = S.port.on ? 'Nick closes the app' : 'Nick opens the app to viewers';
+  const pb = $('#portBar'); pb.replaceChildren(); pb.hidden = !S.port.on || S.ended;
+  if (S.port.on && !S.ended) {
+    if (host) pb.append(h('span', { class: 'tag open', title: 'Viewers can open this port on your computer' }, svg(IC.globe), ` Port ${S.port.num} open to viewers`),
+      h('button', { type: 'button', class: 'btn quiet small', onclick: () => openFile('app') }, 'Look'),
+      h('button', { type: 'button', class: 'btn danger small', onclick: () => setPort(false) }, 'Stop'));
+    else pb.append(h('button', { type: 'button', class: 'btn host small', onclick: () => openFile('app') }, svg(IC.globe), "Open Nick's app"));
+  }
 }
 
 /* ---------- Files pane ---------- */
 function renderFiles() {
   const tabs = $('#filesTabs'); tabs.replaceChildren();
-  for (const [id, label, n] of [['docs', 'Documents', Object.keys(FILES).filter(isDoc).length], ['code', 'Code', Object.keys(FILES).filter((p) => !isDoc(p)).length], ['shared', 'Shared', SHARED.length]]) {
+  for (const [id, label, n] of [['docs', 'Documents', Object.keys(FILES).filter(isDoc).length], ['code', 'Code', Object.keys(FILES).filter((p) => !isDoc(p)).length], ['shared', 'Shared', SHARED.length + S.links.length]]) {
     tabs.append(h('button', { type: 'button', class: 'ptab', role: 'tab', 'aria-selected': S.filesTab === id, onclick: () => { S.filesTab = id; renderFiles(); } }, label, h('span', { style: 'color:var(--ink-3);font-weight:400' }, String(n))));
   }
   const body = $('#filesBody'), foot = $('#filesFoot');
   body.replaceChildren(); foot.replaceChildren();
   const ul = h('ul', { class: 'flist' }); body.append(ul);
   if (S.filesTab === 'shared') {
+    ul.append(h('li', { class: 'dir fgrp' }, h('span', null, 'Links')));
+    ul.append(h('li', { class: 'grp-help' }, 'Opened in your own browser, with your own logins. SpecDeck only carries the link.'));
+    for (const l of S.links) ul.append(h('li', null, h('button', { type: 'button', class: 'fi', 'aria-current': S.active === l.id, onclick: () => openFile(l.id) },
+      svg(IC.link), h('span', { class: 'nm' }, l.title, h('span', { class: 'sub' }, `${l.by === me() ? 'You' : l.by}, ${l.when}, ${new URL(l.url).host}`), l.secret && h('span', { class: 'who-st' }, 'For this session only')))));
     for (const [key, title, help] of FOLDERS) {
       const items = SHARED.filter((f) => f.folder === key);
       const fresh = items.filter((f) => !f.given).length;
@@ -762,7 +818,7 @@ function renderFiles() {
       }
     }
     foot.append(S.settings.shareFiles || isHost()
-      ? h('button', { type: 'button', class: 'btn small', 'aria-haspopup': 'dialog', id: 'addBtn', onclick: () => openPop('add') }, svg(IC.share), 'Add files or a note')
+      ? h('button', { type: 'button', class: 'btn small', 'aria-haspopup': 'dialog', id: 'addBtn', onclick: () => openPop('add') }, svg(IC.share), 'Add files, a note or a link')
       : h('span', null, 'Nick has turned off adding files.'));
     return;
   }
@@ -833,6 +889,76 @@ async function addUploads(files, dest, path, note) {
   renderAll();
   if (added[0]) openFile(added[0].id);
 }
+const isLocal = (u) => /^(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(u.hostname);
+const masked = (url) => { const i = url.indexOf('#'); return i < 0 ? url : url.slice(0, i) + '#room=5c1e…,••••••'; };
+function addLink(url, title, secret, by) {
+  const l = { id: `link:${S.nextId++}`, title: title || new URL(url).host, url, by, when: 'just now', secret };
+  S.links.push(l);
+  S.events.push({ title: `${by} shared a link:`, text: secret ? `${l.title}, for this session only.` : `${l.title}, ${new URL(url).host}.` });
+  notify('shared', `${by} shared a link`, `${l.title}. It opens in your own browser.`);
+  S.filesTab = 'shared';
+  renderAll();
+  openFile(l.id);
+}
+function renderLink(l) {
+  const box = h('div');
+  const mine = l.by === me() || isHost();
+  const draw = new URL(l.url).host === 'excalidraw.com';
+  const copy = h('button', { type: 'button', class: 'btn small', onclick: () => {
+    const ok = () => notify('shared', 'Link copied', l.secret ? 'It holds the room\'s key: share it only with people in this session.' : l.url);
+    try { navigator.clipboard.writeText(l.url).then(ok, () => notify('shared', 'Could not copy', 'Select the address and copy it yourself.')); } catch { notify('shared', 'Could not copy', 'Select the address and copy it yourself.'); }
+  } }, 'Copy link');
+  box.append(h('div', { class: 'filebar' }, h('span', { class: 'path' }, l.title), h('span', null, `From ${l.by === me() ? 'you' : l.by}, ${l.when}.`), h('span', { class: 'spacer' }),
+    h('button', { type: 'button', class: 'btn primary small', onclick: () => notify('shared', 'Opens in your browser', `${new URL(l.url).host}. In this concept nothing opens.`) }, 'Open in your browser'), copy));
+  box.append(h('div', { class: 'linkcard' },
+    h('span', { class: 'site' }, draw ? 'Excalidraw room' : new URL(l.url).host),
+    h('span', { class: 'addr' }, l.secret ? masked(l.url) : l.url),
+    draw ? h('p', null, 'Draw together: everyone who opens this link joins the same room and sees each other draw. Excalidraw encrypts the drawing end to end; SpecDeck only carried the link.')
+      : h('p', null, 'SpecDeck never loads the page itself. It opens in your own browser, so you see it with your own logins.'),
+    draw && h('p', null, 'When the drawing is done, export it and add it to the braindump, so Claude can use it.'),
+    draw && h('div', null, h('button', { type: 'button', class: 'btn small', 'aria-haspopup': 'dialog', id: 'drawAdd', onclick: () => openPop('add') }, svg(IC.share), 'Add the drawing to the braindump')),
+    l.secret && h('span', { class: 'secret' }, svg(IC.lock), h('span', null, 'For this session only. The part after # is the room\'s key, so the link is left out of the recap and exports.')),
+    mine && h('label', { class: 'chk', style: 'display:flex;gap:8px;font-size:12.5px;color:var(--ink-2)' }, h('input', { type: 'checkbox', checked: l.secret, onchange: (e) => { l.secret = e.target.checked; renderFiles(); renderEditor(); } }), 'For this session only: leave it out of the recap')));
+  return box;
+}
+
+/* ---------- Claude's browser (#67) and the host's app (#68) ---------- */
+function frame(url, ...page) { return h('div', { class: 'browser' }, h('div', { class: 'url' }, url), h('div', { class: 'page' }, ...page)); }
+function renderShot() {
+  const box = h('div');
+  box.append(h('div', { class: 'filebar' }, h('span', { class: 'path' }, "Screenshot from Claude's browser"), h('span', null, 'localhost:5173/s/demo on Nick\'s computer, taken with Playwright, 1280×800')));
+  if (!isHost() && !S.settings.shots) return box.append(h('div', { class: 'notice' }, svg(IC.lock), h('b', null, 'Screenshots are not shared'), h('span', null, 'Nick has turned off showing what Claude sees in its browser.'))), box;
+  box.append(frame('localhost:5173/s/demo?sleep=12',
+    h('div', { class: 'row' }, h('b', null, 'specshare'), h('span', { class: 'apppill down' }, 'Host unreachable, reconnecting'), h('span', { style: 'color:var(--ink-3);font-size:12px' }, 'for 12 s')),
+    h('i'), h('i', { class: 'l' }), h('i')));
+  box.append(h('p', { class: 'under' }, isHost() ? 'Viewers see what Claude saw. A screenshot can show more than the terminal, such as a page you are logged in to: turn them off in the sharing settings.' : 'What Claude saw when it checked the change. SpecDeck shows it; nothing was opened on your computer.'));
+  return box;
+}
+function renderApp() {
+  const box = h('div');
+  if (!S.port.on) return box.append(h('div', { class: 'notice' }, svg(IC.globe), h('b', null, isHost() ? 'The app is closed to viewers' : 'Nick closed the app'), h('span', null, isHost() ? 'Open a port in the sharing settings to let viewers use the app running on your computer.' : 'Nick can open it again. Until then this address leads nowhere.'))), box;
+  const addr = 'http://127.0.0.1:53017';
+  const down = S.app[S.who];
+  box.append(h('div', { class: 'filebar' }, h('span', { class: 'path' }, isHost() ? `localhost:${S.port.num}, as viewers see it` : "Nick's app"),
+    h('span', null, isHost() ? 'Viewers each get their own page, with their own cookies.' : `${addr} on your computer forwards to port ${S.port.num} on Nick's.`), h('span', { class: 'spacer' }),
+    !isHost() && h('button', { type: 'button', class: 'btn primary small', onclick: () => notify('shared', 'Opens in your browser', `${addr}. In this concept nothing opens.`) }, 'Open in your browser'),
+    isHost() && h('button', { type: 'button', class: 'btn danger small', onclick: () => setPort(false) }, 'Stop')));
+  box.append(frame((isHost() ? `localhost:${S.port.num}` : addr.slice(7)) + '/s/demo',
+    h('div', { class: 'row' }, h('b', null, 'specshare'), h('span', { class: 'apppill' + (down ? ' down' : '') }, down ? 'Host unreachable, reconnecting' : 'Working'), h('span', { class: 'spacer' }),
+      h('button', { type: 'button', class: 'btn small', onclick: () => { S.app[S.who] = !down; renderEditor(); } }, down ? 'Wake the host' : 'Make the host sleep')),
+    h('i'), h('i', { class: 'l' }), h('i')));
+  box.append(h('p', { class: 'under' }, isHost() ? `Only port ${S.port.num} on your own computer. Viewers can do anything in the app you can, including changing its local data. It closes when the session ends.` : 'Try it yourself: your clicks are yours, but what you change in its data changes Nick\'s local copy.'));
+  return box;
+}
+function setPort(on, num) {
+  if (num) S.port.num = num;
+  if (S.port.on === on) return;
+  S.port.on = on;
+  S.events.push(on ? { title: 'Opened the app to viewers:', text: `port ${S.port.num} on Nick's computer.` } : { title: 'Closed the app:', text: `port ${S.port.num} is no longer reachable.` });
+  if (on) notify('shared', isHost() ? `Port ${S.port.num} is open to viewers` : "Nick opened the app", isHost() ? 'A marker in the bar shows it, with Stop.' : "Open it from the bar at the top: Open Nick's app.");
+  renderAll(); renderEditor();
+}
+
 function giveBraindump(prompt) {
   const items = SHARED.filter((f) => f.folder === 'braindump' && !f.given);
   items.forEach((f) => { f.given = true; });
@@ -857,6 +983,10 @@ function closeTab(id) {
 }
 function tabLabel(id) {
   if (id === 'terminal') return isHost() ? 'Terminal' : 'Terminal, read-only';
+  if (id === 'app') return isHost() ? `Port ${S.port.num}` : "Nick's app";
+  if (id.startsWith('shot:')) return 'Screenshot';
+  const ln = S.links.find((l) => l.id === id);
+  if (ln) return ln.title;
   const sh = SHARED.find((f) => f.id === id);
   return sh ? sh.name : base(id);
 }
@@ -867,7 +997,7 @@ function renderTabs() {
     const ping = term && S.waiting && !on;
     bar.append(h('div', { class: 'wtab' + (on ? ' on' : '') + (term ? ' term' : '') },
       h('button', { type: 'button', role: 'tab', 'aria-selected': on, onclick: () => activate(id), 'aria-label': label + (ping ? ', Claude is waiting' : '') },
-        svg(term ? IC.term : id.startsWith('shared/') ? IC.share : isDoc(id) ? IC.doc : IC.file), label, ping && h('span', { class: 'ping', 'aria-hidden': 'true' })),
+        svg(term ? IC.term : id.startsWith('link:') ? IC.link : id === 'app' || id.startsWith('shot:') ? IC.globe : id.startsWith('shared/') ? IC.share : isDoc(id) ? IC.doc : IC.file), label, ping && h('span', { class: 'ping', 'aria-hidden': 'true' })),
       !term ? h('button', { type: 'button', class: 'x', 'aria-label': 'Close ' + label, onclick: () => closeTab(id) }, '×') : h('span', { style: 'width:6px' })));
   }
 }
@@ -880,6 +1010,10 @@ function renderEditor(focus) {
     else ed.scrollTop = ed.scrollHeight;
     return;
   }
+  if (S.active === 'app') return ed.append(renderApp());
+  if (S.active.startsWith('shot:')) return ed.append(renderShot());
+  const ln = S.links.find((l) => l.id === S.active);
+  if (ln) return ed.append(renderLink(ln));
   const sh = SHARED.find((f) => f.id === S.active);
   if (sh) return ed.append(renderShared(sh));
   const path = S.active, f = FILES[path];
@@ -1033,10 +1167,12 @@ function renderTimeline() {
       if (S.detail === 'summary' && s.s === null) return;
       const id = ti + '.' + si;
       const lbl = h('span', { class: 'lbl' }); lbl.innerHTML = S.detail === 'summary' ? s.s : s.d;
-      const target = s.file ? 'open' : noTerm ? null : 'terminal';
+      const hidden = s.shot && !isHost() && !S.settings.shots;
+      if (s.shot) lbl.append(hidden ? h('span', { class: 'muted' }, 'Screenshot not shared') : h('span', { class: 'thumb', 'aria-hidden': 'true' }, h('span', { class: 'tb' }), h('span', { class: 'tp' }, 'Host unreachable'), h('i'), h('i')));
+      const target = s.file || (s.shot && !hidden) ? 'open' : noTerm ? null : 'terminal';
       const kids = [lbl, s.p != null && S.detail === 'details' && h('span', { class: 'pm' }, h('span', { class: 'plus' }, '+' + s.p), ' ', h('span', { class: 'minus' }, '−' + s.m)), target && h('span', { class: 'go' }, target === 'open' ? 'Open' : 'Terminal')];
       body.append(target
-        ? h('button', { type: 'button', class: `step k-${s.k}` + (S.cur === id ? ' cur' : ''), onclick: () => { S.cur = id; renderCues(); if (s.file) openFile(s.file, true); else activate('terminal', s.term); } }, ...kids)
+        ? h('button', { type: 'button', class: `step k-${s.k}` + (S.cur === id ? ' cur' : ''), onclick: () => { S.cur = id; renderCues(); if (s.file) openFile(s.file, true); else if (target === 'open') openFile(s.shot); else activate('terminal', s.term); } }, ...kids)
         : h('div', { class: `step k-${s.k}` }, ...kids));
     });
     box.append(h('div', { class: 'cue' }, h('div', { class: 'cue-no', 'aria-label': 'Prompt ' + (ti + 1) }, String(ti + 1)), body));
@@ -1203,28 +1339,44 @@ function openPop(kind) {
     body = [ta, h('label', { class: 'f' }, 'Cards', deckSel), h('p', null, 'Everyone votes with cards, also ? and a break. Votes stay hidden until you reveal them.'),
       h('div', { class: 'end' }, cancel, h('button', { type: 'button', class: 'btn primary small', id: 'estGo', onclick: () => { S.lastDeck = deckSel.value; startEstimate(ta.value.trim() || 'This task', deckSel.value); closePop(); } }, 'Start voting'))];
   } else if (kind === 'add') {
-    title = 'Add files or a note';
+    title = 'Add files, a note or a link';
     const input = h('input', { type: 'file', id: 'upFiles', multiple: true, 'aria-label': 'Files to add' });
     const dest = h('select', { id: 'upDest' },
       h('option', { value: 'braindump' }, 'To the braindump for Claude'),
       h('option', { value: 'everyone' }, 'Share with everyone'),
+      h('option', { value: 'link' }, 'Share a link'),
       h('option', { value: 'project' }, host() ? 'Add to the project' : 'Add to the project, if Nick agrees'));
     const path = h('input', { type: 'text', id: 'upPath', placeholder: 'crates/core/tests/fixtures/', autocomplete: 'off', style: 'padding:5px 7px;border:1px solid var(--rule-strong);border-radius:5px;background:var(--sheet)' });
     const pathLabel = h('label', { class: 'f', hidden: true }, 'Where in the project (a folder, or a file name for one file)', path);
     const note = h('textarea', { id: 'upNote', rows: 3, placeholder: 'Or write a note: ideas, questions, what Claude should know.', 'aria-label': 'Note' });
     const help = h('p', null, 'Everyone adds to one folder. When it is complete, Nick gives the whole folder to Claude.');
     const err = h('p', { class: 'err', role: 'alert' });
+    const url = h('input', { type: 'url', id: 'upUrl', class: 'txt', placeholder: 'https://excalidraw.com/#room=…', autocomplete: 'off' });
+    const ltitle = h('input', { type: 'text', id: 'upTitle', class: 'txt', placeholder: 'What it is, for example: Drawing the reconnect flow', autocomplete: 'off' });
+    const secret = h('input', { type: 'checkbox', id: 'upSecret' });
+    url.addEventListener('input', () => { secret.checked = url.value.includes('#'); });
+    const linkBox = h('div', { hidden: true, style: 'display:flex;flex-direction:column;gap:8px' }, h('label', { class: 'f' }, 'Address', url), h('label', { class: 'f' }, 'Title', ltitle),
+      h('label', { class: 'chk' }, secret, h('span', null, 'For this session only', h('small', null, 'Left out of the recap and exports. On for links with a key after #, such as an Excalidraw room.'))));
     dest.addEventListener('change', () => {
       pathLabel.hidden = dest.value !== 'project';
-      note.hidden = dest.value === 'project';
-      help.textContent = { braindump: 'Everyone adds to one folder. When it is complete, Nick gives the whole folder to Claude.', everyone: 'For people to look at. Claude does not see it unless Nick puts it in the session folder.', project: host() ? 'The file goes into your copy of the project, where Claude can use it.' : 'For a file Nick does not have: a fixture, a log, a missing file. It goes into his copy of the code only when he agrees.' }[dest.value];
+      note.hidden = dest.value === 'project' || dest.value === 'link';
+      drop.hidden = dest.value === 'link';
+      linkBox.hidden = dest.value !== 'link';
+      err.textContent = '';
+      help.textContent = { braindump: 'Everyone adds to one folder. When it is complete, Nick gives the whole folder to Claude.', everyone: 'For people to look at. Claude does not see it unless Nick puts it in the session folder.', link: 'Everyone opens it in their own browser. To draw together, start a live collaboration room in Excalidraw and share its link.', project: host() ? 'The file goes into your copy of the project, where Claude can use it.' : 'For a file Nick does not have: a fixture, a log, a missing file. It goes into Nick\'s copy of the code only when Nick agrees.' }[dest.value];
     });
     const drop = h('div', { class: 'drop' }, input, h('span', { style: 'font-size:12px;color:var(--ink-2)' }, 'Or drop files here. Text and Markdown up to 200 KB are sent whole.'));
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer && e.dataTransfer.files.length) input.files = e.dataTransfer.files; });
-    body = [h('label', { class: 'f' }, 'Where it goes', dest), drop, pathLabel, note, help, err,
+    body = [h('label', { class: 'f' }, 'Where it goes', dest), drop, linkBox, pathLabel, note, help, err,
       h('div', { class: 'end' }, cancel, h('button', { type: 'button', class: 'btn primary small', id: 'upGo', onclick: async () => {
+        if (dest.value === 'link') {
+          let u; try { u = new URL(url.value.trim()); } catch { err.textContent = 'Paste a whole address, starting with https://.'; return; }
+          if (!/^https?:$/.test(u.protocol)) { err.textContent = 'Only web addresses, starting with https://.'; return; }
+          if (isLocal(u)) { err.textContent = host() ? 'Viewers can\'t reach your computer. Open the port to viewers in the sharing settings instead.' : 'That address is on your own computer, so nobody else can reach it.'; return; }
+          closePop(); addLink(u.href, ltitle.value.trim(), secret.checked, me()); return;
+        }
         const files = [...(input.files || [])];
         if (!files.length && !(dest.value !== 'project' && note.value.trim())) { err.textContent = dest.value === 'project' ? 'Choose a file to add to the project.' : 'Choose a file or write a note first.'; return; }
         closePop();
@@ -1248,6 +1400,11 @@ function openPop(kind) {
       chk('suggest', 'Viewers can suggest prompts', 'Nothing reaches Claude until you send it.'),
       chk('shareFiles', 'Viewers can add files and notes', 'To the braindump, to share, or offered for the project. You decide what goes into the project.'),
       chk('recap', 'Viewers can save a recap', 'Prompts, plans and decisions, after the session ends.'),
+      chk('shots', 'Viewers see Claude\'s browser', 'Screenshots Claude takes. They can show more than the terminal, such as a page you are logged in to.'),
+      (() => { const num = h('input', { type: 'number', id: 'portNum', class: 'txt', min: 1024, max: 65535, value: S.port.num, 'aria-label': 'Port' });
+        return h('fieldset', null, h('legend', null, 'The app on your computer'),
+          h('div', { class: 'portrow' }, h('input', { type: 'checkbox', id: 'portOn', checked: S.port.on, style: 'accent-color:var(--accent)', onchange: (e) => setPort(e.target.checked, Number(num.value) || 5173) }), h('label', { for: 'portOn' }, 'Let viewers open localhost:'), num),
+          h('p', null, 'Only this port, only while the session runs. Viewers can do anything in the app you can, including changing its local data. Your own cookies are never sent.')); })(),
       h('p', null, 'Private files, such as .env, are never shared.'),
       h('div', { class: 'end' }, h('button', { type: 'button', class: 'btn primary small', onclick: closePop }, 'Done'))];
   } else if (kind === 'end') {
@@ -1282,6 +1439,10 @@ function renderRecap() {
     h('ul', null, h('li', null, 'Viewer heartbeat, ', h('code', null, 'design.md'), h('small', null, 'A heartbeat every 3 seconds. Unreachable after three missed.')),
       h('li', null, h('code', null, 'tasks.md'), h('small', null, '3 of 6 tasks done')),
       ...SHARED.filter((f) => f.kind === 'md').map((f) => h('li', null, h('code', null, f.name), h('small', null, `Shared by ${f.by}`)))),
+    h('h2', null, 'Links and screenshots'),
+    h('ul', null, ...S.links.filter((l) => !l.secret).map((l) => h('li', null, l.title, h('small', null, `${l.url}, shared by ${l.by}`))),
+      (isHost() || S.settings.shots) && h('li', null, "Claude's browser: the viewer saying Host unreachable", h('small', null, '1 screenshot, localhost:5173/s/demo')),
+      S.links.some((l) => l.secret) && h('li', null, `${S.links.filter((l) => l.secret).length} link for this session only`, h('small', null, 'Left out, because it holds a key.'))),
     S.events.length > 0 && h('h2', null, 'Decisions'),
     S.events.length > 0 && h('ul', null, ...S.events.map((e) => h('li', null, e.title + ' ' + e.text))),
     h('h2', null, 'Files changed'),
@@ -1292,6 +1453,7 @@ function renderRecap() {
 }
 function setEnded(on) {
   S.ended = on; S.read = null; S.estimate = null; S.waiting = false;
+  if (on && S.port.on) { S.port.on = false; S.events.push({ title: 'Closed the app:', text: 'the session ended.' }); }
   if (on) notify('ended', 'The session has ended', isHost() || S.settings.recap ? 'The recap is ready to save.' : 'Nick did not allow saving a recap.');
   renderAll(); renderEditor();
 }
@@ -1331,6 +1493,8 @@ $('#simSuggest').onclick = () => {
 };
 $('#simLate').onclick = () => { S.late = !S.late; S.expanded.clear(); renderChrome(); renderCues(); if (S.late && narrow()) showPane('cues'); };
 $('#simEnd').onclick = () => setEnded(!S.ended);
+$('#simLink').onclick = () => addLink(EXCALIDRAW, 'Excalidraw: the reconnect flow', true, 'Nick');
+$('#simPort').onclick = () => setPort(!S.port.on);
 addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.pop) closePop(); });
 document.addEventListener('click', (e) => { if (S.pop && !e.target.closest('#pop') && !e.target.closest('[aria-haspopup]')) closePop(); });
 window.matchMedia('(max-width: 760px)').addEventListener?.('change', () => layout());
