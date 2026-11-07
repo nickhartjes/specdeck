@@ -11,4 +11,4 @@
 
 ## 3. Check
 
-- [ ] 3.1 On the next Renovate pull request that changes npm dependencies (or by re-running the workflow on an open one), verify the hash commit is pushed, CI and Nix appear on the pull request for that commit without approval, they run once, and the workflow does not start itself again
+- [x] 3.1 On the next Renovate pull request that changes npm dependencies (or by re-running the workflow on an open one), verify the hash commit is pushed, CI and Nix appear on the pull request for that commit without approval, they run once, and the workflow does not start itself again
