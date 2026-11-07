@@ -24,6 +24,10 @@ A code typed on its own always uses your own sharing service. If the host uses a
 
 SpecDeck 1.0 cannot open links from newer versions. Paste the link into **Join a session**, or [update](/specdeck/install/#update). Pasting a link always works, also when your system does not open `specdeck://` links.
 
+## A session says "Started by an older SpecDeck"
+
+Sessions you host keep running through an update in the version that started them. SpecDeck shows and controls sessions started by the version before it. A session started by an even older version, for example when you updated twice while it ran, has no window: it is listed in the menu-bar or tray menu with **End Session…** only. Its viewers stay connected until you end it there or quit SpecDeck.
+
 ## Sharing is unavailable
 
 When the host sees a banner that sharing is unavailable, SpecDeck cannot reach its sharing service. The session keeps running on the host's computer, and the invite code appears as soon as the service is back. If it does not come back, check the address in [Settings](/specdeck/guide/settings/#sharing-service).
@@ -54,7 +58,7 @@ As a viewer, **Reconnect** drops the connection and connects again at once. You 
 
 - the SpecDeck version, your operating system, and whether you use the default sharing service or one of your own (not its address);
 - what the panel shows right now;
-- the diagnostic log of the last 7 days: when connections started and ended and why, sizes and timings, and whether they were direct or relayed.
+- the diagnostic log of the last 7 days: when connections started and ended and why, sizes and timings, and whether they were direct or relayed. This includes the log of each session you hosted, also ones that have ended.
 
 It never holds terminal output, the timeline, what the agent was asked or did, invite codes, names, file paths or network addresses. SpecDeck sends it nowhere: attach it to your bug report yourself.
 
@@ -62,7 +66,7 @@ If the window stops responding, so the panel does not open, choose **Help › Ex
 
 ### The log
 
-SpecDeck keeps this log all the time, a few lines a minute. Files older than 7 days are removed, and the oldest go first when the logs together pass 50 MB. Only your user account can read the folder:
+SpecDeck keeps this log all the time, a few lines a minute: `specdeck.log.<date>` for the app, and `specdeck-session-<number>.log.<date>` for each session you host, which [runs on its own](/specdeck/guide/host/#when-specdeck-restarts-or-stops). Files older than 7 days are removed, and the oldest go first when the logs together pass 50 MB. Only your user account can read the folder:
 
 | System | Folder |
 |---|---|

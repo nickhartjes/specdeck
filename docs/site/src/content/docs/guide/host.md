@@ -63,6 +63,18 @@ If you set up your own Claude Code status line, it keeps showing in the terminal
 
 Quitting SpecDeck (**⌘Q** on macOS, **File › Quit** elsewhere) while you host asks first, because it ends the session for everyone. With several sessions open, it asks once for all of them.
 
+## When SpecDeck restarts or stops
+
+From SpecDeck 1.7.0, each session you host runs on its own, apart from the app. It keeps running, with the agent working and your viewers connected, when SpecDeck:
+
+- restarts to install an update (**Restart to update**, see [Update](/specdeck/install/#update)),
+- crashes, or
+- is force quit, for example from Activity Monitor or Task Manager.
+
+Your viewers notice nothing. Start SpecDeck again and it opens a window for each session, with the whole terminal and timeline so far and the same invite code.
+
+If SpecDeck is not started again within **10 minutes**, the session ends itself as if you had ended it: the agent stops, viewers see that the session ended, and the invite code stops working. Quitting SpecDeck still ends every session you host, after asking, and so does logging out or shutting down your computer.
+
 ## When sharing is unavailable
 
 If SpecDeck's sharing service cannot be reached, the session still runs on your computer. A banner says that sharing is unavailable, and the invite code appears as soon as the service is back.

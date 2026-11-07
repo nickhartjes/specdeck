@@ -66,7 +66,7 @@ Then start SpecDeck with `specdeck`, or from the application menu. `specdeck` ke
 
 ## Update
 
-From version 1.2.0, SpecDeck updates itself when it was installed from the `.dmg`, with Homebrew, with the Windows installer, or as the AppImage. It checks for a new release when it starts and every 6 hours, downloads it in the background, and then shows **SpecDeck 1.2.1 is ready** (with the new version) and **Restart to update**. Nothing is installed until you choose that, and SpecDeck never restarts by itself. While you host or watch a session, it asks first: restarting ends your hosted session for everyone, or leaves the one you watch.
+From version 1.2.0, SpecDeck updates itself when it was installed from the `.dmg`, with Homebrew, with the Windows installer, or as the AppImage. It checks for a new release when it starts and every 6 hours, downloads it in the background, and then shows **SpecDeck 1.2.1 is ready** (with the new version) and **Restart to update**. Nothing is installed until you choose that, and SpecDeck never restarts by itself. Sessions you host [keep running through the restart](/specdeck/guide/host/#when-specdeck-restarts-or-stops), with your viewers connected, and open again in their windows afterwards; versions before 1.7.0 end them. While you watch a session, SpecDeck asks first, because restarting leaves it; you can join again with the invite code.
 
 - **Check now**: **SpecDeck › Check for Updates…** on macOS, **Help › Check for Updates…** on Windows and Linux.
 - **Turn the background checks off**: **Check for updates automatically** in [Settings](/specdeck/guide/settings/). Check for Updates… still works.
