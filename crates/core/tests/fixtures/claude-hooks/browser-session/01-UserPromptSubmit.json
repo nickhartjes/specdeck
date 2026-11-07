@@ -1,0 +1,9 @@
+{
+  "cwd": "/workspace/project",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt": "Do these steps in order, then say in one sentence what each screenshot shows. 1. Open http://localhost:5173/login with the specdeck browser. 2. Take a screenshot with the specdeck browser. 3. Open http://127.0.0.1:5179/ with the playwright browser. 4. Take a screenshot with the playwright browser.",
+  "prompt_id": "39e0c42e-6b7e-430d-b341-2bd473a97e8b",
+  "session_id": "4b600686-8a82-49ba-b59b-f2e496928a8f",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/4b600686-8a82-49ba-b59b-f2e496928a8f.jsonl"
+}

@@ -57,6 +57,7 @@ export const demoProfile: Profile = {
   appearance: 'system',
   verboseLogging: false,
   browser: true,
+  screenshots: true,
 };
 
 export const demoParticipants: Participant[] = [
@@ -334,6 +335,7 @@ export function demoBridge(screen: string): Bridge {
       return { ...profile, appearance };
     },
     onAppearance: () => () => {},
+    setScreenshots: async (screenshots) => ({ ...profile, screenshots }),
     // The start screen shows an update that is ready to install.
     updateStatus: async () => (screen === 'start' ? { state: 'ready', version: '1.2.1' } : { state: 'idle' }),
     onUpdate: () => () => {},

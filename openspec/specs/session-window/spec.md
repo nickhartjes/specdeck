@@ -62,7 +62,7 @@ A participant SHALL resize a side panel by dragging the divider next to it, or w
 - **THEN** the panel returns to the preset's usual width
 
 ### Requirement: Tabs in the middle
-The tab area SHALL show the terminal and the documents, diffs and files a participant opens, each as a tab. Every tab except the terminal tab SHALL close with its close button, and a tab SHALL be selectable with the keyboard.
+The tab area SHALL show the terminal and the documents, diffs, files and screenshots a participant opens, each as a tab. Every tab except the terminal tab SHALL close with its close button, and a tab SHALL be selectable with the keyboard.
 
 #### Scenario: Open a document beside the terminal
 - **WHEN** a viewer opens `design.md` from the files panel
@@ -88,7 +88,7 @@ A single click on a file SHALL open it in a preview tab, marked as a preview, wh
 - **THEN** it says that it is a preview, which the next file opened replaces, and that a double click keeps it
 
 ### Requirement: Timeline steps open tabs
-Selecting a timeline step that changed a file SHALL open that file's diffs in a tab, scrolled to the change and with the change highlighted. Selecting a step without a file to show SHALL show the terminal tab, scrolled to the step's line and with the line highlighted.
+Selecting a timeline step that changed a file SHALL open that file's diffs in a tab, scrolled to the change and with the change highlighted. Selecting a screenshot's thumbnail SHALL open the screenshot full size in a tab, named after the page's address when known. Selecting a step without a file or screenshot to show SHALL show the terminal tab, scrolled to the step's line and with the line highlighted.
 
 #### Scenario: Step that changed a file
 - **WHEN** a developer selects the step "Update message.rs"
@@ -97,6 +97,10 @@ Selecting a timeline step that changed a file SHALL open that file's diffs in a 
 #### Scenario: Step that ran a command
 - **WHEN** a developer selects the step that ran `cargo test`
 - **THEN** the terminal tab is shown at the line of that command, highlighted for a moment
+
+#### Scenario: Screenshot thumbnail
+- **WHEN** a product owner selects the thumbnail of a screenshot of `localhost:5173/login`
+- **THEN** a tab named `localhost:5173/login` opens with the screenshot at full size, as a preview tab
 
 ### Requirement: Files the agent touched
 The files panel SHALL list the files the agent created, changed or read in the session, in two lists: Documents (Markdown) and Code. Each file SHALL show whether it was created, changed or only read. Opening a changed or created code file SHALL show its diffs, opening a document SHALL show it formatted, and opening a file the agent only read SHALL show the terminal at the line where it was read.

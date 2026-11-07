@@ -85,6 +85,19 @@ describe('browser setting', () => {
   });
 });
 
+describe('screenshots setting', () => {
+  it('is on by default on every platform and turns off at once', async () => {
+    const bridge = fakeBridge('start', { getProfile: async () => ({ ...demoProfile, platform: 'windows' }) });
+    renderWith(bridge, <SettingsScreen />);
+    const toggle = await screen.findByRole('checkbox', { name: 'Screenshots' });
+    expect(toggle).toBeChecked();
+    expect(toggle).toHaveAccessibleDescription(/Viewers see them too/);
+    await userEvent.click(toggle);
+    expect(bridge.setScreenshots).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+  });
+});
+
 describe('update setting', () => {
   it('is on by default and turns off at once', async () => {
     const bridge = fakeBridge();

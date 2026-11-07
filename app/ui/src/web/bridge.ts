@@ -114,6 +114,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     verboseLogging: false,
     browser: false,
     appearance,
+    screenshots: false,
   });
 
   const readJoinLink = (link: string): JoinLink => {
@@ -150,6 +151,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       appearanceHandlers.add(handler);
       return () => void appearanceHandlers.delete(handler);
     },
+    setScreenshots: () => Promise.resolve(profile()),
     updateStatus: () => Promise.resolve({ state: 'disabled' }),
     onUpdate: () => () => {},
     restartToUpdate: notInTheWebViewer,

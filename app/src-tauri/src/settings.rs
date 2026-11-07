@@ -44,6 +44,8 @@ pub struct Settings {
     pub verbose_logging: bool,
     /// New Claude Code sessions get SpecDeck's own browser (`agent-browser`); only on macOS.
     pub browser: bool,
+    /// New sessions keep images from MCP tools, such as screenshots, in the timeline.
+    pub screenshots: bool,
     /// Light, dark or the OS's appearance; the terminal stays dark in each.
     pub appearance: Appearance,
 }
@@ -105,6 +107,7 @@ impl Default for Settings {
             verbose_logging: false,
             browser: true,
             appearance: Appearance::System,
+            screenshots: true,
         }
     }
 }
@@ -212,6 +215,18 @@ mod tests {
         let settings = Settings { browser: false, ..Settings::load(&path) };
         settings.save(&path).unwrap();
         assert!(!Settings::load(&path).browser);
+    }
+
+    #[test]
+    fn screenshots_are_shown_until_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Settings saved before screenshots existed still load, with them on.
+        std::fs::write(&path, r#"{"username":"nick","browser":false}"#).unwrap();
+        assert!(Settings::load(&path).screenshots);
+        let settings = Settings { screenshots: false, ..Settings::load(&path) };
+        settings.save(&path).unwrap();
+        assert!(!Settings::load(&path).screenshots);
     }
 
     #[test]

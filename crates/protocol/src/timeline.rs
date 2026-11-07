@@ -66,6 +66,13 @@ fn shrink(entry: &mut Entry, allowed: usize) {
             }
         }
         Entry::ToolResult { error, outcome, .. } => {
+            // The image goes first: it is most of the entry, and the error says what went wrong.
+            if let Some(ToolOutcome::Screenshot { image, left_out, .. }) = outcome
+                && image.take().is_some()
+            {
+                *left_out = Some(LeftOut::TooLarge);
+                return;
+            }
             if let Some(error) = error {
                 cut(error, allowed / 2);
             }
@@ -342,6 +349,39 @@ pub enum ToolOutcome {
     PlanDecision { approved: bool },
     /// What a helper reported back; cut to its start when it was too large to send.
     Report { text: String, truncated: bool },
+    /// An image an MCP tool returned, such as a browser's screenshot.
+    Screenshot {
+        /// `None` when it was left out, and `left_out` says why.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image: Option<Image>,
+        /// The page shown, without its scheme; only from SpecDeck's own browser.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        left_out: Option<LeftOut>,
+    },
+}
+
+/// An image as it is sent: base64 data of `media_type`, `width` by `height` pixels.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Image {
+    pub media_type: String,
+    pub data: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Why a screenshot's image was left out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LeftOut {
+    /// The host turned screenshots off for the session.
+    TurnedOff,
+    /// Too large to send, even made smaller.
+    TooLarge,
+    /// Not an image that could be read.
+    Unreadable,
 }
 
 /// The host's answer to one question; empty when they did not answer.
@@ -690,6 +730,81 @@ mod tests {
             let len = serde_json::to_vec(&fitted).unwrap().len();
             assert!(len <= MAX_EVENT_JSON_BYTES, "{} bytes: {:?}", len, fitted.entry);
         }
+    }
+
+    fn screenshot(data: &str) -> ToolOutcome {
+        ToolOutcome::Screenshot {
+            image: Some(Image {
+                media_type: "image/jpeg".into(),
+                data: data.into(),
+                width: 1280,
+                height: 800,
+            }),
+            address: Some("localhost:5173/login".into()),
+            left_out: None,
+        }
+    }
+
+    #[test]
+    fn screenshots_round_trip() {
+        let outcome = screenshot("/9j/4AAQ");
+        let json = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "screenshot",
+                "image": { "mediaType": "image/jpeg", "data": "/9j/4AAQ", "width": 1280, "height": 800 },
+                "address": "localhost:5173/login"
+            })
+        );
+        assert_eq!(serde_json::from_value::<ToolOutcome>(json).unwrap(), outcome);
+        let left_out = ToolOutcome::Screenshot {
+            image: None,
+            address: None,
+            left_out: Some(LeftOut::TurnedOff),
+        };
+        let json = serde_json::to_value(&left_out).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "screenshot", "leftOut": "turned-off" }));
+        assert_eq!(serde_json::from_value::<ToolOutcome>(json).unwrap(), left_out);
+    }
+
+    #[test]
+    fn a_screenshot_is_left_out_before_the_error_is_cut() {
+        let error = "e".repeat(100 * 1024);
+        let entry = Entry::ToolResult {
+            prompt_id: "p".into(),
+            tool_use_id: "t".into(),
+            status: ToolStatus::Failed,
+            error: Some(error.clone()),
+            outcome: Some(screenshot(&"A".repeat(200 * 1024))),
+            permission: None,
+        };
+        let fitted = fit(event(entry), MAX_EVENT_JSON_BYTES);
+        assert!(fitted.truncated);
+        assert!(serde_json::to_vec(&fitted).unwrap().len() <= MAX_EVENT_JSON_BYTES);
+        let Entry::ToolResult { error: Some(kept), outcome, .. } = fitted.entry else { panic!() };
+        assert_eq!(kept, error);
+        assert_eq!(
+            outcome,
+            Some(ToolOutcome::Screenshot {
+                image: None,
+                address: Some("localhost:5173/login".into()),
+                left_out: Some(LeftOut::TooLarge),
+            })
+        );
+    }
+
+    #[test]
+    fn an_outcome_of_a_later_kind_reads_as_none() {
+        // As an app without screenshots reads one: the result itself still decodes.
+        let json = serde_json::json!({
+            "outputSeq": 1, "at": 2, "kind": "tool-result", "promptId": "p", "toolUseId": "t",
+            "status": "succeeded", "outcome": { "kind": "later-kind", "image": { "data": "x" } }
+        });
+        let event: TimelineEvent = serde_json::from_value(json).unwrap();
+        let Entry::ToolResult { status, outcome, .. } = event.entry else { panic!() };
+        assert_eq!(status, ToolStatus::Succeeded);
+        assert_eq!(outcome, None);
     }
 
     #[test]

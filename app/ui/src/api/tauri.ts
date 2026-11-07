@@ -45,6 +45,7 @@ export const tauriBridge: Bridge = {
     const stop = getCurrentWebviewWindow().listen<Appearance>('appearance', (event) => handler(event.payload));
     return () => void stop.then((unlisten) => unlisten());
   },
+  setScreenshots: (enabled) => invoke<Profile>('set_screenshots', { enabled }),
   updateStatus: () => invoke<UpdateState>('update_status'),
   onUpdate: (handler) => {
     const stop = listen<UpdateState>('update-changed', (event) => handler(event.payload));

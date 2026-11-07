@@ -443,3 +443,30 @@ describe('following the output', () => {
     expect(screen.queryByRole('button', { name: /Jump to live/ })).not.toBeInTheDocument();
   });
 });
+
+describe('screenshot tabs', () => {
+  const shot: TimelineEvent[] = [
+    { ...at(1), kind: 'prompt', promptId: 'p', text: 'Check the login page' },
+    { ...at(2), kind: 'tool-call', promptId: 'p', toolUseId: 'shot', toolName: 'mcp__specdeck__screenshot', input: {} },
+    {
+      ...at(3),
+      kind: 'tool-result',
+      promptId: 'p',
+      toolUseId: 'shot',
+      status: 'succeeded',
+      outcome: { kind: 'screenshot', image: { mediaType: 'image/png', data: 'iVBORw0K', width: 1280, height: 800 }, address: 'localhost:5173/login' },
+    },
+  ];
+
+  for (const preset of ['developer', 'overview'] as const) {
+    it(`opens a thumbnail full size in a tab, in ${preset === 'overview' ? 'Overview, without a terminal' : 'Developer'}`, async () => {
+      renderWorkspace({ timeline: shot, layout: choose(preset) });
+      await userEvent.click(screen.getByRole('button', { name: 'Screenshot of localhost:5173/login' }));
+      expect(tabNames()).toContain('localhost:5173/login, preview');
+      const tab = screen.getByRole('tabpanel', { name: 'localhost:5173/login' });
+      const picture = within(tab).getByRole('img', { name: 'Screenshot of localhost:5173/login' });
+      expect(picture).toHaveAttribute('width', '1280');
+    });
+  }
+});
+

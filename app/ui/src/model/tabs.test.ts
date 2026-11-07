@@ -59,3 +59,20 @@ describe('tabs', () => {
     expect(tabs.active).toBe('document:design.md');
   });
 });
+
+describe('screenshot tabs', () => {
+  it('opens a screenshot by its tool call, named after its page, as a preview', () => {
+    const tabs = openTab(noTabs(false), 'image', 'toolu_1', { title: 'localhost:5173/login' });
+    expect(tabs.list).toEqual([{ id: 'image:toolu_1', kind: 'image', path: 'toolu_1', title: 'localhost:5173/login', preview: true, focus: undefined }]);
+    expect(tabs.active).toBe('image:toolu_1');
+  });
+
+  it('replaces a preview document like any file, and keeps the screenshot when asked', () => {
+    let tabs = openTab(noTabs(true), 'document', 'design.md');
+    tabs = openTab(tabs, 'image', 'toolu_1', { title: 'Screenshot' });
+    expect(ids(tabs)).toEqual([TERMINAL, 'image:toolu_1']);
+    tabs = openTab(tabs, 'image', 'toolu_1', { keep: true });
+    expect(tabs.list[1]!.preview).toBe(false);
+    expect(tabs.list[1]!.title).toBe('Screenshot');
+  });
+});

@@ -244,6 +244,7 @@ pub struct StartOptions {
     pub peer: PeerConfig,
     /// Runs the agent's browser actions (`agent-browser`); `None` gives the agent no browser.
     pub browser: Option<BrowserHandler>,
+    pub screenshots: bool,
 }
 
 impl HostRuntime {
@@ -258,6 +259,7 @@ impl HostRuntime {
             cols: options.cols,
             rows: options.rows,
             data_dir: options.data_dir,
+            screenshots: options.screenshots,
         };
         let (session, mut session_events) =
             HostSession::start_with_browser(config, env, options.browser)

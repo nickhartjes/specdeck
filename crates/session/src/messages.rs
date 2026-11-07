@@ -12,6 +12,10 @@ use specdeck_protocol::AgentId;
 use crate::runtime::HostNotice;
 
 /// From the app.
+fn on() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum Command {
@@ -32,6 +36,10 @@ pub enum Command {
         /// decision 3); without it the session never sends [`Event::Browser`].
         #[serde(default)]
         browser: bool,
+        /// Images from MCP tools go into the timeline (`session-timeline`, *Show screenshots in
+        /// the timeline*); on when the app does not say.
+        #[serde(default = "on")]
+        screenshots: bool,
     },
     /// Shows the session in the app's window: a snapshot, then the terminal from the start.
     Attach,
@@ -147,6 +155,7 @@ mod tests {
             environment: [("PATH", "/bin")].into_iter().collect(),
             verbose: false,
             browser: true,
+            screenshots: false,
         };
         let json = serde_json::to_string(&start).unwrap();
         assert!(json.starts_with(r#"{"type":"start","agent":"#), "{json}");
@@ -187,9 +196,10 @@ mod tests {
         assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), answer);
     }
 
-    /// A previous release's app sends `start` without the field: it offers no browser.
+    /// A previous release's app sends `start` without the fields: it offers no browser, and
+    /// screenshots are shown as the setting's default.
     #[test]
-    fn start_without_browser_reads_as_off() {
+    fn start_without_browser_or_screenshots() {
         let mut json = serde_json::to_value(Command::Start {
             agent: AgentId::Terminal,
             folder: "/tmp".into(),
@@ -201,13 +211,17 @@ mod tests {
             environment: Environment::default(),
             verbose: false,
             browser: true,
+            screenshots: false,
         })
         .unwrap();
         json.as_object_mut().unwrap().remove("browser");
-        let Command::Start { browser, .. } = serde_json::from_value::<Command>(json).unwrap()
+        json.as_object_mut().unwrap().remove("screenshots");
+        let Command::Start { browser, screenshots, .. } =
+            serde_json::from_value::<Command>(json).unwrap()
         else {
             panic!("not a start");
         };
         assert!(!browser);
+        assert!(screenshots);
     }
 }

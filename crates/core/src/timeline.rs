@@ -12,6 +12,7 @@ use specdeck_protocol::timeline::{
 
 use crate::documents::DocumentText;
 use crate::hooks::HookPayload;
+use crate::screenshots;
 use crate::session_folder::SessionFolder;
 use crate::shell_changes::CommandChanges;
 
@@ -175,6 +176,8 @@ pub struct TimelineBuilder {
     /// A permission request showed its notice, so the `permission_prompt` notice that follows
     /// it adds none.
     requested_notice: bool,
+    /// Images from MCP tools are kept; off when the host turned screenshots off.
+    screenshots: bool,
 }
 
 impl TimelineBuilder {
@@ -184,7 +187,15 @@ impl TimelineBuilder {
             open_calls: Vec::new(),
             background_helpers: HashMap::new(),
             requested_notice: false,
+            screenshots: true,
         }
+    }
+
+    /// Whether images from MCP tools are kept (`session-timeline`, *Show screenshots in the
+    /// timeline*); without them a screenshot only says it was taken.
+    pub fn with_screenshots(mut self, screenshots: bool) -> Self {
+        self.screenshots = screenshots;
+        self
     }
 
     /// The event for starting the agent, which the engine emits itself.
@@ -243,7 +254,7 @@ impl TimelineBuilder {
                         }
                         report_text(&tool_response).map(report)
                     }
-                    _ => None,
+                    name => screenshots::outcome(name, &tool_response, self.screenshots),
                 };
                 let mut entries = vec![Entry::ToolResult {
                     prompt_id: call.prompt_id.clone(),
