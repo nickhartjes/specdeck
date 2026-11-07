@@ -69,11 +69,11 @@ When a verified update is ready, the app SHALL show a notice with the new versio
 - **THEN** the app does not show it again until it starts again or finds a newer version
 
 ### Requirement: Updating during a session
-While the user hosts or watches a session, choosing Restart to update SHALL first ask, saying that restarting ends the hosted session for everyone or leaves the watched one. With sessions in several windows, the app SHALL ask once, covering all of them. Cancelling SHALL keep every session and the update ready.
+Choosing Restart to update SHALL NOT end hosted sessions: they keep running with their viewers connected, and the app reopens their windows after the restart. While the user watches a session, Restart to update SHALL first ask, saying that restarting leaves the watched session. With several watched sessions, the app SHALL ask once, covering all of them. Cancelling SHALL keep every session and the update ready.
 
 #### Scenario: Host restarts
-- **WHEN** the host chooses Restart to update during a session
-- **THEN** the app asks whether to end the session for everyone and restart, and only on confirmation ends it, installs and restarts
+- **WHEN** the host chooses Restart to update during a session with 2 viewers
+- **THEN** the app installs the update and restarts without asking, both viewers stay connected throughout, and the new version reopens the session's window
 
 #### Scenario: Viewer cancels
 - **WHEN** a viewer chooses Restart to update and then Cancel
@@ -81,7 +81,11 @@ While the user hosts or watches a session, choosing Restart to update SHALL firs
 
 #### Scenario: Several sessions
 - **WHEN** the user hosts two sessions and watches one, and chooses Restart to update
-- **THEN** the app asks once, saying that two hosted sessions end for everyone and the watched one is left, and only on confirmation ends all of them, installs and restarts
+- **THEN** the app asks once, saying that the watched session is left and the hosted sessions keep running, and only on confirmation leaves the watched one, installs and restarts
+
+#### Scenario: Update fails to install
+- **WHEN** installing the update fails while two sessions are hosted
+- **THEN** the app says so and keeps running, and both sessions are unaffected
 
 ### Requirement: Check for updates on demand
 The menu SHALL offer **Check for Updates…** (in the SpecDeck menu on macOS, in Help on Windows and Linux). It SHALL check at once, whatever the setting, and report the outcome: up to date, an update that is being downloaded or is ready, or that the check failed.
