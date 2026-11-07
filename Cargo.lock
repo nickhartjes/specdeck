@@ -2417,6 +2417,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -4787,6 +4789,7 @@ dependencies = [
  "env_logger",
  "futures-util",
  "getrandom 0.4.3",
+ "image",
  "libc",
  "portable-pty",
  "rustls",

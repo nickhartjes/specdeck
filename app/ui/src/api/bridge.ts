@@ -7,6 +7,7 @@ import type { Layout } from '../model/layout';
 import { createContext, useContext } from 'react';
 import type {
   AgentId,
+  Appearance,
   AgentVersion,
   DiagnosticsStatus,
   HostEvent,
@@ -33,6 +34,10 @@ export interface Bridge {
   setScreenReader(enabled: boolean): Promise<Profile>;
   setVerboseLogging(enabled: boolean): Promise<Profile>;
   setBrowser(enabled: boolean): Promise<Profile>;
+  setAppearance(appearance: Appearance): Promise<Profile>;
+  /** Calls `handler` when the appearance changes, from any window; returns a function that stops listening. */
+  onAppearance(handler: (appearance: Appearance) => void): () => void;
+  setScreenshots(enabled: boolean): Promise<Profile>;
   updateStatus(): Promise<UpdateState>;
   /** Calls `handler` whenever the update state changes; returns a function that stops listening. */
   onUpdate(handler: (state: UpdateState) => void): () => void;

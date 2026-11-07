@@ -15,6 +15,7 @@ pub mod output_log;
 pub mod peer;
 pub mod plans;
 pub mod program_status;
+pub mod screenshots;
 pub mod session;
 pub mod session_folder;
 pub mod sharing;

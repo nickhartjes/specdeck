@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { errorMessage, useBridge } from '../api/bridge';
 import type { Profile, ServiceCheck } from '../api/types';
+import { APPEARANCES } from '../appearance';
 import { serviceName } from '../model/code';
 
 /** The settings window: changes apply at once, as is usual for app settings. */
@@ -70,6 +71,28 @@ export function SettingsScreen() {
         </div>
       </form>
       <div className="row">
+        <span id="settings-appearance">Appearance</span>
+        <div>
+          <div className="segmented" role="radiogroup" aria-labelledby="settings-appearance" aria-describedby="settings-appearance-hint">
+            {APPEARANCES.map(({ value, label }) => (
+              <label key={value}>
+                <input
+                  type="radio"
+                  name="appearance"
+                  value={value}
+                  checked={profile.appearance === value}
+                  onChange={async () => setProfile(await bridge.setAppearance(value))}
+                />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+          <span id="settings-appearance-hint" className="field-hint">
+            System follows your computer. The terminal stays dark, so everyone sees the agent&rsquo;s colours the same way.
+          </span>
+        </div>
+      </div>
+      <div className="row">
         <span id="settings-notifications">Notifications</span>
         <div>
           <label className="check">
@@ -128,6 +151,25 @@ export function SettingsScreen() {
           </div>
         </div>
       )}
+      <div className="row">
+        <span id="settings-screenshots">Screenshots</span>
+        <div>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={profile.screenshots}
+              aria-labelledby="settings-screenshots"
+              aria-describedby="settings-screenshots-hint"
+              onChange={async (event) => setProfile(await bridge.setScreenshots(event.target.checked))}
+            />
+            Show screenshots in the timeline
+          </label>
+          <span id="settings-screenshots-hint" className="field-hint">
+            Pictures from Claude's browser and other tools, such as screenshots. Viewers see them too. Applies to sessions you
+            start from now on.
+          </span>
+        </div>
+      </div>
       <div className="row">
         <span id="settings-verbose-logging">Diagnostics</span>
         <div>

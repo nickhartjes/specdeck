@@ -23,7 +23,14 @@ fn env(bin: &Path) -> Environment {
 }
 
 fn config(agent: AgentId, folder: &Path, data: &Path) -> HostConfig {
-    HostConfig { agent, folder: folder.to_owned(), cols: 80, rows: 24, data_dir: data.to_owned() }
+    HostConfig {
+        agent,
+        folder: folder.to_owned(),
+        cols: 80,
+        rows: 24,
+        data_dir: data.to_owned(),
+        screenshots: true,
+    }
 }
 
 /// All terminal output in the log so far, as text.

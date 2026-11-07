@@ -1,6 +1,7 @@
 // What the agent did for a prompt, in plain words (viewer-views design decision 6): each tool call,
 // or each run of reads or file changes, becomes one step line that opens to its technical detail.
 
+import type { Screenshot } from '../api/types';
 import type { NoticeItem, TextItem, ToolItem, ToolStatus, Turn } from './timeline';
 
 /** `denied`: the host did not allow it, or rejected the plan it presented. */
@@ -18,6 +19,8 @@ export interface Step {
   tools: ToolItem[];
   /** The OpenSpec change this step wrote or updated. */
   plan?: string;
+  /** The call with the step's latest screenshot. */
+  screenshot?: ToolItem;
 }
 
 export type SummaryEntry = Step | TextItem | NoticeItem;
@@ -47,6 +50,11 @@ const VERBS: Record<string, [string, string]> = {
 export function planChangeOf(path: string): string | null {
   const match = /(?:^|\/)openspec\/changes\/([^/]+)\/./.exec(path.replaceAll('\\', '/'));
   return match && match[1] !== 'archive' ? match[1]! : null;
+}
+
+/** The screenshot a call returned, if any. */
+export function screenshotOf(tool: ToolItem): Screenshot | null {
+  return tool.outcome?.kind === 'screenshot' ? tool.outcome : null;
 }
 
 function outcome(tools: ToolItem[]): Outcome {
@@ -119,7 +127,8 @@ function group(tool: ToolItem): string | null {
 
 function line(tools: ToolItem[], key: string | null, seenPlans: Set<string>): Step {
   const first = tools[0]!;
-  const base = { kind: 'step' as const, id: first.id, outcome: outcome(tools), tools };
+  const screenshot = tools.findLast((tool) => screenshotOf(tool) !== null);
+  const base = { kind: 'step' as const, id: first.id, outcome: outcome(tools), tools, ...(screenshot && { screenshot }) };
   if (key === 'reads') {
     const files = new Set(tools.filter((t) => t.toolName === 'Read').map((t) => text(t, 'file_path'))).size;
     const searched = tools.some((t) => t.toolName !== 'Read');

@@ -11,6 +11,7 @@ import { clampViewerFont, viewerFontSize } from './fontScale';
 import { isNewlineKey } from './keys';
 import { remeasureOnSymbolFont } from './symbolFont';
 import { isMac } from '../menu/menu';
+import { onAppearanceChange } from '../appearance';
 
 export interface SearchResult {
   index: number;
@@ -297,14 +298,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (screen) resizeObserver.observe(screen);
     }
 
-    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
     const applyTheme = () => {
       const theme = currentTheme();
       term.options.theme = theme;
       callbacks.current.onThemeColors?.(theme.foreground ?? '#000000', theme.background ?? '#ffffff');
     };
     applyTheme();
-    media?.addEventListener('change', applyTheme);
+    const stopWatchingAppearance = onAppearanceChange(applyTheme);
 
     reportState.current();
 
@@ -312,7 +312,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       reporter.dispose();
       stopRemeasuring();
       reportState.current = () => {};
-      media?.removeEventListener('change', applyTheme);
+      stopWatchingAppearance();
       resizeObserver?.disconnect();
       disposables.forEach((d) => d.dispose());
       term.dispose();

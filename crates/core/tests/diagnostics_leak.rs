@@ -106,6 +106,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         cols: 80,
         rows: 24,
         data_dir: data.path().to_owned(),
+        screenshots: true,
     };
     let (session, _session_events) = HostSession::start(config, &env).await.unwrap();
     let (sharing, mut sharing_events) = Sharing::start(

@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, LayoutTemplate, PanelLeft, PanelRight } from 'lucide-react';
+import { useBridge } from '../api/bridge';
+import type { Appearance } from '../api/types';
+import { APPEARANCES } from '../appearance';
 import { choose, isAdjusted, PRESET_NAMES, type Layout, type Preset } from '../model/layout';
 
 const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
+function inWebViewer(): boolean {
+  return typeof document !== 'undefined' && document.documentElement.dataset.platform === 'web';
+}
+
 /** The shortcut for panel `n` as this platform writes it; the web viewer uses Alt, as the browser keeps Ctrl. */
 export function panelKey(n: number): string {
-  if (typeof document !== 'undefined' && document.documentElement.dataset.platform === 'web') return `Alt+${n}`;
+  if (inWebViewer()) return `Alt+${n}`;
   return isMac ? `⌘${n}` : `Ctrl+${n}`;
 }
 
@@ -111,6 +118,7 @@ export function LayoutControls({ layout, onLayout, host = false, onAskAgain }: P
                 </>
               )}
             </p>
+            {inWebViewer() && <AppearanceChoice />}
           </div>
         )}
       </div>
@@ -124,5 +132,32 @@ export function LayoutControls({ layout, onLayout, host = false, onAskAgain }: P
         <PanelRight aria-hidden />
       </button>
     </div>
+  );
+}
+
+/**
+ * The web viewer's appearance, kept in the browser (`web-viewer` spec). The app has it in
+ * Settings and the View menu instead.
+ */
+function AppearanceChoice() {
+  const bridge = useBridge();
+  const [appearance, setAppearance] = useState<Appearance | null>(null);
+  useEffect(() => {
+    void bridge.getProfile().then((profile) => setAppearance(profile.appearance));
+    return bridge.onAppearance(setAppearance);
+  }, [bridge]);
+  return (
+    <fieldset>
+      <legend>Appearance</legend>
+      {APPEARANCES.map(({ value, label }) => (
+        <label key={value} className="check">
+          <input type="radio" name="appearance" checked={appearance === value} onChange={() => void bridge.setAppearance(value)} />
+          <span>
+            {label}
+            {value === 'system' && <span className="muted"> · as your browser</span>}
+          </span>
+        </label>
+      ))}
+    </fieldset>
   );
 }

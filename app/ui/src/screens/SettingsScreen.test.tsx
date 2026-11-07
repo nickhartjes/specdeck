@@ -85,6 +85,19 @@ describe('browser setting', () => {
   });
 });
 
+describe('screenshots setting', () => {
+  it('is on by default on every platform and turns off at once', async () => {
+    const bridge = fakeBridge('start', { getProfile: async () => ({ ...demoProfile, platform: 'windows' }) });
+    renderWith(bridge, <SettingsScreen />);
+    const toggle = await screen.findByRole('checkbox', { name: 'Screenshots' });
+    expect(toggle).toBeChecked();
+    expect(toggle).toHaveAccessibleDescription(/Viewers see them too/);
+    await userEvent.click(toggle);
+    expect(bridge.setScreenshots).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+  });
+});
+
 describe('update setting', () => {
   it('is on by default and turns off at once', async () => {
     const bridge = fakeBridge();
@@ -168,5 +181,26 @@ describe('sharing service setting', () => {
     renderWith(fakeBridge('start', { getProfile: vi.fn(async () => profile) }), <SettingsScreen />);
     expect(await field()).toBeDisabled();
     expect(screen.getByText('Set to 127.0.0.1:18081 by SPECDECK_SIGNALLING_URL when SpecDeck started.')).toBeInTheDocument();
+  });
+});
+
+describe('appearance setting', () => {
+  it('follows the OS until Light or Dark is chosen', async () => {
+    const bridge = fakeBridge();
+    renderWith(bridge, <SettingsScreen />);
+    const group = await screen.findByRole('radiogroup', { name: 'Appearance' });
+    expect(group).toHaveAccessibleDescription(/terminal stays dark/);
+    expect(screen.getByRole('radio', { name: 'System' })).toBeChecked();
+    await userEvent.click(screen.getByRole('radio', { name: 'Dark' }));
+    expect(bridge.setAppearance).toHaveBeenCalledWith('dark');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked());
+  });
+
+  it('moves between the choices with the arrow keys', async () => {
+    const bridge = fakeBridge();
+    renderWith(bridge, <SettingsScreen />);
+    await userEvent.click(await screen.findByRole('radio', { name: 'System' }));
+    await userEvent.keyboard('{ArrowRight}');
+    expect(bridge.setAppearance).toHaveBeenCalledWith('light');
   });
 });
