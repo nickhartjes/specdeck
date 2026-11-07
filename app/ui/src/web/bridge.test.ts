@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ViewerCore } from './connection';
 import { STORAGE_KEYS, webBridge, type WebBridgeOptions } from './bridge';
+import { choose } from '../model/layout';
 
 const SERVICE = 'wss://specdeck.example.com/signal';
 
@@ -42,21 +43,27 @@ function bridge(options: Partial<WebBridgeOptions> = {}) {
 }
 
 describe('web bridge', () => {
-  it('keeps the name and view in the browser, across pages', async () => {
+  it('keeps the name and layout in the browser, across pages', async () => {
     const storage = memoryStorage();
     const first = bridge({ storage });
     await first.setUsername('  anna ');
-    await first.setView({ terminal: true, steps: 'details' });
+    await first.setLayout(choose('present'));
     const later = await bridge({ storage }).getProfile();
-    expect(later).toMatchObject({ username: 'anna', view: { terminal: true, steps: 'details' }, platform: 'web' });
+    expect(later).toMatchObject({ username: 'anna', layout: choose('present'), platform: 'web' });
     expect(storage.getItem(STORAGE_KEYS.username)).toBe('anna');
   });
 
   it('still works when the browser keeps nothing', async () => {
     const page = bridge({ storage: blockedStorage });
-    expect(await page.getProfile()).toMatchObject({ username: null, view: null });
+    expect(await page.getProfile()).toMatchObject({ username: null, view: null, layout: null });
     expect((await page.setUsername('anna')).username).toBe('anna');
     expect(await bridge({ storage: blockedStorage }).getProfile()).toMatchObject({ username: null });
+  });
+
+  it('gives the view of earlier versions, to make the first layout from', async () => {
+    const storage = memoryStorage();
+    storage.setItem(STORAGE_KEYS.view, '{"terminal":false,"steps":"summary"}');
+    expect(await bridge({ storage }).getProfile()).toMatchObject({ view: { terminal: false, steps: 'summary' }, layout: null });
   });
 
   it('ignores a stored view it cannot read', async () => {

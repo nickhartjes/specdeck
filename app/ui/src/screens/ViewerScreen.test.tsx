@@ -1,8 +1,8 @@
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { View, ViewEvent } from '../api/types';
-import { DEVELOPER_VIEW } from '../components/ViewMenu';
+import type { ViewEvent } from '../api/types';
+import { choose, type Layout } from '../model/layout';
 import { demoParticipants } from '../api/demo';
 import { fakeBridge, renderWith } from '../test/helpers';
 import { terminal, TerminalViewStub } from '../test/terminal-stub';
@@ -12,15 +12,15 @@ vi.mock('../terminal/TerminalView', () => ({ TerminalView: TerminalViewStub }));
 
 let emit: (event: ViewEvent) => void = () => {};
 
-function setup(view: View | null = DEVELOPER_VIEW, screenReader?: boolean) {
+function setup(layout: Layout | null = choose('developer'), screenReader?: boolean) {
   const bridge = fakeBridge('viewer');
   bridge.joinSession = vi.fn(async (_code, _server, _terminal, events) => {
     emit = events;
   });
   const onLeave = vi.fn();
-  const onView = vi.fn();
-  renderWith(bridge, <ViewerScreen code="7K2M9QXH4TPA" view={view} onView={onView} screenReader={screenReader} onLeave={onLeave} />);
-  return { bridge, onLeave, onView };
+  const onLayout = vi.fn();
+  renderWith(bridge, <ViewerScreen code="7K2M9QXH4TPA" layout={layout} onLayout={onLayout} screenReader={screenReader} onLeave={onLeave} />);
+  return { bridge, onLeave, onLayout };
 }
 
 function join() {
@@ -35,29 +35,30 @@ beforeEach(() => vi.clearAllMocks());
 
 describe('how a viewer follows the session', () => {
   it('asks the first time and remembers the answer', async () => {
-    const { onView } = setup(null);
+    const { onLayout } = setup(null);
     await userEvent.click(screen.getByRole('button', { name: /Overview/ }));
-    expect(onView).toHaveBeenCalledWith({ terminal: false, steps: 'summary' });
+    await waitFor(() => expect(onLayout).toHaveBeenCalledWith(expect.objectContaining({ preset: 'overview', terminalTab: false, steps: 'summary' })));
   });
 
   it('keeps the terminal for a session without a timeline, and says why', () => {
-    setup({ terminal: false, steps: 'summary' });
+    setup(choose('overview'));
     act(() => emit({ type: 'joined', viewerId: 2, agent: 'open-code', timelineSupported: false, cols: 100, rows: 30 }));
-    expect(screen.getByRole('region', { name: 'Terminal, read-only' })).not.toHaveAttribute('aria-hidden');
+    expect(screen.getByRole('tabpanel', { name: 'Terminal, read-only' })).not.toHaveAttribute('aria-hidden');
+    expect(screen.getByRole('tab', { name: 'Terminal, read-only' })).toBeInTheDocument();
     expect(screen.getByText('This session can only be followed in the terminal: OpenCode does not share its steps.')).toBeInTheDocument();
   });
 
   it('hides the terminal for a viewer who chose so', () => {
-    setup({ terminal: false, steps: 'summary' });
+    setup(choose('overview'));
     join();
     expect(screen.getByLabelText('Terminal, read-only', { selector: 'section' })).toHaveAttribute('aria-hidden', 'true');
   });
 
-  it('does not ask once a view is chosen, until asked to', async () => {
-    setup({ terminal: false, steps: 'summary' });
+  it('does not ask once a layout is chosen, until asked to', async () => {
+    setup(choose('overview'));
     join();
     expect(screen.queryByRole('dialog', { name: /How do you want to follow/ })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'View' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Overview' }));
     await userEvent.click(screen.getByRole('button', { name: 'Show the first-join question again' }));
     expect(screen.getByRole('dialog', { name: /How do you want to follow/ })).toBeInTheDocument();
   });
@@ -85,7 +86,7 @@ describe('viewer screen', () => {
   });
 
   it('turns screen reader support on in the terminal when it is set', () => {
-    setup(DEVELOPER_VIEW, true);
+    setup(choose('developer'), true);
     join();
     expect(terminal.props.screenReader).toBe(true);
   });
@@ -93,7 +94,7 @@ describe('viewer screen', () => {
   it('marks you in the participant list', async () => {
     setup();
     join();
-    await userEvent.click(screen.getByRole('tab', { name: /People/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
     expect(screen.getByText('Bram (you)')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument();
   });

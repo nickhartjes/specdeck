@@ -21,7 +21,7 @@ The link also names your sharing service, so it works for viewers whose SpecDeck
 
 Each window shows one session. To host another agent or folder, or to watch a teammate while you host, open another window with **File › New Window** (**⇧⌘N** on macOS). **Host a Session…** and **Join a Session…** open a new window by themselves when the one in front already shows a session. Each session has its own invite code and viewers, and ending one leaves the others running.
 
-Settings are the same for every window: your name, sharing service, view and zoom. Each window's title names its session, so you can tell them apart in the Window menu or the taskbar.
+Settings are the same for every window: your name, sharing service, layout and zoom. Each window's title names its session, so you can tell them apart in the Window menu or the taskbar.
 
 ## What viewers see
 
@@ -41,10 +41,10 @@ SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a com
 
 | To | Do this |
 |---|---|
-| See who is watching | Open **People** in the side panel |
+| See who is watching | Select the avatars at the top of the session |
 | Stop people from joining with the current code | Select the **new code** button next to the invite code. People already watching stay; share the new code with anyone still to join |
-| Remove someone | In **People**, select **Remove** next to their name and confirm. They are disconnected immediately, and the invite code changes so they cannot rejoin with it |
-| Limit the number of viewers | In **People**, set **Max viewers** (1 to 20). Lowering it never disconnects anyone already watching |
+| Remove someone | Select the avatars, then **Remove** next to their name, and confirm. They are disconnected immediately, and the invite code changes so they cannot rejoin with it |
+| Limit the number of viewers | Select the avatars and set **Max viewers** (1 to 20). Lowering it never disconnects anyone already watching |
 | End the session for everyone | Select **End session** and confirm. The agent or shell stops and the invite code stops working |
 
 The status next to the folder name shows what the agent is doing: **working**, **waiting for input**, or **exited**. For omp, Codex, Grok and pi it shows working or waiting when the agent reports it, and **Live** otherwise; OpenCode always shows **Live**, because its activity is not shared; a terminal session also shows **Live**, and **Shell exited** once you exit the shell. When Claude Code asks your permission, for example to run a command, the status shows **waiting** and the timeline shows the question, so viewers see why it paused.

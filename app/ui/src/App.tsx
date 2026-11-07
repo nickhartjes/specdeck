@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { errorMessage, useBridge } from './api/bridge';
-import type { JoinLink, Profile, View } from './api/types';
+import type { JoinLink, Profile } from './api/types';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { JoinThroughDialog } from './components/JoinThroughDialog';
 import { ConnectionStatus } from './components/ConnectionStatus';
@@ -8,6 +8,7 @@ import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { UpdateButton, UpdateNotice, useReadyUpdate } from './components/UpdateNotice';
 import { dispatchMenu, useMenu, type MenuCommand } from './menu/menu';
 import { formatCode } from './model/code';
+import { profileLayout, type Layout } from './model/layout';
 import { startHeartbeat } from './model/heartbeat';
 import { restartQuestion, type RestartQuestion } from './model/restart';
 import { HostScreen } from './screens/HostScreen';
@@ -61,7 +62,7 @@ export function App() {
   };
   const updateButton = update.version ? <UpdateButton version={update.version} onRestart={() => void restartToUpdate()} /> : null;
 
-  const setView = (view: View) => void bridge.setView(view).then(setProfile);
+  const setLayout = (layout: Layout) => void bridge.setLayout(layout).then(setProfile);
 
   useEffect(() => bridge.onMenu(dispatchMenu), [bridge]);
   // Joins from a link, asking first when it names another sharing service.
@@ -142,8 +143,8 @@ export function App() {
     <>
       {screen.kind === 'host' && (
         <HostScreen
-          view={profile.view}
-          onView={setView}
+          layout={profileLayout(profile)}
+          onLayout={setLayout}
           screenReader={profile.screenReader}
           onEnded={() => refresh().then(() => setScreen({ kind: 'start' }))}
           update={updateButton}
@@ -154,8 +155,8 @@ export function App() {
           key={`${screen.code} ${screen.server ?? ''}`}
           code={screen.code}
           server={screen.server}
-          view={profile.view}
-          onView={setView}
+          layout={profileLayout(profile)}
+          onLayout={setLayout}
           screenReader={profile.screenReader}
           update={updateButton}
           onLeave={(retry) =>

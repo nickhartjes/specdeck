@@ -44,7 +44,7 @@ export const tauriBridge: Bridge = {
     return () => void stop.then((unlisten) => unlisten());
   },
   restartToUpdate: () => invoke('restart_to_update'),
-  setView: (view) => invoke<Profile>('set_view', { view }),
+  setLayout: (layout) => invoke<Profile>('set_layout', { layout }),
   setSharingService: (service) => invoke<Profile>('set_sharing_service', { service }),
   checkSharingService: (service) => invoke<ServiceCheck>('check_sharing_service', { service }),
   removeRecentFolder: (path) => invoke<Profile>('remove_recent_folder', { path }),

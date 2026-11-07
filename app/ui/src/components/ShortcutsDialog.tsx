@@ -8,11 +8,11 @@ const MAC: [string, string][] = [
   ['Copy the invite code', '⇧⌘C'],
   ['Find in the terminal and timeline', '⌘F'],
   ['Next or previous match', 'Return / ⇧Return'],
-  ['Timeline, Files, People', '⌘1 ⌘2 ⌘3'],
+  ['Files, the terminal, the timeline', '⌘1 ⌘2 ⌘3'],
   ['Jump to live', '⌘↓'],
   ['Zoom in, zoom out, actual size', '⌘+ ⌘− ⌘0'],
   ["New line in your terminal's prompt", '⇧Return'],
-  ['Move between toolbar, terminal and side panel', 'F6 / ⇧F6'],
+  ['Move between the toolbar, the panels and the tabs', 'F6 / ⇧F6'],
   ['Settings', '⌘,'],
   ['Close the window (a hosted session keeps running)', '⌘W'],
   ['Quit', '⌘Q'],
@@ -28,23 +28,23 @@ const OTHERS: [string, string][] = [
   ['Copy the selection', 'Ctrl+C or Ctrl+Shift+C'],
   ['Paste into your terminal', 'Ctrl+V or Ctrl+Shift+V'],
   ["New line in your terminal's prompt", 'Shift+Enter'],
-  ['Timeline, Files, People', 'Ctrl+1 Ctrl+2 Ctrl+3'],
+  ['Files, the terminal, the timeline', 'Ctrl+1 Ctrl+2 Ctrl+3'],
   ['Zoom in, zoom out, actual size', 'Ctrl++ Ctrl+− Ctrl+0'],
-  ['Move between toolbar, terminal and side panel', 'F6 / Shift+F6'],
+  ['Move between the toolbar, the panels and the tabs', 'F6 / Shift+F6'],
   ['Settings', 'Ctrl+,'],
   ['Connection status', 'Ctrl+Shift+D'],
   ['Keyboard shortcuts', 'F1'],
 ];
 
 /**
- * The web viewer's: the browser keeps Ctrl+1–3 for its tabs and does its own zooming
+ * The web viewer's: the browser keeps Ctrl+1–3 for its own tabs and does its own zooming
  * (`web-viewer` design decision 4).
  */
 const WEB: [string, string][] = [
   ['Find in the terminal and timeline', isMac ? '⌘F' : 'Ctrl+F'],
   ['Next or previous match', isMac ? 'Return / ⇧Return' : 'Enter / Shift+Enter'],
-  ['Timeline, Files, People', isMac ? '⌥1 ⌥2 ⌥3' : 'Alt+1 Alt+2 Alt+3'],
-  ['Move between toolbar, terminal and side panel', isMac ? 'F6 / ⇧F6' : 'F6 / Shift+F6'],
+  ['Files, the terminal, the timeline', isMac ? '⌥1 ⌥2 ⌥3' : 'Alt+1 Alt+2 Alt+3'],
+  ['Move between the toolbar, the panels and the tabs', isMac ? 'F6 / ⇧F6' : 'F6 / Shift+F6'],
   ['Zoom in, zoom out, actual size', 'Your browser’s zoom'],
   ['Keyboard shortcuts', '?'],
 ];

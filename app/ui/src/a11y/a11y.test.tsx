@@ -43,14 +43,17 @@ describe('accessibility', () => {
     expect(await violations()).toEqual([]);
   });
 
-  it('host screen with every side panel tab', async () => {
+  it('host screen with its panels, menus and a document tab', async () => {
     app('host');
     await screen.findByText('7K2M-9QXH-4TPA');
     expect(await violations()).toEqual([]);
-    for (const tab of ['Files', 'People']) {
-      await userEvent.click(screen.getByRole('tab', { name: new RegExp(tab) }));
-      expect(await violations()).toEqual([]);
-    }
+    await userEvent.click(screen.getByRole('tab', { name: /Documents/ }));
+    expect(await violations()).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
+    expect(await violations()).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
+    expect(await violations()).toEqual([]);
   });
 
   it('viewer screen, joined', async () => {
@@ -109,18 +112,20 @@ describe('accessibility', () => {
     await waitFor(() => expect(bridge.joinSession).toHaveBeenCalledWith('7K2M-9QXH-4TPA', null, expect.any(Function), expect.any(Function)));
   });
 
-  it('F6 moves between the toolbar, the terminal and the side panel', async () => {
+  it('F6 moves between the toolbar, the files, the terminal and the timeline', async () => {
     const { terminal } = await import('../test/terminal-stub');
     app('host');
     await screen.findByText('7K2M-9QXH-4TPA');
     await userEvent.keyboard('{F6}');
     expect(document.activeElement?.closest('.toolbar')).not.toBeNull();
     await userEvent.keyboard('{F6}');
+    expect(screen.getByRole('tab', { name: /Code/ })).toHaveFocus();
+    await userEvent.keyboard('{F6}');
     expect(terminal.handle.focus).toHaveBeenCalled();
     terminal.handle.hasFocus.mockReturnValue(true);
     await userEvent.keyboard('{F6}');
     terminal.handle.hasFocus.mockReturnValue(false);
-    expect(screen.getByRole('tab', { selected: true })).toHaveFocus();
+    expect(document.activeElement?.closest('.pane.cues')).not.toBeNull();
     await userEvent.keyboard('{Shift>}{F6}{/Shift}');
     expect(terminal.handle.focus).toHaveBeenCalledTimes(2);
   });

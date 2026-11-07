@@ -1,5 +1,5 @@
 //! What the app remembers between runs: the user's name, recent folders, last used agent,
-//! whether to show notifications, how the user follows sessions, their sharing service, how
+//! whether to show notifications, how the user arranges the session window, their sharing service, how
 //! far the main window is zoomed, whether to check for updates, whether the terminal works
 //! with screen readers and whether the diagnostic log is verbose.
 //! Stored as JSON in the app's config directory.
@@ -24,8 +24,12 @@ pub struct Settings {
     pub recent_folders: Vec<PathBuf>,
     pub last_agent: Option<AgentId>,
     pub notifications: bool,
-    /// How the user follows sessions; `None` until they answered the first-join question.
+    /// How the user followed sessions before layouts; read once to make their first layout, and
+    /// kept for older versions.
     pub view: Option<View>,
+    /// How the user arranges the session window (`session-window-layout` design decision 1),
+    /// as the UI stores it; `None` until they answered the first-join question.
+    pub layout: Option<serde_json::Value>,
     /// The sharing service as a normalized URL; `None` for the one built into the app.
     pub sharing_service: Option<String>,
     /// The main window's zoom in percent; one level whether hosting or viewing.
@@ -64,6 +68,7 @@ impl Default for Settings {
             last_agent: None,
             notifications: true,
             view: None,
+            layout: None,
             sharing_service: None,
             zoom: ZOOM_DEFAULT,
             check_updates: true,
@@ -223,6 +228,26 @@ mod tests {
             serde_json::to_value(settings.view).unwrap(),
             serde_json::json!({ "terminal": false, "steps": "summary" })
         );
+    }
+
+    #[test]
+    fn the_layout_is_unset_until_chosen_and_then_remembered_as_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Settings saved before layouts existed still load, with their view and no layout.
+        std::fs::write(&path, r#"{"username":"nick","view":{"terminal":true,"steps":"details"}}"#)
+            .unwrap();
+        let mut settings = Settings::load(&path);
+        assert_eq!(settings.layout, None);
+        assert_eq!(settings.view, Some(View { terminal: true, steps: Steps::Details }));
+
+        let layout = serde_json::json!({ "preset": "present", "files": false, "widths": { "present": { "files": 250 } } });
+        settings.layout = Some(layout.clone());
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.layout, Some(layout));
+        // The view stays for older versions.
+        assert_eq!(loaded.view, settings.view);
     }
 
     #[test]

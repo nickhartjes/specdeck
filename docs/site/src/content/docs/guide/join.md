@@ -33,10 +33,10 @@ SpecDeck 1.0 cannot open links from newer versions by clicking them. On 1.0, pas
 
 The first time you join, SpecDeck asks how you want to follow sessions:
 
-- **Overview:** the conversation and the plan. You see what was asked, what the agent did in plain words, its answers, and the documents it wrote. The terminal is hidden.
-- **Developer:** the host's terminal, read-only, next to every tool call, command and diff.
+- **Overview:** the documents and the timeline. You see what was asked, what the agent did in plain words, its answers, and the documents it wrote. There is no terminal tab.
+- **Developer:** the code, the host's terminal (read-only), and every tool call, command and diff.
 
-SpecDeck remembers your answer for every session you join, and you can change it at any time under **View** (see [Follow a session](/specdeck/guide/follow/)). **Leave** takes you back to the start screen.
+Your answer sets up your window, and SpecDeck remembers it for every session you join. Change the layout at any time with the layout button at the top (see [Follow a session](/specdeck/guide/follow/)). **Leave** takes you back to the start screen.
 
 ## Watch in a browser
 
@@ -45,9 +45,9 @@ If you cannot install SpecDeck, for example on a company laptop, you can watch i
 - **Open the web link** the host shared, or go to the sharing service's address (`https://specdeck.hartj.es/` for the built-in one) and type the code.
 - **Enter your name** and select **Watch in this browser**.
 
-You see the session as in the app: the terminal, the timeline, files, people, the status bar, and the Overview and Developer views.
+You see the session as in the app: the files, the terminal and documents in tabs, the timeline, the people, the status bar, and the Overview, Developer and Present layouts.
 
-- **Your name and view** stay in this browser only. There is no account.
+- **Your name and layout** stay in this browser only. There is no account.
 - **The code** is removed from the address bar once the page has read it, and is never sent to the server: it sits after the `#`, which browsers keep to themselves.
 - **Each page joins only sessions on its own sharing service.** An invite for another service gets a link to that service's own page, never a connection from this one.
 - **Some keys differ**, because the browser keeps its own:
@@ -55,7 +55,7 @@ You see the session as in the app: the terminal, the timeline, files, people, th
   | To | Press |
   |---|---|
   | Find in the terminal and timeline | **⌘F** or **Ctrl+F** |
-  | Open Timeline, Files or People | **⌥1**, **⌥2**, **⌥3** (macOS) or **Alt+1**, **Alt+2**, **Alt+3** |
+  | Show or hide the files, the terminal or the timeline | **⌥1**, **⌥2**, **⌥3** (macOS) or **Alt+1**, **Alt+2**, **Alt+3** |
   | See all keyboard shortcuts | **?** |
   | Zoom | Your browser's zoom |
 

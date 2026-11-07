@@ -85,8 +85,10 @@ export interface Profile {
   watchedSessions: number;
   /** Whether to show OS notifications while the window is not in front. */
   notifications: boolean;
-  /** How the user follows sessions; null until they answered the first-join question. */
+  /** How the user followed sessions before layouts, to make their first layout from. */
   view: View | null;
+  /** How the user arranges the session window, as stored (`model/layout.ts` reads it); null until they answered the first-join question. */
+  layout: unknown;
   /** The window has the platform's material behind it (macOS vibrancy, Windows Mica). */
   translucent: boolean;
   platform: string;

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, X } from 'lucide-react';
 import type { TimelineModel, ToolItem, Turn } from '../model/timeline';
 import { SHOWN_IN_PART, toolSummary } from '../model/timeline';
@@ -25,13 +25,28 @@ interface Props {
   matches: Set<string>;
   /** The turn the search stepped to. */
   current: string | null;
-  /** Scrolls the terminal to where an entry happened. */
+  /** Scrolls the terminal to where a prompt happened, if it is shown. */
   onJump: (outputSeq: number) => void;
+  /** Shows the terminal at a step, with its line highlighted. */
+  onStep?: (outputSeq: number) => void;
+  /** Opens the diffs of a file a step changed, at that step's change. */
+  onOpenChange?: (path: string, toolUseId: string) => void;
 }
+
+/** What selecting a step does: its first changed file in a tab, else the terminal at its line. */
+type Select = (item: ToolItem) => void;
 
 const TIME = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 
-export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump }: Props) {
+export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump, onStep, onOpenChange }: Props) {
+  const select = useCallback<Select>(
+    (item) => {
+      const change = item.changes[0];
+      if (change && onOpenChange) onOpenChange(change.path, item.id);
+      else (onStep ?? onJump)(item.outputSeq);
+    },
+    [onJump, onStep, onOpenChange],
+  );
   // Summaries per turn, in order: whether a plan was written or updated depends on earlier turns.
   const summaries = useMemo(() => {
     const seen = new Set<string>();
@@ -145,6 +160,7 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
               match={matches.has(turn.promptId)}
               current={current === turn.promptId}
               onJump={onJump}
+              onSelect={select}
             />
           ))}
           {live && lastTurn && <LiveLine turn={lastTurn} plansBefore={plansBeforeLast} agentName={agentName} />}
@@ -179,7 +195,7 @@ function LiveLine({ turn, plansBefore, agentName }: { turn: Turn; plansBefore: S
 const OUTCOME_ICON = { running: Loader, succeeded: Check, failed: X, 'not-run': CircleSlash, denied: Ban } as const;
 
 /** One summary line; opens to the tool calls it stands for. A plan step also offers to read it. */
-function StepView({ step, onJump, onReadPlan }: { step: Step; onJump: (seq: number) => void; onReadPlan?: (change: string, paths: string[]) => void }) {
+function StepView({ step, onSelect, onReadPlan }: { step: Step; onSelect: Select; onReadPlan?: (change: string, paths: string[]) => void }) {
   const Icon = OUTCOME_ICON[step.outcome];
   const plan = step.plan;
   const details = (
@@ -187,7 +203,7 @@ function StepView({ step, onJump, onReadPlan }: { step: Step; onJump: (seq: numb
       className={`step ${step.outcome}`}
       open={step.tools.some(asksTheHost)}
       summary={
-        <summary onClick={() => onJump(step.tools[0]!.outputSeq)}>
+        <summary onClick={() => onSelect(step.tools.find((item) => item.changes.length > 0) ?? step.tools[0]!)}>
           <Icon className="status-icon" aria-hidden />
           <span className="what">{step.label}</span>
           {step.outcome !== 'denied' && step.tools.some((item) => item.permission === 'allowed') && <PermissionBadge permission="allowed" />}
@@ -198,7 +214,7 @@ function StepView({ step, onJump, onReadPlan }: { step: Step; onJump: (seq: numb
       {() => (
         <div className="step-body">
           {step.tools.map((item) => (
-            <ToolView key={item.id} item={item} showChanges onJump={onJump} />
+            <ToolView key={item.id} item={item} showChanges onSelect={onSelect} />
           ))}
         </div>
       )}
@@ -228,6 +244,7 @@ interface TurnProps {
   match: boolean;
   current: boolean;
   onJump: (seq: number) => void;
+  onSelect: Select;
 }
 
 // Long sessions have hundreds of turns: render only the ones that changed. The model is rebuilt
@@ -240,7 +257,7 @@ const TurnView = memo(
     (Object.keys(next) as (keyof TurnProps)[]).every((key) => key === 'turn' || key === 'summary' || prev[key] === next[key]),
 );
 
-function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, onJump }: TurnProps) {
+function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, onJump, onSelect }: TurnProps) {
   const texts = turn.items.filter((item) => item.kind === 'text');
   const showResponse = turn.response && !texts.some((item) => item.text.trim() === turn.response?.trim());
   return (
@@ -257,7 +274,7 @@ function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, o
       </button>
       {(summary ?? turn.items).map((item) =>
         item.kind === 'step' ? (
-          <StepView key={item.id} step={item} onJump={onJump} onReadPlan={onReadPlan} />
+          <StepView key={item.id} step={item} onSelect={onSelect} onReadPlan={onReadPlan} />
         ) : item.kind === 'text' ? (
           <Markdown key={item.id} text={item.text} />
         ) : item.kind === 'notice' ? (
@@ -265,7 +282,7 @@ function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, o
             <Hand aria-hidden /> {item.text}
           </p>
         ) : (
-          <ToolView key={item.id} item={item} showChanges={latest} onJump={onJump} />
+          <ToolView key={item.id} item={item} showChanges={latest} onSelect={onSelect} />
         ),
       )}
       {showResponse && <Markdown text={turn.response ?? ''} />}
@@ -276,14 +293,14 @@ function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, o
 const STATUS_TEXT = { running: 'Running', succeeded: 'Done', failed: 'Failed', 'not-run': 'Did not run', denied: 'Denied by the host' } as const;
 
 /** `showChanges`: opens a call that changed files, which costs a diff each, so only where they are wanted. */
-function ToolView({ item, showChanges, onJump }: { item: ToolItem; showChanges: boolean; onJump: (seq: number) => void }) {
+function ToolView({ item, showChanges, onSelect }: { item: ToolItem; showChanges: boolean; onSelect: Select }) {
   const Icon = { running: Loader, succeeded: Check, failed: X, 'not-run': CircleSlash }[item.status];
   return (
     <Disclosure
       className={`tool ${item.status}`}
       open={(showChanges && item.changes.length > 0) || asksTheHost(item)}
       summary={
-        <summary onClick={() => onJump(item.outputSeq)}>
+        <summary onClick={() => onSelect(item)}>
           <Icon className="status-icon" aria-hidden />
           <span className="name">{item.toolName}</span>
           <span className="what" title={toolSummary(item)}>

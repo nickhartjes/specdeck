@@ -1,10 +1,10 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { FileChange, TouchedFile } from '../model/timeline';
 import { FilesPanel } from './FilesPanel';
 
-const change = (path: string, kind: FileChange['change'], lines: string[]): FileChange => ({
+const change = (path: string, kind: FileChange['change'], lines: string[] = []): FileChange => ({
   path,
   change: kind,
   hunks: lines.length ? [{ oldStart: 1, oldLines: lines.length, newStart: 0, newLines: 0, lines }] : [],
@@ -14,20 +14,55 @@ const change = (path: string, kind: FileChange['change'], lines: string[]): File
   outputSeq: 0,
 });
 
+const files: TouchedFile[] = [
+  { path: 'openspec/changes/demo/design.md', readOnly: false, changes: [change('openspec/changes/demo/design.md', 'created')] },
+  { path: 'src/session.rs', readOnly: false, changes: [change('src/session.rs', 'edited'), change('src/session.rs', 'edited')] },
+  { path: 'old.txt', readOnly: false, changes: [change('old.txt', 'deleted', ['-bye'])] },
+  { path: 'Cargo.toml', readOnly: true, changes: [] },
+];
+
+function panel(props: Partial<Parameters<typeof FilesPanel>[0]> = {}) {
+  const onOpen = vi.fn();
+  const onTab = vi.fn();
+  render(<FilesPanel files={files} timelineSupported agentName="Claude Code" tab="code" onTab={onTab} active={null} onOpen={onOpen} onClose={vi.fn()} {...props} />);
+  return { onOpen, onTab };
+}
+
 describe('files panel', () => {
-  it('shows a file a shell command deleted, and says when a change has no diff', async () => {
-    const files: TouchedFile[] = [
-      { path: 'old.txt', readOnly: false, changes: [change('old.txt', 'deleted', ['-bye'])] },
-      { path: 'logo.png', readOnly: false, changes: [change('logo.png', 'edited', [])] },
-    ];
-    render(<FilesPanel files={files} timelineSupported agentName="Claude Code" onJump={vi.fn()} />);
-    expect(screen.getByRole('button', { name: 'old.txt, deleted' })).toHaveTextContent('deleted');
+  it('lists code with what happened to each file', () => {
+    panel();
+    const list = screen.getByRole('list', { name: 'Code' });
+    expect(within(list).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'src/session.rs, 2 changes',
+      'old.txt, deleted',
+      'Cargo.toml, read',
+    ]);
+    expect(screen.getByRole('tab', { name: /Code/ })).toHaveTextContent('3');
+  });
 
-    await userEvent.click(screen.getByRole('button', { name: 'old.txt, deleted' }));
-    expect(screen.getByLabelText('Deleted old.txt')).toHaveTextContent('bye');
+  it('lists documents apart, and switches lists', async () => {
+    const { onTab } = panel({ tab: 'documents' });
+    expect(within(screen.getByRole('list', { name: 'Documents' })).getByRole('button', { name: 'openspec/changes/demo/design.md, new' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: /Code/ }));
+    expect(onTab).toHaveBeenCalledWith('code');
+  });
 
-    await userEvent.click(screen.getByRole('button', { name: /All files/ }));
-    await userEvent.click(screen.getByRole('button', { name: 'logo.png, 1 change' }));
-    expect(screen.getByLabelText('Changed logo.png')).toHaveTextContent('No diff to show');
+  it('opens a preview on a click and keeps it on a double click', async () => {
+    const { onOpen } = panel();
+    await userEvent.click(screen.getByRole('button', { name: 'src/session.rs, 2 changes' }));
+    expect(onOpen).toHaveBeenLastCalledWith(files[1], false);
+    await userEvent.dblClick(screen.getByRole('button', { name: 'src/session.rs, 2 changes' }));
+    expect(onOpen).toHaveBeenLastCalledWith(files[1], true);
+  });
+
+  it('marks the file that is shown', () => {
+    panel({ active: 'old.txt' });
+    expect(screen.getByRole('button', { name: 'old.txt, deleted' })).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('says why a session without a timeline lists no files', () => {
+    panel({ timelineSupported: false, agentName: 'OpenCode', files: [] });
+    expect(screen.getByText('No file list for OpenCode')).toBeInTheDocument();
+    expect(screen.getByText(/This session’s files can’t be listed/)).toBeInTheDocument();
   });
 });

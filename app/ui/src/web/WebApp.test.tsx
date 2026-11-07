@@ -5,6 +5,7 @@ import { renderWith } from '../test/helpers';
 import { TerminalViewStub } from '../test/terminal-stub';
 import { webBridge } from './bridge';
 import type { ViewerCore } from './connection';
+import { choose } from '../model/layout';
 import { appLink, takeHashCode, WebApp, webPage } from './WebApp';
 
 vi.mock('../terminal/TerminalView', () => ({ TerminalView: TerminalViewStub }));
@@ -76,23 +77,27 @@ describe('web viewer page', () => {
 describe('web shortcuts', () => {
   async function watching() {
     const { bridge } = setup('7K2M-9QXH-4TPA');
-    await bridge.setView({ terminal: true, steps: 'details' });
+    await bridge.setLayout(choose('developer'));
     await userEvent.type(await screen.findByLabelText('Your name'), 'anna');
     await userEvent.click(screen.getByRole('button', { name: 'Watch in this browser' }));
-    await screen.findByRole('tab', { name: /Files/ });
+    await screen.findByRole('button', { name: 'Files', pressed: true });
   }
 
-  it('Alt+2 opens Files, where the app uses Ctrl+2', async () => {
+  it('Alt+1 closes the files and Alt+3 the timeline, where the app uses Ctrl', async () => {
     await watching();
-    fireEvent.keyDown(window, { key: '™', code: 'Digit2', altKey: true });
-    expect(screen.getByRole('tab', { name: /Files/ })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(window, { key: '¡', code: 'Digit1', altKey: true });
+    expect(screen.getByRole('button', { name: 'Files', pressed: false })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: '™', code: 'Digit3', altKey: true });
+    expect(screen.getByRole('button', { name: 'Timeline', pressed: false })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: '£', code: 'Digit2', altKey: true });
+    expect(screen.getByRole('tab', { name: 'Terminal, read-only' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('? lists the web viewer’s keys', async () => {
     await watching();
     fireEvent.keyDown(document.body, { key: '?', code: 'Slash', shiftKey: true });
     const dialog = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' });
-    expect(dialog).toHaveTextContent('Alt+1 Alt+2 Alt+3');
+    expect(dialog).toHaveTextContent(/Files, the terminal, the timeline(Alt\+|⌥)1 (Alt\+|⌥)2 (Alt\+|⌥)3/);
     expect(dialog).toHaveTextContent('Your browser’s zoom');
     expect(dialog).not.toHaveTextContent('Host a session');
   });
