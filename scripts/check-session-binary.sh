@@ -15,7 +15,8 @@ check() {
   if grep -q "$2" <<< "$listing"; then
     echo "ok       $1"
   else
-    echo "missing  $1: no $2" >&2
+    echo "missing  $1: no $2; it holds:" >&2
+    grep -i specdeck <<< "$listing" >&2 || true
     status=1
   fi
 }

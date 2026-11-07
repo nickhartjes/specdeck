@@ -39,7 +39,7 @@
 
 ## 7. Docs
 
-- [ ] 7.1 Update `docs/site/src/content/docs/guide/host.md` (sessions keep running through updates and crashes, the 10-minute grace period, Quit still ends them) and the update section of the settings or troubleshooting guide. Verify `just docs-build` passes.
+- [x] 7.1 Update `docs/site/src/content/docs/guide/host.md` (sessions keep running through updates and crashes, the 10-minute grace period, Quit still ends them) and the update section of the settings or troubleshooting guide. Verify `just docs-build` passes.
 
 ## 8. Integration
 
