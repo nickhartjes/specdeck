@@ -50,6 +50,8 @@ These came out of exploring the panels idea (the session that made the first ver
 
 | Part of the mockup | Issue | Open questions |
 |---|---|---|
+| The window: three panels, tabs in the middle, a row for requests, layouts for each kind of person, resizable panels, a Files / Session / Timeline switch on narrow windows, and the file tree of touched files (option A) | #63 | The look (current style or the concept); fixed layouts or the layout following the person; preview tabs for product owners? |
+| *Whole project* in the files panel, with a deny list (`.env`), and the host's *Any file in the project* | #64 (on #51) | Off by default; respects `.gitignore`; a security review first. |
 | Files panel: *Documents*, *Code* and *Shared* tabs; a code file shows *Changes* or *Whole file, changes marked*; every Markdown file shows *Formatted* or *Source* | #56 | Whole-file view next to the diff or instead of it? Syntax highlighting, given the installer-size limit? |
 | *Shared* tab, *Shared with everyone*: files to look at together, and the host's *Put in the session folder* | #55 | Size and type limits; do files stay for late joiners? |
 | *Shared* tab, *Braindump for Claude*: everyone adds notes and files; the host gives them to Claude with an editable prompt | #61 (on #51) | Limits; does the braindump outlive the session? Can people remove their own items? |
@@ -58,15 +60,16 @@ These came out of exploring the panels idea (the session that made the first ver
 | *Prompts* tab: viewers suggest; the host sends (or edits first), keeps for later, or declines | #52 (on #51) | Who sees pending suggestions? Do kept suggestions outlive the session? |
 | *Ask to read*: a document and a time limit; a banner with who is reading or ready and a countdown | #53 (on #51) | "Not ready, I have a question"? Shown in the timeline afterwards? |
 | *Estimate*: hidden votes on cards (story points or T-shirt sizes), reveal, spread, vote again, keep the result in the timeline | #54 (on #51) | Does the host vote? Starting the vote was reported broken once in the mockup and not reproduced. |
-| Sharing settings (the sliders button): which code viewers can open, suggestions, sharing files, saving a recap | #51, #56, #57 | The defaults. |
+| Sharing settings (the sliders button): which code viewers can open, suggestions, adding files and notes, saving a recap | #51, #56, #57, #64 | The defaults. |
 | *Joined late*: a "so far" card, and earlier prompts folded to their outcome | #58 | Who writes the summary: the app from the timeline, or the agent? |
-| Notifications (shown inside the window in the mockup) | #59 | Which kinds are on by default? |
+| Notifications: pop-ups inside the window, and in the concept a bell with a list and switches for each kind | #59 | Which kinds are on by default? |
 | *End the session*: the recap with prompts and outcomes, plans and documents, decisions and changed files, and *Save recap* | #57 | Who may keep what; where it is saved. |
 
-#51 is the channel from viewers to the host that #52, #53 and #54 need, with the host in control.
+#51 is the channel from viewers to the host that #52, #53, #54, #61, #62 and #64 need, with the host in control. #60 is a bug (a rare crash in the WebRTC library on macOS) that is best fixed before the larger work.
 
 ## Order
 
-1. **The window layout:** the three panels, tabs in the middle and layouts per kind of person. It needs no protocol change, and #55, #56 and the banner row depend on it.
+1. **#63, the window layout:** the three panels, tabs in the middle and layouts per kind of person. Apart from sending the full text of touched files, it needs no protocol change, and #55, #56 and the request row depend on it.
 2. **#51**, the viewer-to-host channel, then #52, #53, #54, #61 and #62 on it.
 3. **#56, #55, #58, #59 and #57**, as each one is needed.
+4. **#64**, browsing the whole project, only after a security review.
