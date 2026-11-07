@@ -21,6 +21,18 @@ The layout differs from today's app. Today the terminal is on the left, a side p
 
 The layouts Overview, Developer and Present set these panels for each kind of person. That layout is the base the features below build on.
 
+## Layout choices from exploring the panels
+
+These came out of exploring the panels idea (the session that made the first version of the mockup):
+
+- **An IDE layout.** Panels open and close from the toolbar, with ×, or by keyboard: Cmd/Ctrl+1 for files, Cmd/Ctrl+2 for the timeline, Cmd/Ctrl+0 for the terminal. The mockup uses Alt, because the browser takes Cmd+1. The dividers can be dragged, or moved with the arrow keys. On a narrow window the panels slide in over the tabs.
+- **Tabs like an editor's.** One click opens a preview tab, in italics, which the next click replaces. A double click keeps the tab open. The terminal tab can't be closed.
+- **The document reader becomes a tab** instead of the overlay it is today. *Read a document* (plan-documents) says reading must not interrupt the session, and a tab does that better.
+- **People moves to the avatars** in the title bar, so Files and Timeline no longer share one strip of tabs.
+- **A timeline step opens a tab** at the change, or switches to the terminal and highlights the line.
+- **The host's terminal keeps its size** while another tab is shown. The agent's terminal must not resize because the host is reading a file.
+- **Which files the tree shows:** option A first, the files the agent touched, with the full text of changed files sent the way documents already are. That's a small protocol change, and viewers see only what the session showed. Option B, the whole project, means the host exposes their working folder. It would be a change of its own: opt-in, respecting `.gitignore`, with a deny list for files like `.env`, and covered in the security docs. The mockup's *Touched files / Whole project* switch shows both.
+
 ## Parts and their issues
 
 | Part of the mockup | Issue | Open questions |
