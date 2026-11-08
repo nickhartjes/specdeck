@@ -77,12 +77,21 @@ export interface LinkItem {
   outputSeq: number;
 }
 
+/** A read request that closed or an estimate the host kept (`read-and-estimate`), at that moment. */
+export interface AskItem {
+  kind: 'ask';
+  id: string;
+  entry: Extract<TimelineEvent, { kind: 'read-done' | 'estimated' }>;
+  at: number;
+  outputSeq: number;
+}
+
 export interface Turn {
   promptId: string;
   prompt: string;
   at: number;
   outputSeq: number;
-  items: (TextItem | ToolItem | NoticeItem | LinkItem)[];
+  items: (TextItem | ToolItem | NoticeItem | LinkItem | AskItem)[];
   /** The final response, once the turn is over. */
   response: string | null;
   /** Tokens the agent used for this prompt so far, once usage is known. */
@@ -107,6 +116,10 @@ export interface TimelineModel {
   links: LinkItem[];
   /** Links shared before the first prompt, which belong to no turn. */
   earlyLinks: LinkItem[];
+  /** Every closed read request and kept estimate, in order; also in the turns they happened in. */
+  asks: AskItem[];
+  /** Those before the first prompt. */
+  earlyAsks: AskItem[];
   files: TouchedFile[];
   /** Why the timeline is unavailable right now, or null. */
   unavailable: string | null;
@@ -126,6 +139,8 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
   const links: LinkItem[] = [];
   const earlyLinks: LinkItem[] = [];
   const linkTurns = new Map<number, Turn>();
+  const asks: AskItem[] = [];
+  const earlyAsks: AskItem[] = [];
   let unavailable: string | null = null;
   // The session total when each turn started; a turn's tokens are what was added since.
   let sessionTotal = 0;
@@ -288,6 +303,20 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
         if (turn) turn.revision++;
         break;
       }
+      case 'read-done':
+      case 'estimated': {
+        const ask: AskItem = { kind: 'ask', id: `ask-${event.kind}-${event.id}`, entry: event, at: event.at, outputSeq: event.outputSeq };
+        asks.push(ask);
+        // Under the prompt it happened during, as links are.
+        const turn = turns.at(-1);
+        if (turn) {
+          turn.items.push(ask);
+          turn.revision++;
+        } else {
+          earlyAsks.push(ask);
+        }
+        break;
+      }
       case 'usage-unavailable':
       case 'status-line':
       case 'git':
@@ -302,7 +331,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
   const sorted = [...files.values()].sort(
     (a, b) => Number(a.readOnly) - Number(b.readOnly) || a.path.localeCompare(b.path),
   );
-  return { turns, links, earlyLinks, files: sorted, unavailable };
+  return { turns, links, earlyLinks, asks, earlyAsks, files: sorted, unavailable };
 }
 
 /** A short line describing what a tool call does, for its timeline entry. */
@@ -341,6 +370,7 @@ export function turnText(turn: Turn): string {
     if (item.kind === 'tool') parts.push(`${item.toolName} ${toolSummary(item)}`);
     // A link's key after # is not searched, as it is not shown.
     else if (item.kind === 'link') parts.push(`${item.title ?? ''} ${item.url && !item.sessionOnly ? item.url : ''}`);
+    else if (item.kind === 'ask') parts.push(item.entry.kind === 'estimated' ? item.entry.task : item.entry.label);
     else parts.push(item.text);
   }
   return parts.join('\n');

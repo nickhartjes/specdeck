@@ -72,11 +72,11 @@ Agents report their state through the terminal (the [Program Status Protocol](ht
 
 ## Get called back
 
-You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session).
+You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. It also tells you when the host [asks you to read something or to estimate](/specdeck/guide/read-and-estimate/). Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session). Clicking a notification opens the plan or document it is about.
 
 ### Notifications in the browser
 
-In the web viewer, notifications are off until you turn them on: open the layout button and tick **While this tab is in the background** under **Notifications**. Your browser asks whether the page may show notifications. Once you allow it, choose the same kinds as in the app. The browser remembers your choice, so you are not asked again. They show only while the tab is hidden or the browser is not in front. If the browser does not allow notifications, the menu says so; allow them for the page in your browser's site settings and try again.
+In the web viewer, notifications are off until you turn them on: open the layout button and tick **While this tab is in the background** under **Notifications**. Your browser asks whether the page may show notifications. Once you allow it, choose the same kinds as in the app. The browser remembers your choice, so you are not asked again. They show only while the tab is hidden or the browser is not in front. Clicking one shows the page and opens the plan or document it is about, as in the app, as long as the page is still open. If the browser does not allow notifications, the menu says so; allow them for the page in your browser's site settings and try again.
 
 ## Read the session
 

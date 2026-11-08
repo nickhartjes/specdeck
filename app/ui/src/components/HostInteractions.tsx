@@ -108,7 +108,8 @@ function QuestionView({ item }: { item: ToolItem }) {
   );
 }
 
-function PlanView({ item, plan }: { item: ToolItem; plan: string }) {
+/** A plan the agent presented, with the host's decision; also the body of a plan tab. */
+export function PlanView({ item, plan }: { item: ToolItem; plan: string }) {
   const decided = item.outcome?.kind === 'plan-decision' ? item.outcome : null;
   const [state, text] = decided ? (decided.approved ? ['approved', 'Approved'] : ['rejected', 'Rejected']) : ['waiting', 'Waiting for the host'];
   return (

@@ -14,6 +14,7 @@ use specdeck_core::peer::PeerConfig;
 use specdeck_core::viewer::{CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession};
 use specdeck_local::{Connection, Frame, Frozen, Protocol, connect, make_private_dir};
 use specdeck_protocol::AgentId;
+use specdeck_protocol::asks::{Card, CardSet, ReadAnswer, ReadTarget};
 use specdeck_protocol::control::PROTOCOL_VERSION;
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::timeline::Entry;
@@ -931,4 +932,135 @@ async fn allow_and_remove(app: &mut App, terminal: &mut String, file: u32) {
         matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["files"] == serde_json::json!([]))
     })
     .await;
+}
+
+/// A terminal session with a shared `notes.md` and one viewer, for the host's asks.
+struct AskSession {
+    process: Process_,
+    app: App,
+    terminal: String,
+    viewer: ViewerSession,
+    viewer_events: tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>,
+    file: u32,
+    _folder: tempfile::TempDir,
+}
+
+async fn ask_session() -> AskSession {
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let code = started(&mut app, folder.path(), &url).await;
+    let mut terminal = String::new();
+    app.send(&Command::Attach).await;
+    let snapshot = app
+        .until(
+            &mut terminal,
+            |e| matches!(e, Event::HostEvent { event } if event["type"] == "snapshot"),
+        )
+        .await;
+    let Event::HostEvent { event: snapshot } = snapshot else { unreachable!() };
+    assert_eq!(snapshot["asksPossible"], true, "also in a terminal session");
+    assert_eq!(snapshot["asks"], serde_json::json!({ "read": null, "vote": null }));
+    let file = share_notes(&mut app, &mut terminal).await;
+    let (viewer, mut viewer_events) = join(&url, &code);
+    viewer_until(&mut viewer_events, |e| matches!(e, ViewerEvent::Welcome { .. })).await;
+    AskSession { process, app, terminal, viewer, viewer_events, file, _folder: folder }
+}
+
+async fn end_ask_session(mut session: AskSession) {
+    session.app.send(&Command::End).await;
+    session.app.until(&mut session.terminal, |event| matches!(event, Event::Ended)).await;
+    session.process.exits().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_host_asks_to_read_in_a_terminal_session() {
+    let mut session = Box::pin(ask_session()).await;
+    let AskSession { app, terminal, viewer, viewer_events, file, .. } = &mut session;
+    Box::pin(ask_to_read(app, terminal, viewer, viewer_events, *file)).await;
+    Box::pin(refuse_a_limit(app, terminal, *file)).await;
+    end_ask_session(session).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_host_estimates_in_a_terminal_session() {
+    let mut session = Box::pin(ask_session()).await;
+    let AskSession { app, terminal, viewer, viewer_events, .. } = &mut session;
+    Box::pin(estimate(app, terminal, viewer, viewer_events)).await;
+    end_ask_session(session).await;
+}
+
+fn host_asks(event: &Event, done: fn(&serde_json::Value) -> bool) -> bool {
+    matches!(event, Event::HostEvent { event } if event["type"] == "asks" && done(event))
+}
+
+fn timeline_kind(event: &Event, kind: &str) -> bool {
+    matches!(event, Event::HostEvent { event }
+        if event["type"] == "timeline" && event["event"]["kind"] == kind)
+}
+
+fn failed_with(event: &Event, words: &str) -> bool {
+    matches!(event, Event::Failed { message } if message.contains(words))
+}
+
+/// Asked to read the shared file; the viewer is ready; the host goes on.
+async fn ask_to_read(
+    app: &mut App,
+    terminal: &mut String,
+    viewer: &ViewerSession,
+    viewer_events: &mut tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>,
+    file: u32,
+) {
+    let target = ReadTarget::Shared { file };
+    app.send(&Command::AskToRead { target, label: "notes.md".into(), limit_s: 120 }).await;
+    app.until(terminal, |e| host_asks(e, |event| event["read"]["leftMs"].as_u64().is_some())).await;
+    let opened =
+        viewer_until(viewer_events, |e| matches!(e, ViewerEvent::ReadRequest(Some(_)))).await;
+    let ViewerEvent::ReadRequest(Some(view)) = opened else { unreachable!() };
+    // A second request is refused while one is open.
+    let again = ReadTarget::Shared { file };
+    app.send(&Command::AskToRead { target: again, label: "notes.md".into(), limit_s: 0 }).await;
+    app.until(terminal, |e| failed_with(e, "open already")).await;
+    viewer.answer_read(view.id, ReadAnswer::Ready);
+    app.until(terminal, |e| host_asks(e, |event| event["read"]["people"][0][1] == "ready")).await;
+    app.send(&Command::EndRead).await;
+    let done = app.until(terminal, |e| timeline_kind(e, "read-done")).await;
+    let Event::HostEvent { event } = done else { unreachable!() };
+    assert_eq!(event["event"]["ready"], 1);
+    assert_eq!(event["event"]["of"], 1);
+}
+
+/// A vote with the host's and the viewer's votes, revealed and kept.
+async fn estimate(
+    app: &mut App,
+    terminal: &mut String,
+    viewer: &ViewerSession,
+    viewer_events: &mut tokio::sync::mpsc::UnboundedReceiver<ViewerEvent>,
+) {
+    app.send(&Command::StartVote { task: "x".repeat(301), cards: CardSet::TShirt }).await;
+    app.until(terminal, |e| failed_with(e, "300")).await;
+    app.send(&Command::StartVote { task: "Show unreachable".into(), cards: CardSet::TShirt }).await;
+    let opened = viewer_until(viewer_events, |e| matches!(e, ViewerEvent::Vote(Some(_)))).await;
+    let ViewerEvent::Vote(Some(vote)) = opened else { unreachable!() };
+    viewer.cast_vote(vote.id, vote.round, Some(Card::Value(3)));
+    app.send(&Command::CastVote { card: Some(Card::Value(2)) }).await;
+    app.until(terminal, |e| {
+        host_asks(e, |event| event["vote"]["voted"].as_array().is_some_and(|v| v.len() == 2))
+    })
+    .await;
+    app.send(&Command::RevealVotes).await;
+    app.until(terminal, |e| host_asks(e, |event| event["vote"]["revealed"].is_array())).await;
+    app.send(&Command::KeepEstimate { card: Card::Value(2) }).await;
+    let kept = app.until(terminal, |e| timeline_kind(e, "estimated")).await;
+    let Event::HostEvent { event } = kept else { unreachable!() };
+    assert_eq!(event["event"]["kept"], serde_json::json!({ "value": 2 }));
+    assert_eq!(event["event"]["votes"], 2);
+}
+
+/// A limit that is not one of the four.
+async fn refuse_a_limit(app: &mut App, terminal: &mut String, file: u32) {
+    let target = ReadTarget::Shared { file };
+    app.send(&Command::AskToRead { target, label: "notes.md".into(), limit_s: 60 }).await;
+    app.until(terminal, |e| failed_with(e, "time limit")).await;
 }

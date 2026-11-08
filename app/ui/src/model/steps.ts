@@ -2,7 +2,7 @@
 // or each run of reads or file changes, becomes one step line that opens to its technical detail.
 
 import type { Screenshot, Target } from '../api/types';
-import type { LinkItem, NoticeItem, TextItem, ToolItem, ToolStatus, Turn } from './timeline';
+import type { AskItem, LinkItem, NoticeItem, TextItem, ToolItem, ToolStatus, Turn } from './timeline';
 
 /** `denied`: the host did not allow it, or rejected the plan it presented. */
 export type Outcome = 'running' | 'succeeded' | 'failed' | 'not-run' | 'denied';
@@ -23,7 +23,7 @@ export interface Step {
   screenshot?: ToolItem;
 }
 
-export type SummaryEntry = Step | TextItem | NoticeItem | LinkItem;
+export type SummaryEntry = Step | TextItem | NoticeItem | LinkItem | AskItem;
 
 const SHELL = new Set(['Bash', 'PowerShell']);
 const READS = new Set(['Read', 'Glob', 'Grep', 'LS']);

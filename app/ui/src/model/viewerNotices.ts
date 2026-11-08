@@ -2,18 +2,21 @@
 // decisions 2 and 3): at most one notification per turn of the agent, about the plans and
 // documents it wrote and that it finished, and a plan-mode plan at once. Only turns the viewer
 // saw start count, so the history sent on joining never notifies. Notifications name changes and
-// files, never their text.
+// files, never their text. Each says what a click on it opens: the thing its title names
+// (`notification-open` design decision 1).
 
-import type { AgentStatus, PlanDocument, TimelineEvent, ViewerNotificationKind, ViewerNotifications } from '../api/types';
+import type { AgentStatus, NoticeOpen, PlanDocument, TimelineEvent, ViewerNotificationKind, ViewerNotifications } from '../api/types';
 
-/** What a viewer gets until they change it: plans and documents, not every turn's end. */
-export const DEFAULT_VIEWER_NOTIFICATIONS: ViewerNotifications = { plans: true, documents: true, finished: false };
+/** What a viewer gets until they change it: plans, documents and the host's asks, not every turn's end. */
+export const DEFAULT_VIEWER_NOTIFICATIONS: ViewerNotifications = { plans: true, documents: true, finished: false, reads: true, estimates: true };
 
-/** The viewer's switches, in the order shown; read and vote requests will add theirs here. */
+/** The viewer's switches, in the order shown. The host's asks notify in `hostAskNotices.ts`. */
 export const VIEWER_NOTIFICATION_KINDS: { kind: ViewerNotificationKind; label: string }[] = [
   { kind: 'plans', label: 'A plan is ready for review' },
   { kind: 'documents', label: 'A document changed' },
   { kind: 'finished', label: 'The agent finished' },
+  { kind: 'reads', label: 'The host asks you to read' },
+  { kind: 'estimates', label: 'The host asks for an estimate' },
 ];
 
 /** How long the agent waits before its turn counts as ended: status and timeline arrive on separate channels. */
@@ -26,6 +29,8 @@ export interface ViewerNotice {
   kind: ViewerNotificationKind;
   title: string;
   body: string;
+  /** What a click opens; none when the notice only calls the viewer back to the session. */
+  open?: NoticeOpen;
 }
 
 export interface ViewerNoticesOptions {
@@ -152,7 +157,7 @@ export function createViewerNotices({ switches: initial, notify, schedule = defa
           stopEnd();
           if (event.toolName === 'ExitPlanMode' && !turn.planModeShown) {
             turn.planModeShown = true;
-            if (switches.plans) notify(planModeNotice(agentName));
+            if (switches.plans) notify(planModeNotice(agentName, event.toolUseId));
           }
           break;
         case 'tool-result':
@@ -179,8 +184,13 @@ export function createViewerNotices({ switches: initial, notify, schedule = defa
   };
 }
 
-function planModeNotice(agentName: string): ViewerNotice {
-  return { kind: 'plans', title: `${agentName} has a plan for you to review`, body: 'Open the session to read it.' };
+function planModeNotice(agentName: string, toolUseId: string): ViewerNotice {
+  return {
+    kind: 'plans',
+    title: `${agentName} has a plan for you to review`,
+    body: 'Open the session to read it.',
+    open: { kind: 'plan-mode', toolUseId },
+  };
 }
 
 interface PlanOutcome {
@@ -190,6 +200,8 @@ interface PlanOutcome {
   written: string[];
   /** Paths of the plan's documents, to leave out of the other documents. */
   paths: Set<string>;
+  /** The document a click opens: the first the turn wrote, in the schema's order, else the first. */
+  opens: string | undefined;
 }
 
 /**
@@ -209,7 +221,8 @@ function turnNotice(turn: Turn, agentName: string, switches: ViewerNotifications
       written.forEach((doc) => doc.paths.forEach((path) => progress.add(path)));
       continue;
     }
-    plans.push({ change, isNew: !plan.known, written: written.map((doc) => doc.name), paths: new Set(plan.documents.flatMap((doc) => doc.paths)) });
+    const opens = written[0]?.paths.find((path) => changed.has(path)) ?? plan.documents[0]?.paths[0];
+    plans.push({ change, isNew: !plan.known, written: written.map((doc) => doc.name), paths: new Set(plan.documents.flatMap((doc) => doc.paths)), opens });
   }
 
   const shownPlans = switches.plans ? plans : [];
@@ -223,12 +236,12 @@ function turnNotice(turn: Turn, agentName: string, switches: ViewerNotifications
     const what = first.written.length ? `${agentName} ${first.isNew ? 'wrote' : 'changed'} ${list(first.written)}.` : '';
     const [second] = rest;
     const more = !second ? '' : rest.length === 1 ? `Plan ${second.change} changed too.` : `${rest.length} other plans changed too.`;
-    lines.push({ kind: 'plans', title, body: [what, more].filter(Boolean).join(' ') });
+    lines.push({ kind: 'plans', title, body: [what, more].filter(Boolean).join(' '), ...opening(first.opens) });
   }
   if (switches.documents && others.length) {
     const [first, ...rest] = others.map(fileName);
     const title = rest.length ? `${first} and ${rest.length} other ${rest.length === 1 ? 'document' : 'documents'} changed` : `${first} changed`;
-    lines.push({ kind: 'documents', title, body: `${agentName} changed ${rest.length ? 'them' : 'it'} in this turn.` });
+    lines.push({ kind: 'documents', title, body: `${agentName} changed ${rest.length ? 'them' : 'it'} in this turn.`, ...opening(others[0]) });
   }
   if (switches.finished && !exited) {
     lines.push({ kind: 'finished', title: `${agentName} finished`, body: "It waits for the host's next prompt." });
@@ -237,7 +250,12 @@ function turnNotice(turn: Turn, agentName: string, switches: ViewerNotifications
   if (!head) return null;
   // The first line is the notification; the others are named in its body.
   const body = [head.body, ...tail.map((line) => (line.kind === 'finished' ? `${line.title}.` : `${line.title} too.`))].filter(Boolean).join(' ');
-  return { kind: head.kind, title: head.title, body };
+  return { kind: head.kind, title: head.title, body, ...(head.open && { open: head.open }) };
+}
+
+/** A document for a notice to open, when there is one. */
+function opening(path: string | undefined): Pick<ViewerNotice, 'open'> {
+  return path ? { open: { kind: 'document', path } } : {};
 }
 
 function fileName(path: string): string {
