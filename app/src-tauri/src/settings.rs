@@ -1,7 +1,8 @@
 //! What the app remembers between runs: the user's name, recent folders, last used agent,
 //! whether to show notifications, how the user arranges the session window, their sharing service, how
 //! far the main window is zoomed, whether to check for updates, whether the terminal works
-//! with screen readers, whether the diagnostic log is verbose and whether Claude gets a browser.
+//! with screen readers, whether the diagnostic log is verbose, whether Claude gets a browser and
+//! whether the app is light, dark or follows the OS.
 //! Stored as JSON in the app's config directory.
 
 use std::path::{Path, PathBuf};
@@ -45,6 +46,32 @@ pub struct Settings {
     pub browser: bool,
     /// New sessions keep images from MCP tools, such as screenshots, in the timeline.
     pub screenshots: bool,
+    /// Light, dark or the OS's appearance; the terminal stays dark in each.
+    pub appearance: Appearance,
+}
+
+/// The app's appearance (`appearance-setting` design decision 2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    Light,
+    Dark,
+    /// Follows the OS. Also what an unknown value, from a newer release, reads as, so the
+    /// other settings are kept; `serde(other)` has to be on the last variant.
+    #[default]
+    #[serde(other)]
+    System,
+}
+
+impl Appearance {
+    /// The theme for the native windows; `None` follows the OS.
+    pub fn theme(self) -> Option<tauri::Theme> {
+        match self {
+            Self::System => None,
+            Self::Light => Some(tauri::Theme::Light),
+            Self::Dark => Some(tauri::Theme::Dark),
+        }
+    }
 }
 
 /// How a participant follows a session (`viewer-views` design decision 4).
@@ -79,6 +106,7 @@ impl Default for Settings {
             screen_reader: false,
             verbose_logging: false,
             browser: true,
+            appearance: Appearance::System,
             screenshots: true,
         }
     }
@@ -199,6 +227,40 @@ mod tests {
         let settings = Settings { screenshots: false, ..Settings::load(&path) };
         settings.save(&path).unwrap();
         assert!(!Settings::load(&path).screenshots);
+    }
+
+    #[test]
+    fn the_appearance_follows_the_os_until_chosen_and_then_remembered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Settings saved before the appearance existed still load, following the OS.
+        std::fs::write(&path, r#"{"username":"nick","notifications":false}"#).unwrap();
+        assert_eq!(Settings::load(&path).appearance, Appearance::System);
+
+        for appearance in [Appearance::Light, Appearance::Dark, Appearance::System] {
+            let settings = Settings { appearance, ..Settings::load(&path) };
+            settings.save(&path).unwrap();
+            assert_eq!(Settings::load(&path), settings);
+        }
+        assert_eq!(serde_json::to_value(Appearance::Dark).unwrap(), "dark");
+    }
+
+    #[test]
+    fn an_unknown_appearance_follows_the_os_and_keeps_the_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"username":"nick","zoom":125,"appearance":"sepia"}"#).unwrap();
+        let settings = Settings::load(&path);
+        assert_eq!(settings.appearance, Appearance::System);
+        assert_eq!(settings.username.as_deref(), Some("nick"));
+        assert_eq!(settings.zoom, 125);
+    }
+
+    #[test]
+    fn the_appearance_gives_the_native_theme() {
+        assert_eq!(Appearance::System.theme(), None);
+        assert_eq!(Appearance::Light.theme(), Some(tauri::Theme::Light));
+        assert_eq!(Appearance::Dark.theme(), Some(tauri::Theme::Dark));
     }
 
     #[test]

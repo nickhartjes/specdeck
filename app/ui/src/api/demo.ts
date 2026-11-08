@@ -4,6 +4,7 @@
 import type { Bridge, TerminalSink } from './bridge';
 import type { DiagnosticsStatus, HostEvent, HostSuggestion, Participant, Profile, Suggestion, TimelineEvent, ViewEvent } from './types';
 import { formatCode } from '../model/code';
+import { applyAppearance } from '../appearance';
 
 const t0 = Date.UTC(2026, 9, 31, 13, 2);
 
@@ -53,6 +54,7 @@ export const demoProfile: Profile = {
   updatesItself: true,
   checkUpdates: true,
   screenReader: false,
+  appearance: 'system',
   verboseLogging: false,
   browser: true,
   screenshots: true,
@@ -328,6 +330,11 @@ export function demoBridge(screen: string): Bridge {
     setScreenReader: async (screenReader) => ({ ...profile, screenReader }),
     setVerboseLogging: async (verboseLogging) => ({ ...profile, verboseLogging }),
     setBrowser: async (browser) => ({ ...profile, browser }),
+    setAppearance: async (appearance) => {
+      applyAppearance(appearance);
+      return { ...profile, appearance };
+    },
+    onAppearance: () => () => {},
     setScreenshots: async (screenshots) => ({ ...profile, screenshots }),
     // The start screen shows an update that is ready to install.
     updateStatus: async () => (screen === 'start' ? { state: 'ready', version: '1.2.1' } : { state: 'idle' }),

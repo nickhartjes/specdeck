@@ -1,6 +1,6 @@
 ---
 title: Settings and notifications
-description: Your name, notifications, the sharing service and the window.
+description: Your name, appearance, notifications, the sharing service and the window.
 ---
 
 ## Settings
@@ -10,6 +10,7 @@ Open **Settings** with **SpecDeck › Settings…** or **⌘,** on macOS, or **F
 | Setting | What it does |
 |---|---|
 | Your name | The name others see in sessions you start or join from now on |
+| Appearance | **System** follows your computer's light or dark appearance; **Light** and **Dark** keep SpecDeck that way. Also under **View › Appearance**. See [The window](#the-window) |
 | Show notifications | Turns all of SpecDeck's notifications on or off |
 | Screen reader support | Lets screen readers (VoiceOver, Narrator, Orca) read the terminal. Off unless you turn it on: while it is on, typing in the terminal of a session you host can repeat text |
 | Give Claude a browser | Claude Code sessions you start from now on get [a browser of their own](/specdeck/guide/browser/). On by default; only on macOS |
@@ -39,5 +40,6 @@ Click a notification to bring the session to the front. Nothing is shown while y
 ## The window
 
 - SpecDeck reopens where you left it, at the same size, unless that screen is no longer connected.
-- It follows your computer's light or dark appearance, also when you switch while it is open. On macOS and Windows 11 the window lets your desktop show through, as the system's own apps do.
+- It follows your computer's light or dark appearance, also when you switch while it is open, unless you choose **Light** or **Dark** under **Appearance** in Settings or **View › Appearance**. A change applies to every window at once, title bar included. On macOS and Windows 11 the window lets your desktop show through, as the system's own apps do.
+- The terminal stays dark in every appearance. The agent picks its colours for a dark background, so everyone in the session sees them the same way, whatever each of you chose. Your appearance changes only your own app.
 - Only one SpecDeck runs at a time. Opening it again, or clicking a join link, brings the running one to the front.

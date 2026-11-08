@@ -47,7 +47,7 @@ If you cannot install SpecDeck, for example on a company laptop, you can watch i
 
 You see the session as in the app: the files, the terminal and documents in tabs, the timeline, the people, the status bar, and the Overview, Developer and Present layouts.
 
-- **Your name and layout** stay in this browser only. There is no account.
+- **Your name, layout and appearance** stay in this browser only. There is no account. Choose **System**, **Light** or **Dark** in the layout menu in the toolbar; System follows your browser.
 - **The code** is removed from the address bar once the page has read it, and is never sent to the server: it sits after the `#`, which browsers keep to themselves.
 - **Each page joins only sessions on its own sharing service.** An invite for another service gets a link to that service's own page, never a connection from this one.
 - **Some keys differ**, because the browser keeps its own:

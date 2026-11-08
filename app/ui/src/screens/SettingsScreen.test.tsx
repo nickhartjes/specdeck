@@ -183,3 +183,24 @@ describe('sharing service setting', () => {
     expect(screen.getByText('Set to 127.0.0.1:18081 by SPECDECK_SIGNALLING_URL when SpecDeck started.')).toBeInTheDocument();
   });
 });
+
+describe('appearance setting', () => {
+  it('follows the OS until Light or Dark is chosen', async () => {
+    const bridge = fakeBridge();
+    renderWith(bridge, <SettingsScreen />);
+    const group = await screen.findByRole('radiogroup', { name: 'Appearance' });
+    expect(group).toHaveAccessibleDescription(/terminal stays dark/);
+    expect(screen.getByRole('radio', { name: 'System' })).toBeChecked();
+    await userEvent.click(screen.getByRole('radio', { name: 'Dark' }));
+    expect(bridge.setAppearance).toHaveBeenCalledWith('dark');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked());
+  });
+
+  it('moves between the choices with the arrow keys', async () => {
+    const bridge = fakeBridge();
+    renderWith(bridge, <SettingsScreen />);
+    await userEvent.click(await screen.findByRole('radio', { name: 'System' }));
+    await userEvent.keyboard('{ArrowRight}');
+    expect(bridge.setAppearance).toHaveBeenCalledWith('light');
+  });
+});

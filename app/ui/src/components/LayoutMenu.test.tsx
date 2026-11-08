@@ -1,7 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { adjust, choose } from '../model/layout';
+import { fakeBridge, renderWith } from '../test/helpers';
 import { LayoutControls } from './LayoutMenu';
 
 describe('layout controls', () => {
@@ -46,5 +47,30 @@ describe('layout controls', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Overview' }));
     await userEvent.click(screen.getByRole('button', { name: 'Show the first-join question again' }));
     expect(onAskAgain).toHaveBeenCalled();
+  });
+});
+
+describe('appearance in the layout menu', () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.platform;
+    delete document.documentElement.dataset.theme;
+  });
+
+  it('is offered only in the web viewer, which has no settings window', async () => {
+    renderWith(fakeBridge('viewer'), <LayoutControls layout={choose('developer')} onLayout={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
+    expect(screen.queryByRole('group', { name: 'Appearance' })).not.toBeInTheDocument();
+  });
+
+  it('switches the page at once and stays open', async () => {
+    document.documentElement.dataset.platform = 'web';
+    const bridge = fakeBridge('viewer');
+    renderWith(bridge, <LayoutControls layout={choose('developer')} onLayout={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
+    expect(await screen.findByRole('radio', { name: /System/ })).toBeChecked();
+    await userEvent.click(screen.getByRole('radio', { name: 'Light' }));
+    expect(bridge.setAppearance).toHaveBeenCalledWith('light');
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(screen.getByRole('group', { name: 'Appearance' })).toBeInTheDocument();
   });
 });

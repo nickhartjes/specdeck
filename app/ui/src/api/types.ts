@@ -111,9 +111,14 @@ export interface Profile {
   verboseLogging: boolean;
   /** New Claude Code sessions get SpecDeck's own browser; only on macOS. */
   browser: boolean;
+  /** Light, dark or the OS's appearance; the terminal stays dark in each. */
+  appearance: Appearance;
   /** New sessions show screenshots in the timeline. */
   screenshots: boolean;
 }
+
+/** The app's appearance; `system` follows the OS, or the browser in the web viewer. */
+export type Appearance = 'system' | 'light' | 'dark';
 
 /** Where a new release is: being looked for, downloaded, or ready to install on restart. */
 export type UpdateState =

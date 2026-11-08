@@ -1,13 +1,19 @@
 // The web viewer's bridge (`web-viewer` design decision 4): watching only, through the sharing
-// service that served the page. The viewer's name and layout stay in this browser's storage; host,
+// service that served the page. The viewer's name, layout and appearance stay in this browser's storage; host,
 // folder, agent and update calls are not part of the web viewer and fail.
 
 import type { Bridge } from '../api/bridge';
-import type { JoinLink, Profile, View } from '../api/types';
+import type { Appearance, JoinLink, Profile, View } from '../api/types';
+import { asAppearance } from '../appearance';
 import { Connection, type Platform, type ViewerCore } from './connection';
 
 /** Keys in the browser's storage. */
-export const STORAGE_KEYS = { username: 'specdeck.username', view: 'specdeck.view', layout: 'specdeck.layout' } as const;
+export const STORAGE_KEYS = {
+  username: 'specdeck.username',
+  view: 'specdeck.view',
+  layout: 'specdeck.layout',
+  appearance: 'specdeck.appearance',
+} as const;
 
 export interface WebBridgeOptions {
   /** This page's sharing service, `wss://…/signal`; the only one it joins through. */
@@ -55,6 +61,11 @@ function readView(storage: Storage | null): View | null {
   }
 }
 
+/** The appearance kept in this browser; System when there is none (`web-viewer` spec). */
+export function storedAppearance(storage: Storage | null): Appearance {
+  return asAppearance(read(storage, STORAGE_KEYS.appearance));
+}
+
 /** The stored layout as is; `model/layout.ts` reads it. */
 function readLayout(storage: Storage | null): unknown {
   const text = read(storage, STORAGE_KEYS.layout);
@@ -76,6 +87,8 @@ export function webBridge(options: WebBridgeOptions): Bridge {
   // The view of earlier versions, to make the first layout from.
   const view = readView(storage);
   let layout = readLayout(storage);
+  let appearance = storedAppearance(storage);
+  const appearanceHandlers = new Set<(appearance: Appearance) => void>();
 
   const profile = (): Profile => ({
     username,
@@ -100,6 +113,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     screenReader: false,
     verboseLogging: false,
     browser: false,
+    appearance,
     screenshots: false,
   });
 
@@ -126,6 +140,17 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     setScreenReader: () => Promise.resolve(profile()),
     setVerboseLogging: () => Promise.resolve(profile()),
     setBrowser: () => Promise.resolve(profile()),
+    setAppearance: (next) => {
+      // Kept for this page even when the browser keeps nothing.
+      appearance = next;
+      write(storage, STORAGE_KEYS.appearance, next);
+      appearanceHandlers.forEach((handler) => handler(next));
+      return Promise.resolve(profile());
+    },
+    onAppearance: (handler) => {
+      appearanceHandlers.add(handler);
+      return () => void appearanceHandlers.delete(handler);
+    },
     setScreenshots: () => Promise.resolve(profile()),
     updateStatus: () => Promise.resolve({ state: 'disabled' }),
     onUpdate: () => () => {},

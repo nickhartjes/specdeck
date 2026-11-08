@@ -7,7 +7,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exportFileName } from '../model/diagnostics';
 import type { Bridge } from './bridge';
 import type { MenuCommand } from '../menu/menu';
-import type { AgentVersion, DiagnosticsStatus, HostEvent, JoinLink, Profile, RunningSession, ServiceCheck, UpdateState, ViewEvent } from './types';
+import type { AgentVersion, Appearance, DiagnosticsStatus, HostEvent, JoinLink, Profile, RunningSession, ServiceCheck, UpdateState, ViewEvent } from './types';
 
 function channel<T>(handler: (message: T) => void): Channel<T> {
   const ch = new Channel<T>();
@@ -39,6 +39,12 @@ export const tauriBridge: Bridge = {
   setScreenReader: (enabled) => invoke<Profile>('set_screen_reader', { enabled }),
   setVerboseLogging: (enabled) => invoke<Profile>('set_verbose_logging', { enabled }),
   setBrowser: (enabled) => invoke<Profile>('set_browser', { enabled }),
+  setAppearance: (appearance) => invoke<Profile>('set_appearance', { appearance }),
+  onAppearance: (handler) => {
+    // Sent to each session window and the settings window (`appearance-setting` design decision 5).
+    const stop = getCurrentWebviewWindow().listen<Appearance>('appearance', (event) => handler(event.payload));
+    return () => void stop.then((unlisten) => unlisten());
+  },
   setScreenshots: (enabled) => invoke<Profile>('set_screenshots', { enabled }),
   updateStatus: () => invoke<UpdateState>('update_status'),
   onUpdate: (handler) => {
