@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ViewerCore } from './connection';
-import { STORAGE_KEYS, storedAppearance, webBridge, type WebBridgeOptions } from './bridge';
+import { NOTIFICATIONS_BLOCKED, STORAGE_KEYS, storedAppearance, webBridge, type BrowserNotifications, type WebBridgeOptions } from './bridge';
 import { choose } from '../model/layout';
 
 const SERVICE = 'wss://specdeck.example.com/signal';
@@ -123,5 +123,97 @@ describe('web bridge', () => {
     const page = bridge();
     await expect(page.startHosting('claude-code', '/tmp', 80, 24)).rejects.toThrow('only watch');
     await expect(page.chooseFolder()).rejects.toThrow();
+  });
+});
+
+/** The browser's notifications, with the answer the viewer gives when asked. */
+function fakeNotifications(answer: NotificationPermission = 'granted') {
+  let permission: NotificationPermission = 'default';
+  const state = { away: true, shown: [] as [string, string][], asked: 0 };
+  const platform: BrowserNotifications = {
+    permission: () => permission,
+    request: async () => {
+      state.asked += 1;
+      permission = answer;
+      return answer;
+    },
+    show: (title, body) => void state.shown.push([title, body]),
+    away: () => state.away,
+  };
+  return Object.assign(state, { platform, setPermission: (next: NotificationPermission) => void (permission = next) });
+}
+
+describe('notifications in the browser', () => {
+  it('are off until turned on, and never ask before', async () => {
+    const browser = fakeNotifications();
+    const page = bridge({ notifications: browser.platform });
+    expect((await page.getProfile()).notifications).toBe(false);
+    await page.viewerNotify('plans', 'Plan add-login is ready for review', '');
+    expect(browser.shown).toEqual([]);
+    expect(browser.asked).toBe(0);
+  });
+
+  it('ask once when turned on, then show while the page is away', async () => {
+    const storage = memoryStorage();
+    const browser = fakeNotifications();
+    const page = bridge({ storage, notifications: browser.platform });
+    const profile = await page.setNotifications(true);
+    expect(profile.notifications).toBe(true);
+    expect(profile.viewerNotifications).toEqual({ plans: true, documents: true, finished: false });
+    expect(browser.asked).toBe(1);
+    await page.viewerNotify('plans', 'Plan add-login is ready for review', 'Claude Code wrote proposal.');
+    expect(browser.shown).toEqual([['Plan add-login is ready for review', 'Claude Code wrote proposal.']]);
+    // Kept for the next visit, without asking again.
+    const later = bridge({ storage, notifications: browser.platform });
+    expect((await later.getProfile()).notifications).toBe(true);
+    expect(browser.asked).toBe(1);
+  });
+
+  it('stay quiet while the page is in front, and for kinds turned off', async () => {
+    const browser = fakeNotifications();
+    const page = bridge({ notifications: browser.platform });
+    await page.setNotifications(true);
+    browser.away = false;
+    await page.viewerNotify('documents', 'README.md changed', '');
+    browser.away = true;
+    await page.viewerNotify('finished', 'Claude Code finished', '');
+    expect(browser.shown).toEqual([]);
+    await page.setViewerNotifications({ plans: true, documents: true, finished: true });
+    await page.viewerNotify('finished', 'Claude Code finished', '');
+    expect(browser.shown).toEqual([['Claude Code finished', '']]);
+  });
+
+  it('keep the kinds in the browser', async () => {
+    const storage = memoryStorage();
+    await bridge({ storage, notifications: null }).setViewerNotifications({ plans: false, documents: true, finished: true });
+    expect((await bridge({ storage, notifications: null }).getProfile()).viewerNotifications).toEqual({ plans: false, documents: true, finished: true });
+  });
+
+  it('stay off when the browser refuses, or has none', async () => {
+    const browser = fakeNotifications('denied');
+    const page = bridge({ notifications: browser.platform });
+    await expect(page.setNotifications(true)).rejects.toThrow(NOTIFICATIONS_BLOCKED);
+    expect((await page.getProfile()).notifications).toBe(false);
+    await expect(bridge({ notifications: null }).setNotifications(true)).rejects.toThrow(NOTIFICATIONS_BLOCKED);
+  });
+
+  it('read as off once the browser withdraws permission', async () => {
+    const storage = memoryStorage();
+    const browser = fakeNotifications();
+    await bridge({ storage, notifications: browser.platform }).setNotifications(true);
+    browser.setPermission('denied');
+    const page = bridge({ storage, notifications: browser.platform });
+    expect((await page.getProfile()).notifications).toBe(false);
+    await page.viewerNotify('plans', 'Plan add-login is ready for review', '');
+    expect(browser.shown).toEqual([]);
+  });
+
+  it('work for the page when the browser keeps nothing', async () => {
+    const browser = fakeNotifications();
+    const page = bridge({ storage: blockedStorage, notifications: browser.platform });
+    expect((await page.setNotifications(true)).notifications).toBe(true);
+    await page.viewerNotify('plans', 'Plan add-login is ready for review', '');
+    expect(browser.shown).toHaveLength(1);
+    expect((await bridge({ storage: blockedStorage, notifications: browser.platform }).getProfile()).notifications).toBe(false);
   });
 });

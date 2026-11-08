@@ -18,6 +18,8 @@ import type {
   TerminalSnapshot,
   UpdateState,
   ViewEvent,
+  ViewerNotificationKind,
+  ViewerNotifications,
 } from './types';
 
 /** Receives terminal data as the binary stream described in src/terminal/stream.ts. */
@@ -30,6 +32,9 @@ export interface Bridge {
   openInstallPage(agent: AgentId): Promise<void>;
   setUsername(username: string): Promise<Profile>;
   setNotifications(enabled: boolean): Promise<Profile>;
+  setViewerNotifications(kinds: ViewerNotifications): Promise<Profile>;
+  /** Notifies about the session this window watches, unless that kind is off or the window is in front. */
+  viewerNotify(kind: ViewerNotificationKind, title: string, body: string): Promise<void>;
   setCheckUpdates(enabled: boolean): Promise<Profile>;
   setScreenReader(enabled: boolean): Promise<Profile>;
   setVerboseLogging(enabled: boolean): Promise<Profile>;

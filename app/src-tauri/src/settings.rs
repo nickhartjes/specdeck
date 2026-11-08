@@ -1,5 +1,5 @@
 //! What the app remembers between runs: the user's name, recent folders, last used agent,
-//! whether to show notifications, how the user arranges the session window, their sharing service, how
+//! which notifications to show, how the user arranges the session window, their sharing service, how
 //! far the main window is zoomed, whether to check for updates, whether the terminal works
 //! with screen readers, whether the diagnostic log is verbose, whether Claude gets a browser and
 //! whether the app is light, dark or follows the OS.
@@ -25,6 +25,8 @@ pub struct Settings {
     pub recent_folders: Vec<PathBuf>,
     pub last_agent: Option<AgentId>,
     pub notifications: bool,
+    /// Which kinds of notification the user gets about sessions they watch, under `notifications`.
+    pub viewer_notifications: ViewerNotifications,
     /// How the user followed sessions before layouts; read once to make their first layout, and
     /// kept for older versions.
     pub view: Option<View>,
@@ -48,6 +50,55 @@ pub struct Settings {
     pub screenshots: bool,
     /// Light, dark or the OS's appearance; the terminal stays dark in each.
     pub appearance: Appearance,
+}
+
+/// The kinds of notification a viewer gets (`viewer-notifications` design decision 4). A file
+/// from before a kind existed gets that kind's default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ViewerNotifications {
+    /// A plan is ready for review.
+    pub plans: bool,
+    /// A document changed.
+    pub documents: bool,
+    /// The agent finished a turn; off by default, since it comes after every turn.
+    pub finished: bool,
+    // Requests from the host to read something or to vote (#53, #54) add their kinds here.
+}
+
+impl Default for ViewerNotifications {
+    fn default() -> Self {
+        Self { plans: true, documents: true, finished: false }
+    }
+}
+
+/// A kind of viewer notification, as the window names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ViewerNotificationKind {
+    Plans,
+    Documents,
+    Finished,
+}
+
+impl ViewerNotificationKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Plans => "plans",
+            Self::Documents => "documents",
+            Self::Finished => "finished",
+        }
+    }
+}
+
+impl ViewerNotifications {
+    pub fn allows(&self, kind: ViewerNotificationKind) -> bool {
+        match kind {
+            ViewerNotificationKind::Plans => self.plans,
+            ViewerNotificationKind::Documents => self.documents,
+            ViewerNotificationKind::Finished => self.finished,
+        }
+    }
 }
 
 /// The app's appearance (`appearance-setting` design decision 2).
@@ -98,6 +149,7 @@ impl Default for Settings {
             recent_folders: Vec::new(),
             last_agent: None,
             notifications: true,
+            viewer_notifications: ViewerNotifications::default(),
             view: None,
             layout: None,
             sharing_service: None,
@@ -377,6 +429,31 @@ mod tests {
         assert!(Settings::load(&path).notifications);
         std::fs::write(&path, br#"{"notifications":false}"#).unwrap();
         assert!(!Settings::load(&path).notifications);
+    }
+
+    #[test]
+    fn viewer_notifications_default_to_plans_and_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Settings from before the option existed keep everything else.
+        std::fs::write(&path, br#"{"username":"nick","notifications":false}"#).unwrap();
+        let settings = Settings::load(&path);
+        assert_eq!(settings.viewer_notifications, ViewerNotifications::default());
+        assert_eq!(settings.username.as_deref(), Some("nick"));
+        assert!(!settings.notifications);
+        assert!(settings.viewer_notifications.allows(ViewerNotificationKind::Plans));
+        assert!(settings.viewer_notifications.allows(ViewerNotificationKind::Documents));
+        assert!(!settings.viewer_notifications.allows(ViewerNotificationKind::Finished));
+
+        // A kind the file does not have gets its default.
+        std::fs::write(&path, br#"{"viewerNotifications":{"finished":true}}"#).unwrap();
+        let kinds = Settings::load(&path).viewer_notifications;
+        assert_eq!(kinds, ViewerNotifications { plans: true, documents: true, finished: true });
+
+        let mut settings = Settings::default();
+        settings.viewer_notifications.documents = false;
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), settings);
     }
 
     #[test]

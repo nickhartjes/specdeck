@@ -9,6 +9,8 @@ import type { Bridge } from '../api/bridge';
 import { fakeBridge, renderWith } from '../test/helpers';
 import type { MenuCommand } from '../menu/menu';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { LayoutControls } from '../components/LayoutMenu';
+import { choose } from '../model/layout';
 
 vi.mock('../terminal/TerminalView', async () => ({ TerminalView: (await import('../test/terminal-stub')).TerminalViewStub }));
 
@@ -112,6 +114,23 @@ describe('accessibility', () => {
     await screen.findByLabelText('Your name');
     await screen.findByLabelText('Sharing service');
     expect(await violations()).toEqual([]);
+  });
+
+  it("web viewer's layout menu with notifications", async () => {
+    document.documentElement.dataset.platform = 'web';
+    try {
+      renderWith(
+        fakeBridge('viewer'),
+        <main>
+          <LayoutControls layout={choose('developer')} onLayout={vi.fn()} />
+        </main>,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
+      await screen.findByRole('checkbox', { name: 'A plan is ready for review' });
+      expect(await violations()).toEqual([]);
+    } finally {
+      delete document.documentElement.dataset.platform;
+    }
   });
 
   it('question before joining through another sharing service', async () => {

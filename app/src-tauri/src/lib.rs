@@ -145,6 +145,7 @@ struct Profile {
     hosted_sessions: usize,
     watched_sessions: usize,
     notifications: bool,
+    viewer_notifications: settings::ViewerNotifications,
     /// How the user followed sessions before layouts, to make their first layout from.
     view: Option<View>,
     /// How the user arranges the session window; `None` until they answered the first-join question.
@@ -220,6 +221,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
         hosted_sessions,
         watched_sessions,
         notifications: settings.notifications,
+        viewer_notifications: settings.viewer_notifications,
         view: settings.view,
         layout: settings.layout,
         translucent: state.translucent.load(Ordering::Relaxed),
@@ -672,6 +674,48 @@ async fn set_sharing_service(
     Ok(profile(&state, window.label()))
 }
 
+#[tauri::command]
+async fn set_viewer_notifications(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    kinds: settings::ViewerNotifications,
+) -> Result<Profile, String> {
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.viewer_notifications = kinds;
+        state.save(&settings);
+    }
+    settings_changed(&app);
+    Ok(profile(&state, window.label()))
+}
+
+/// Notifies a viewer about the session its window watches (`viewer-notifications` design
+/// decision 4), unless they turned that kind off; the rest is up to `notify`.
+#[tauri::command]
+async fn viewer_notify(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    kind: settings::ViewerNotificationKind,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    let id = match state.sessions.lock().unwrap().of_window(window.label()) {
+        Some((id, Session::Viewer(_))) => id,
+        _ => return Err("This window does not watch a session.".into()),
+    };
+    // Only the kind and what became of it are recorded, never the text.
+    let outcome = if !state.settings.lock().unwrap().viewer_notifications.allows(kind) {
+        "kind-off"
+    } else {
+        let (title, body) = notify::viewer_text(&title, &body);
+        if try_notify(&app, id, &title, &body) { "shown" } else { "held" }
+    };
+    tracing::info!(kind = kind.name(), outcome, "viewer.notified");
+    Ok(())
+}
+
 /// Whether a sharing service, as a normalized URL, can be reached.
 #[tauri::command]
 async fn check_sharing_service(service: String) -> Result<ServiceCheck, String> {
@@ -681,6 +725,11 @@ async fn check_sharing_service(service: String) -> Result<ServiceCheck, String> 
 /// Shows a notification about session `id`, if the user wants them and the session's window is
 /// not in front. With several sessions open, the title says which one.
 fn notify(app: &AppHandle, id: SessionId, title: &str, body: &str) {
+    try_notify(app, id, title, body);
+}
+
+/// As `notify`, saying whether the notification was shown.
+fn try_notify(app: &AppHandle, id: SessionId, title: &str, body: &str) -> bool {
     let state = app.state::<AppState>();
     let enabled = state.settings.lock().unwrap().notifications;
     let (window, title) = {
@@ -688,7 +737,7 @@ fn notify(app: &AppHandle, id: SessionId, title: &str, body: &str) {
         let title = notify::title(title, sessions.name(id), sessions.count());
         (sessions.window_of(id).map(str::to_owned), title)
     };
-    notify::notify(app, &state.notices, id, window.as_deref(), enabled, &title, body);
+    notify::notify(app, &state.notices, id, window.as_deref(), enabled, &title, body)
 }
 
 #[tauri::command]
@@ -2092,6 +2141,8 @@ pub fn run() {
             get_profile,
             set_username,
             set_notifications,
+            set_viewer_notifications,
+            viewer_notify,
             set_check_updates,
             set_screen_reader,
             set_appearance,
