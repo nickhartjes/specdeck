@@ -98,3 +98,25 @@ jobs:
           curl -sf http://127.0.0.1:8080/web-viewer.json | grep -q '"protocol"'
           curl -sf http://127.0.0.1:8080/join | grep -q '<div id="root">'
           curl -sfI http://127.0.0.1:8080/join | grep -qi '^content-security-policy:'
+
+  # The Compose relay as self-hosters start it: coturn exits on options it no longer accepts
+  # (4.18 refuses --no-dtls), and a Renovate bump of the image would otherwise ship that unnoticed.
+  relay:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Start the Compose relay
+        working-directory: deploy/compose
+        env:
+          SPECDECK_DOMAIN: ci.invalid
+          SPECDECK_VERSION: ci
+          TURN_DOMAIN: ci.invalid
+          TURN_EXTERNAL_IP: 127.0.0.1
+          TURN_SECRET: ci
+        run: |
+          docker compose up --detach coturn
+          sleep 10
+          docker compose logs coturn
+          id=$(docker compose ps --all --quiet coturn)
+          test "$(docker inspect --format '{{.State.Running}} {{.RestartCount}}' "$id")" = "true 0"

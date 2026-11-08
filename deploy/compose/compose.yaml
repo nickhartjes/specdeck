@@ -59,11 +59,9 @@ services:
       - --static-auth-secret=${TURN_SECRET}
       - --fingerprint
       - --pidfile=/var/lib/coturn/turnserver.pid
-      - --no-cli
       # The app reaches TURN over UDP only (libjuice has no TURN over TCP or TLS).
       - --no-tcp
       - --no-tls
-      - --no-dtls
       - --no-tcp-relay
       - --no-multicast-peers
       # Quotas, so one credential or one session cannot take the whole relay. Each viewer uses
