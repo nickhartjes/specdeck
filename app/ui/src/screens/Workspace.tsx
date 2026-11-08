@@ -18,7 +18,7 @@ import { ScreenshotTab, screenshotTitle } from "../components/Screenshot";
 import { FilesPanel, isDocument } from "../components/FilesPanel";
 import { SearchBar } from "../components/SearchBar";
 import { SharedFileTab, type SharedFiles } from "../components/SharedFiles";
-import { shareSteps } from "../model/sharedFiles";
+import { giveSteps, newestVersions, shareSteps } from "../model/sharedFiles";
 import { TimelinePanel } from "../components/TimelinePanel";
 import { buildDocuments, type Plan } from "../model/documents";
 import {
@@ -169,6 +169,16 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
       () => new Set(props.shared?.files.map((file) => file.file)),
       [props.shared?.files],
     );
+    const braindumpNow = useMemo(
+      () => new Set(props.shared?.braindump?.items.map((item) => item.info.file)),
+      [props.shared?.braindump?.items],
+    );
+    const gives = useMemo(
+      () => giveSteps(props.timeline, braindumpNow),
+      [props.timeline, braindumpNow],
+    );
+    // A tab on a note that was edited since shows its newest version.
+    const newest = useMemo(() => newestVersions(props.timeline), [props.timeline]);
     // Which version of each document this participant last read, for the whole session; changed in place.
     const [lastRead] = useState(() => new Map<string, number>());
     const onRead = useCallback(
@@ -608,14 +618,10 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                     }
                   >
                     {tab.kind === "shared" && props.shared ? (
-                      <SharedFileTab
-                        file={
-                          props.shared.files.find(
-                            (file) => String(file.file) === tab.path,
-                          ) ?? null
-                        }
+                      <SharedTabFor
+                        id={newest.get(Number(tab.path)) ?? Number(tab.path)}
                         shared={props.shared}
-                        progress={props.sharedProgress?.get(Number(tab.path))}
+                        progress={props.sharedProgress}
                         onKeep={() => keep(tab.id)}
                       />
                     ) : tab.kind === "image" ? (
@@ -783,6 +789,7 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                 shares={shares}
                 sharedNow={sharedNow}
                 onOpenShared={(file, name) => openShared(file, name)}
+                gives={gives}
                 linksBar={props.linksBar}
                 onRemoveLink={props.onRemoveLink}
               />
@@ -793,6 +800,30 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
     );
   },
 );
+
+/** A shared file's tab: shared with everyone, or in the braindump. */
+function SharedTabFor({
+  id,
+  shared,
+  progress,
+  onKeep,
+}: {
+  id: number;
+  shared: SharedFiles;
+  progress?: ReadonlyMap<number, number>;
+  onKeep: () => void;
+}) {
+  const item = shared.braindump?.items.find((item) => item.info.file === id);
+  return (
+    <SharedFileTab
+      file={item?.info ?? shared.files.find((file) => file.file === id) ?? null}
+      item={item}
+      shared={shared}
+      progress={progress?.get(id)}
+      onKeep={onKeep}
+    />
+  );
+}
 
 /** The plan a document belongs to, with its documents for the tab's links. */
 function planOf(

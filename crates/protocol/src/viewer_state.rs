@@ -6,8 +6,8 @@
 use crate::AgentId;
 use crate::AgentStatus;
 use crate::control::{
-    self, HostMessage, Outcome, Participant, RefusalReason, SentLink, SharedFileInfo, Suggestion,
-    ViewerMessage, ViewerRequest,
+    self, BraindumpItemInfo, HostMessage, Outcome, Participant, RefusalReason, SentLink,
+    SharedFileInfo, Suggestion, ViewerMessage, ViewerRequest,
 };
 use crate::frames::{Frame, FrameVerifier, Record};
 use crate::invite::InviteCode;
@@ -76,6 +76,8 @@ pub enum ControlUpdate {
     },
     /// This viewer's links and what became of each.
     Links(Vec<SentLink>),
+    /// The braindump now.
+    Braindump(Vec<BraindumpItemInfo>),
     /// The message could not be used; drop this connection and try again.
     Retry,
 }
@@ -182,16 +184,23 @@ impl ViewerState {
             HostMessage::Files { files } => ControlUpdate::Files(files),
             HostMessage::LinksAllowed { links } => ControlUpdate::LinksAllowed { links },
             HostMessage::Links { mine } => ControlUpdate::Links(mine),
+            HostMessage::Braindump { items } => ControlUpdate::Braindump(items),
         }
     }
 
     /// A new request to the host, numbered; it is kept until the host answers it. A file to
-    /// share is not kept: its upload belongs to the connection, so after a reconnect the viewer
-    /// shares it again instead.
+    /// share, or anything else with an upload, is not kept: its upload belongs to the
+    /// connection, so after a reconnect the viewer sends it again instead.
     pub fn send_request(&mut self, request: ViewerRequest) -> (u32, ViewerMessage) {
         let id = self.next_request;
         self.next_request += 1;
-        if !matches!(request, ViewerRequest::ShareFile { .. }) {
+        if !matches!(
+            request,
+            ViewerRequest::ShareFile { .. }
+                | ViewerRequest::AddToBraindump { .. }
+                | ViewerRequest::AddNote { .. }
+                | ViewerRequest::ReplaceNote { .. }
+        ) {
             self.unanswered.push((id, request.clone()));
         }
         (id, ViewerMessage::Send { id, request })
@@ -346,8 +355,41 @@ mod tests {
             size: 1,
             sha256: [0; 32],
         });
+        viewer.send_request(ViewerRequest::AddToBraindump {
+            name: "b.txt".into(),
+            size: 1,
+            sha256: [0; 32],
+        });
+        viewer.send_request(ViewerRequest::AddNote { size: 1, sha256: [0; 32] });
+        viewer.send_request(ViewerRequest::ReplaceNote { file: 2, size: 1, sha256: [0; 32] });
         let (_, remove) = viewer.send_request(ViewerRequest::RemoveFile { file: 1 });
         assert_eq!(viewer.unanswered_requests(), [remove]);
+    }
+
+    #[test]
+    fn the_braindump_becomes_an_update() {
+        let key = SessionKey::generate();
+        let mut viewer = viewer(&key);
+        let item = BraindumpItemInfo {
+            info: SharedFileInfo {
+                file: 2,
+                name: "sanne-note-1.md".into(),
+                kind: control::FileKind::Markdown,
+                media_type: "text/markdown".into(),
+                size: 3,
+                sha256: [0; 32],
+                by: 1,
+                by_label: "Sanne".into(),
+                at_ms: 5,
+            },
+            note: true,
+            given: None,
+        };
+        let braindump = HostMessage::Braindump { items: vec![item.clone()] };
+        assert_eq!(
+            viewer.on_control(&control::encode(&braindump)),
+            ControlUpdate::Braindump(vec![item])
+        );
     }
 
     #[test]

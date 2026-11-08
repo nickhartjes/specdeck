@@ -10,7 +10,8 @@ use specdeck_core::viewer::{
     CONNECT_TIMEOUT, FileError, ViewerConfig, ViewerEvent, ViewerSession, ViewerStatus,
 };
 use specdeck_protocol::control::{
-    Outcome, PROTOCOL_VERSION, Participant, SentLink, SharedFileInfo, Suggestion, valid_suggestion,
+    BraindumpItemInfo, Outcome, PROTOCOL_VERSION, Participant, SentLink, SharedFileInfo,
+    Suggestion, valid_suggestion,
 };
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::links::{check_link, valid_title};
@@ -59,6 +60,10 @@ pub enum ViewEvent {
     /// The files shared in the session now.
     SharedFiles {
         files: Vec<SharedFileInfo>,
+    },
+    /// The braindump now.
+    Braindump {
+        items: Vec<BraindumpItemInfo>,
     },
     /// Bytes of a shared file this viewer is opening.
     FileProgress {
@@ -194,6 +199,36 @@ impl ViewerRuntime {
         }
     }
 
+    /// Adds a file to the braindump, if the host allows it; refused with why otherwise.
+    pub async fn add_to_braindump(&self, name: String, bytes: Vec<u8>) -> Result<(), String> {
+        let outcome = self.session.add_to_braindump(name, bytes).await;
+        match outcome.map_err(|_| "The session has ended.".to_owned())? {
+            Outcome::Received => Ok(()),
+            outcome => Err(share_refusal(outcome).into()),
+        }
+    }
+
+    /// Adds a note to the braindump, or replaces this viewer's note `file` while it is not
+    /// given; refused with why otherwise.
+    pub async fn add_note(&self, text: String, file: Option<u32>) -> Result<(), String> {
+        let text = text.replace("\r\n", "\n");
+        if text.trim().is_empty() {
+            return Err("Write something first.".into());
+        }
+        let outcome = match file {
+            Some(file) => self.session.replace_note(file, text).await,
+            None => self.session.add_note(text).await,
+        };
+        match outcome.map_err(|_| "The session has ended.".to_owned())? {
+            Outcome::Received => Ok(()),
+            Outcome::TooLarge => Err("Notes can be up to 32 KB.".into()),
+            Outcome::Gone if file.is_some() => {
+                Err("That note is no longer in the braindump.".into())
+            }
+            outcome => Err(share_refusal(outcome).into()),
+        }
+    }
+
     /// A shared file's bytes, fetched from the host and checked.
     pub async fn open_file(&self, file: u32) -> Result<Vec<u8>, String> {
         match self.session.fetch_file(file).await {
@@ -244,7 +279,7 @@ impl ViewerRuntime {
 /// Why the host did not take a file, as the viewer's window shows it.
 fn share_refusal(outcome: Outcome) -> &'static str {
     match outcome {
-        Outcome::Off => "The host has not turned on sharing files.",
+        Outcome::Off => "The host has not turned on adding files and notes.",
         Outcome::TooLarge => "Files can be up to 10 MB.",
         Outcome::Full => {
             "There is no room for more of your files in this session. Remove some first."
@@ -253,6 +288,7 @@ fn share_refusal(outcome: Outcome) -> &'static str {
             "Only images (PNG, JPEG, GIF, WebP), Markdown and text files can be shared."
         }
         Outcome::Gone => "The file did not reach the host intact. Share it again.",
+        Outcome::AlreadyGiven => "That note was given to the agent, so it can't be edited.",
         Outcome::RateLimited | Outcome::Received | Outcome::Ready { .. } => {
             "The host did not take the file. Share it again."
         }
@@ -283,6 +319,7 @@ fn translate(event: ViewerEvent) -> Option<ViewEvent> {
         ViewerEvent::Suggestions(mine) => ViewEvent::Suggestions { mine },
         ViewerEvent::LinksAllowed { links } => ViewEvent::LinksAllowed { links },
         ViewerEvent::Links(mine) => ViewEvent::Links { mine },
+        ViewerEvent::Braindump(items) => ViewEvent::Braindump { items },
         ViewerEvent::Ended => ViewEvent::Ended { reason: EndReason::Closed },
         ViewerEvent::Refused(reason) => ViewEvent::Ended {
             reason: match reason {

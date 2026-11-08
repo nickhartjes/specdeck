@@ -16,13 +16,15 @@ use specdeck_core::browser::BrowserHandler;
 use specdeck_core::environment::Environment;
 use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
-use specdeck_core::session::{HostConfig, HostSession, SessionEvent};
+use specdeck_core::session::{GiveError, HostConfig, HostSession, SessionEvent};
 use specdeck_core::shared_files::{PutError, Refusal};
 use specdeck_core::sharing::{
     Answer, HostLink, HostSuggestion, MAX_VIEWERS, Sharing, SharingConfig, SharingEvent,
     SharingStatus,
 };
-use specdeck_protocol::control::{Participant, Role, SentLinkState, SharedFileInfo};
+use specdeck_protocol::control::{
+    BraindumpItemInfo, Participant, Role, SentLinkState, SharedFileInfo,
+};
 use specdeck_protocol::links::{LinkRefusal, MAX_LINK_TITLE_CHARS};
 use specdeck_protocol::timeline::{Entry, TimelineEvent};
 use specdeck_protocol::{AgentId, AgentStatus};
@@ -78,6 +80,10 @@ pub enum HostEvent {
         files_allowed: bool,
         /// The files shared now, oldest first.
         shared_files: Vec<SharedFileInfo>,
+        /// The braindump now, oldest first; absent from sessions of the release before it.
+        braindump: Vec<BraindumpItemInfo>,
+        /// False for terminal sessions: giving the braindump only writes the files there.
+        braindump_prompt_possible: bool,
         /// Links can be shared; absent from sessions of the release before `shared-links`.
         links_possible: bool,
         links_allowed: bool,
@@ -116,9 +122,10 @@ pub enum HostEvent {
     Shared {
         whole_files: bool,
     },
-    /// The shared files, or whether viewers may share them, changed.
+    /// The shared files, the braindump, or whether viewers may add to them, changed.
     SharedFiles {
         files: Vec<SharedFileInfo>,
+        braindump: Vec<BraindumpItemInfo>,
         files_allowed: bool,
     },
     /// Whether viewers may send links, after the host changed it.
@@ -389,9 +396,10 @@ impl HostRuntime {
                             ui.exited = Some(code);
                             ui.send(HostEvent::Exited { code });
                         }
-                        Some(SessionEvent::SharedFiles { files, viewers_allowed }) => {
+                        Some(SessionEvent::SharedFiles { files, braindump, viewers_allowed }) => {
                             let files_allowed = viewers_allowed;
-                            shared.lock().unwrap().send(HostEvent::SharedFiles { files, files_allowed });
+                            let event = HostEvent::SharedFiles { files, braindump, files_allowed };
+                            shared.lock().unwrap().send(event);
                         }
                         Some(SessionEvent::Output | SessionEvent::Resized { .. }) => {}
                         None => break,
@@ -517,6 +525,8 @@ impl HostRuntime {
                 shared_files_possible: true,
                 files_allowed: view.files_allowed(),
                 shared_files: view.shared_files(),
+                braindump: view.braindump(),
+                braindump_prompt_possible: self.agent != AgentId::Terminal,
                 links_possible: true,
                 links_allowed: ui.links_allowed,
                 viewer_links: ui.viewer_links.clone(),
@@ -638,8 +648,57 @@ impl HostRuntime {
             Ok(info) => (info.kind.as_str(), "shared"),
             Err(refusal) => ("unknown", refusal.as_str()),
         };
-        specdeck_core::diag::host_file_shared(0, kind, size, outcome);
+        specdeck_core::diag::host_file_shared(0, "everyone", kind, size, outcome);
         result.map_err(refusal_message)
+    }
+
+    /// Adds a file the host chose in their window to the braindump, `data` in base64.
+    pub fn add_to_braindump(&self, name: &str, data: &str) -> Result<SharedFileInfo, String> {
+        let bytes = BASE64.decode(data).map_err(|_| "The file could not be read.".to_owned())?;
+        let size = bytes.len() as u64;
+        let result = self.session.add_to_braindump(&self.host_label(), name, bytes);
+        host_added("braindump", size, &result);
+        result.map_err(refusal_message)
+    }
+
+    /// Adds a note the host wrote to the braindump.
+    pub fn add_note(&self, text: &str) -> Result<SharedFileInfo, String> {
+        let result = self.session.add_note(&self.host_label(), text);
+        host_added("note", text.len() as u64, &result);
+        result.map_err(note_refusal)
+    }
+
+    /// Replaces the host's own note, while it is not given.
+    pub fn replace_note(&self, file: u32, text: &str) -> Result<SharedFileInfo, String> {
+        let result = self.session.replace_note(file, text);
+        host_added("note", text.len() as u64, &result);
+        result.map_err(note_refusal)
+    }
+
+    /// Gives the braindump to the agent (`braindump` design decision 4): writes what was not
+    /// given yet into `shared/braindump/`, then types `prompt` and the paths written into the
+    /// agent and submits it. A terminal session takes no prompt: nothing is typed into a shell.
+    /// Returns the paths written, relative to the session folder.
+    pub async fn give_braindump(&self, prompt: Option<String>) -> Result<Vec<String>, String> {
+        let prompt = prompt.map(|p| typed_prompt(&p)).filter(|p| !p.trim().is_empty());
+        match (self.agent == AgentId::Terminal, &prompt) {
+            (true, Some(_)) => return Err("Nothing is typed into a terminal session.".into()),
+            (false, None) => return Err("Write a prompt for the agent first.".into()),
+            _ => {}
+        }
+        let given = self.session.give_braindump().map_err(|error| match error {
+            GiveError::Nothing => "Everything in the braindump has been given already.".to_owned(),
+            GiveError::Put(PutError::Io(_)) => {
+                "The braindump could not be written to shared/braindump/ in the session folder."
+                    .into()
+            }
+            GiveError::Put(error) => format!("The braindump was not given: {error}."),
+        })?;
+        if let Some(prompt) = prompt {
+            self.submit_prompt(&format!("{}\n\n{}", prompt.trim_end(), given.paths.join("\n")))
+                .await?;
+        }
+        Ok(given.paths)
     }
 
     pub fn remove_shared_file(&self, file: u32) {
@@ -692,12 +751,17 @@ impl HostRuntime {
             return Err("That suggestion has already been answered.".into());
         }
         if let Some(text) = text {
-            self.input(&typed_prompt(&text))?;
-            // Apart from the text, so an agent that takes fast input as a paste still submits.
-            tokio::time::sleep(SUBMIT_DELAY).await;
-            self.input("\r")?;
+            self.submit_prompt(&text).await?;
         }
         Ok(())
+    }
+
+    /// Types `text` into the agent's prompt, as the host would, and submits it.
+    async fn submit_prompt(&self, text: &str) -> Result<(), String> {
+        self.input(&typed_prompt(text))?;
+        // Apart from the text, so an agent that takes fast input as a paste still submits.
+        tokio::time::sleep(SUBMIT_DELAY).await;
+        self.input("\r")
     }
 
     /// The host's name as the participant list shows it, for the links they share.
@@ -765,8 +829,28 @@ fn refusal_message(refusal: Refusal) -> String {
         }
         Refusal::Gone => "That file is no longer shared.",
         Refusal::Off => "Sharing files is turned off.",
+        Refusal::AlreadyGiven => "That note was given to the agent, so it can't be edited.",
     }
     .into()
+}
+
+/// Why a note was not added or edited, as the host's window shows it.
+fn note_refusal(refusal: Refusal) -> String {
+    match refusal {
+        Refusal::TooLarge => "Notes can be up to 32 KB.".into(),
+        Refusal::NotAllowedType => "Write something first.".into(),
+        Refusal::Gone => "That note is no longer in the braindump.".into(),
+        refusal => refusal_message(refusal),
+    }
+}
+
+/// Records what the host added to the braindump, without its name or content.
+fn host_added(group: &'static str, size: u64, result: &Result<SharedFileInfo, Refusal>) {
+    let (kind, outcome) = match result {
+        Ok(info) => (info.kind.as_str(), "shared"),
+        Err(refusal) => ("unknown", refusal.as_str()),
+    };
+    specdeck_core::diag::host_file_shared(0, group, kind, size, outcome);
 }
 
 #[cfg(test)]

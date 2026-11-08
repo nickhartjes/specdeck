@@ -52,8 +52,9 @@ SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a com
 | Limit the number of viewers | Select the avatars and set **Max viewers** (1 to 20). Lowering it never disconnects anyone already watching |
 | Let viewers open whole code files | Select the **sharing settings** button (sliders) and set **Code viewers can open**. It applies to changes Claude makes from then on |
 | Let viewers suggest prompts, or stop them | Select the **sharing settings** button and switch **Viewers can suggest prompts**. Nothing a viewer suggests reaches the agent until you send it |
-| Share a file with everyone | Open **Files › Shared** and select **Share files**, or drop files there. See [Share files](#share-files) |
-| Let viewers share files, or stop them | Select the **sharing settings** button and switch **Viewers can share files**. It is off when a session starts |
+| Share a file with everyone | Open **Files › Shared** and select **Add files or a note**, or drop files there, and choose **Share with everyone**. See [Share files](#share-files) |
+| Collect notes and files for the agent | Open **Files › Shared**, select **Add files or a note**, and keep **To the braindump**. Select **Give** when it is complete. See [The braindump](#the-braindump) |
+| Let viewers add files and notes, or stop them | Select the **sharing settings** button and switch **Viewers can add files and notes**. It covers sharing files and the braindump, and is off when a session starts |
 | Share a link | Select **Share a link** above the timeline. See [Share a link](#share-a-link) |
 | Let viewers send links, or stop them | Select the **sharing settings** button and switch **Viewers can share links**. You see each link first |
 | End the session for everyone | Select **End session** and confirm. The agent or shell stops and the invite code stops working |
@@ -64,10 +65,10 @@ If you set up your own Claude Code status line, it keeps showing in the terminal
 
 ## Share files
 
-Share a wireframe, acceptance criteria or a CI log so everyone in the session can look at it together. Open **Files**, select **Shared**, then **Share files**, or drop files on it. Everyone sees the file under **Shared with everyone**, with who shared it, when and its size, and in the timeline as a step, such as *Nick shared wireframe.png*. Anyone can open it in a tab, or **Save a copy**.
+Share a wireframe, acceptance criteria or a CI log so everyone in the session can look at it together. Open **Files**, select **Shared**, then **Add files or a note**, or drop files on it, and choose **Share with everyone**. Everyone sees the file under **Shared with everyone**, with who shared it, when and its size, and in the timeline as a step, such as *Nick shared wireframe.png*. Anyone can open it in a tab, or **Save a copy**.
 
 - **What can be shared:** images (PNG, JPEG, GIF, WebP), Markdown and text files, such as logs, JSON or code, up to **10 MB** each. SpecDeck checks the content, not only the name: SVG, PDF and other files are refused, and so is a program renamed to `notes.txt`. A session holds up to **50 MB** of shared files, and each viewer's files up to 20 MB. Remove some to make room.
-- **Viewers share only when you let them.** In the **sharing settings**, switch on **Viewers can share files**. It is off at the start of every session. Turning it off keeps the files already shared.
+- **Viewers share only when you let them.** In the **sharing settings**, switch on **Viewers can add files and notes**. It is off at the start of every session, and it also decides whether viewers can add to [the braindump](#the-braindump). Turning it off keeps the files already shared.
 - **You can remove any file**, and a viewer can remove their own. A removed file is gone for everyone, and its step in the timeline says it was removed.
 - **Files last for the session.** People who join later or reconnect get them too. SpecDeck keeps them in memory only, never on disk, and when the session ends they are gone, except copies people saved.
 - **The agent does not see shared files.** To give one to the agent, open it and select **Put in the session folder**. SpecDeck writes it to `shared/` in the session folder, without replacing anything: a second `wireframe.png` becomes `wireframe (2).png`. Then tell the agent where it is. Only you can do this.
@@ -75,6 +76,26 @@ Share a wireframe, acceptance criteria or a CI log so everyone in the session ca
 
 :::caution[Read a viewer's file before you give it to the agent]
 A file a viewer shares reaches you and everyone in the session, but never the agent unless you put it in the session folder. It can contain anything, including instructions meant for the agent. Read it first.
+:::
+
+## The braindump
+
+Before you start, people often have input for the agent in different places: what the product owner needs, edge cases a developer thought of, a screenshot. The braindump collects it in one place in the session, and you give it to the agent at once instead of retyping it.
+
+Open **Files › Shared** and select **Add files or a note**, or drop files there. **Where it goes** starts on **To the braindump**. Write a note, choose files, or both, and select **Add**. Everyone sees the items under **Braindump for** the agent, above **Shared with everyone**, with who added each one, when and its size.
+
+- **Notes** are text up to **32 KB**. Each becomes a Markdown file named after its author, such as `sanne-note-1.md`. The author can **Edit** their note in its tab until it is given to the agent; the edited note replaces the old one. Nobody else can edit it, you neither.
+- **Files** follow the rules of [shared files](#share-files): images, Markdown and text, up to 10 MB, counted in the same 50 MB a session and 20 MB a viewer. Files can't be edited: remove one and add it again.
+- **Viewers add only when you let them**, with the same **Viewers can add files and notes** switch. You can always add.
+- **Removing:** you can remove any item, a viewer their own. Removing an item that was already given leaves its copy in the session folder.
+- **Giving:** when the braindump is complete, select **Give N to** the agent, where N counts the items not given yet. The dialog shows the prompt the agent gets, which you can edit, and the items. **Give** copies each item into `shared/braindump/` in the session folder, never replacing a file: a second `edge-cases.txt` gets a number, as with **Put in the session folder**. Then SpecDeck types your prompt into the agent, followed by the exact paths it wrote, and sends it. Given items are marked **Given**. Add more and give again: a second round gives only what was added since.
+- **In the timeline** each giving is a step, such as *Gave the braindump to Claude Code: 3 items from Sanne and Mo*, which lists the items to open. Adding an item is not a step.
+- **In a terminal session** everyone can add to the braindump too, but **Copy N to the session folder** only writes the files and types nothing, because every line typed into a shell runs. Point your tool to `shared/braindump/` yourself.
+- **For this session only.** The braindump is held in memory, like shared files, and is gone when the session ends. Only the copies given to the agent stay, in `shared/braindump/`.
+- **Viewers on an older SpecDeck** keep watching, without the braindump.
+
+:::caution[Read the braindump before you give it]
+Notes and files from viewers can contain anything, including instructions meant for the agent. Nothing reaches the agent until you give it, and you see the prompt first. Read the items before you select **Give**.
 :::
 
 ## Share a link

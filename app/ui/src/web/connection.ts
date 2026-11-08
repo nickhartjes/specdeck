@@ -4,7 +4,7 @@
 // RTCPeerConnection. What each message means is decided by `ViewerCore`, the shared Rust code
 // compiled to WebAssembly (crates/web), so verification and ordering match the app.
 
-import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, BraindumpItemInfo, EndReason, Participant, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from '../api/types';
 
 /** How long joining may take, and one reconnection attempt; as `CONNECT_TIMEOUT` in the app. */
 export const CONNECT_TIMEOUT_MS = 20_000;
@@ -28,6 +28,7 @@ export type ControlUpdate =
   | { type: 'files'; files: SharedFileInfo[] }
   | { type: 'links-allowed'; links: boolean }
   | { type: 'links'; mine: SentLink[] }
+  | { type: 'braindump'; items: BraindumpItemInfo[] }
   | { type: 'retry' };
 
 /** What a message on the files channel did to a fetch; `FileFetch` in crates/web. */
@@ -84,6 +85,10 @@ export interface ViewerCore {
   unansweredRequests(): Request[];
   /** A file to share, announced with its size and hash. */
   shareFile(name: string, bytes: Uint8Array): Request;
+  /** A file for the braindump, announced as `shareFile` announces one. */
+  addToBraindump(name: string, bytes: Uint8Array): Request;
+  /** A note for the braindump, or a new version of this viewer's note `file`; throws past 32 KB. */
+  addNote(text: Uint8Array, file?: number): Request;
   removeFile(file: number): Request;
   fetchFile(file: number, size: number, sha256: Uint8Array): FileFetchCore;
   uploadFile(upload: number, bytes: Uint8Array): FileUploadCore;
@@ -96,6 +101,9 @@ interface Fetch {
 }
 
 interface Share {
+  /** Where it goes: shared with everyone, the braindump, a note, or a new version of the note `file`. */
+  to: 'everyone' | 'braindump' | 'note';
+  file?: number;
   name: string;
   bytes: Uint8Array;
   resolve: (outcome: RequestOutcome) => void;
@@ -180,6 +188,8 @@ export class Connection {
   private sendFiles: ((bytes: Uint8Array<ArrayBuffer>) => void) | null = null;
   // Fetching and sharing files, one of each at a time (`shared-files` design decision 2).
   private files: SharedFileInfo[] = [];
+  /** The braindump's items, fetched like shared files. */
+  private braindump: SharedFileInfo[] = [];
   private fetches: Fetch[] = [];
   private fetching: (Fetch & { core: FileFetchCore }) | null = null;
   private shares: Share[] = [];
@@ -213,8 +223,25 @@ export class Connection {
 
   /** Shares a file with everyone; resolves to `Received` once shared, or to why not. */
   shareFile(name: string, bytes: Uint8Array): Promise<RequestOutcome> {
+    return this.upload({ to: 'everyone', name, bytes });
+  }
+
+  /** Adds a file to the braindump, as `shareFile` shares one. */
+  addToBraindump(name: string, bytes: Uint8Array): Promise<RequestOutcome> {
+    return this.upload({ to: 'braindump', name, bytes });
+  }
+
+  /** Adds a note to the braindump, or replaces this viewer's note `file` while it is not given. */
+  addNote(text: string, file?: number): Promise<RequestOutcome> {
+    const bytes = new TextEncoder().encode(text.replace(/\r\n/g, '\n'));
+    // The host would disconnect a viewer that announced a note of another size.
+    if (bytes.length === 0 || bytes.length > 32 * 1024) return Promise.resolve('TooLarge');
+    return this.upload({ to: 'note', file, name: '', bytes });
+  }
+
+  private upload(share: Omit<Share, 'resolve'>): Promise<RequestOutcome> {
     return new Promise((resolve) => {
-      this.shares.push({ name, bytes, resolve });
+      this.shares.push({ ...share, resolve });
       this.drive();
     });
   }
@@ -233,7 +260,7 @@ export class Connection {
     if (!send || !sendControl) return;
     while (!this.fetching && this.fetches.length > 0) {
       const next = this.fetches.shift()!;
-      const info = this.files.find((file) => file.file === next.file);
+      const info = [...this.files, ...this.braindump].find((file) => file.file === next.file);
       if (!info) {
         next.reject(new Error('That file is no longer shared.'));
         continue;
@@ -244,7 +271,11 @@ export class Connection {
     }
     if (!this.asked && !this.uploading && !this.waiting && this.shares.length > 0) {
       const share = this.shares.shift()!;
-      const request = this.options.core.shareFile(share.name, share.bytes);
+      const core = this.options.core;
+      const request =
+        share.to === 'braindump' ? core.addToBraindump(share.name, share.bytes)
+        : share.to === 'note' ? core.addNote(share.bytes, share.file)
+        : core.shareFile(share.name, share.bytes);
       this.asked = { id: request.id, share };
       sendControl(new Uint8Array(request.message));
     }
@@ -278,7 +309,7 @@ export class Connection {
     if (fetching) {
       const update = fetching.core.onReply(bytes);
       if (update.progress !== undefined) {
-        const size = this.files.find((file) => file.file === fetching.file)?.size ?? update.progress;
+        const size = [...this.files, ...this.braindump].find((file) => file.file === fetching.file)?.size ?? update.progress;
         this.options.onEvent({ type: 'file-progress', file: fetching.file, received: update.progress, size });
         return;
       }
@@ -494,6 +525,10 @@ export class Connection {
               break;
             case 'links-allowed':
               onEvent({ type: 'links-allowed', links: update.links });
+              break;
+            case 'braindump':
+              this.braindump = update.items.map((item) => item.info);
+              onEvent({ type: 'braindump', items: update.items });
               break;
             case 'links':
               onEvent({ type: 'links', mine: update.mine });

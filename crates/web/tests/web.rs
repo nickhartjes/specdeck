@@ -100,6 +100,22 @@ fn a_file_to_share_is_announced_with_its_hash_and_sent_after_ready() {
 }
 
 #[wasm_bindgen_test]
+fn braindump_notes_and_files_are_announced_and_bounded() {
+    let mut viewer = WebViewer::new(CODE).unwrap();
+    let file = viewer.add_to_braindump("crash.png", b"\x89PNG").unwrap();
+    assert_eq!(js_sys_get(&file, "id").as_f64(), Some(1.0));
+    assert!(viewer.add_to_braindump("", b"x").is_err());
+    let note = viewer.add_note(b"Say reconnecting", None).unwrap();
+    assert_eq!(js_sys_get(&note, "id").as_f64(), Some(2.0));
+    let edit = viewer.add_note(b"Say reconnecting, not error", Some(4)).unwrap();
+    assert_eq!(js_sys_get(&edit, "id").as_f64(), Some(3.0));
+    assert!(viewer.add_note(b"", None).is_err());
+    assert!(viewer.add_note(&vec![b'x'; 32 * 1024 + 1], None).is_err());
+    // Uploads are not resent after a reconnect: they belong to the connection.
+    assert_eq!(js_sys_get(&viewer.unanswered_requests(), "length").as_f64(), Some(0.0));
+}
+
+#[wasm_bindgen_test]
 fn refuses_what_is_not_a_code() {
     assert!(WebViewer::new("not a code").is_err());
 }

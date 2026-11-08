@@ -243,6 +243,22 @@ export type TimelineEvent = Stamp &
         by: number;
         byLabel: string;
       }
+    /** Someone added to the braindump (`braindump`): the fields of `file-shared`, and the note it replaces. Not drawn as a step. */
+    | {
+        kind: 'braindump-item';
+        file: number;
+        name: string;
+        fileKind: FileKind;
+        mediaType: string;
+        size: number;
+        sha256: string;
+        by: number;
+        byLabel: string;
+        note?: boolean;
+        replaces?: number;
+      }
+    /** The host gave the braindump to the agent: the items, the paths written and whom they came from. */
+    | { kind: 'braindump-given'; round: number; files: number[]; paths: string[]; from: string[] }
     | { kind: 'plan'; change: string; documents: PlanDocument[]; tasks: { done: number; total: number } }
     | { kind: 'timeline-unavailable'; reason: string }
     | { kind: 'timeline-available' }
@@ -306,7 +322,7 @@ export interface HostLink extends SentLink {
 }
 
 /** Whether a request got through to the host; `Outcome` in crates/protocol. */
-export type RequestOutcome = 'Received' | 'Off' | 'RateLimited' | 'TooLarge' | 'Full' | 'NotAllowedType' | 'Gone' | { Ready: { upload: number } };
+export type RequestOutcome = 'Received' | 'Off' | 'RateLimited' | 'TooLarge' | 'Full' | 'NotAllowedType' | 'Gone' | 'AlreadyGiven' | { Ready: { upload: number } };
 
 /** What a shared file is, decided by the host from its content. */
 export type FileKind = 'image' | 'markdown' | 'text';
@@ -326,6 +342,16 @@ export interface SharedFileInfo {
   /** When, in milliseconds since the epoch. */
   atMs: number;
 }
+
+/** An item in the braindump: a file or a note, and the round it was given to the agent in. */
+export interface BraindumpItemInfo {
+  info: SharedFileInfo;
+  note: boolean;
+  given: number | null;
+}
+
+/** Longest note in the braindump, in bytes of UTF-8; `MAX_NOTE_BYTES` in crates/protocol. */
+export const MAX_NOTE_BYTES = 32 * 1024;
 
 /** Largest shared file, in bytes; `MAX_SHARED_FILE_BYTES` in crates/protocol. */
 export const MAX_SHARED_FILE_BYTES = 10 * 1024 * 1024;
@@ -361,6 +387,10 @@ export type HostEvent =
       sharedFilesPossible?: boolean;
       filesAllowed?: boolean;
       sharedFiles?: SharedFileInfo[];
+      /** The braindump; absent from sessions of the previous release, which have none. */
+      braindump?: BraindumpItemInfo[];
+      /** False for terminal sessions, where giving the braindump types nothing. */
+      braindumpPromptPossible?: boolean;
       /** Absent from sessions of the previous release, which can't share links. */
       linksPossible?: boolean;
       linksAllowed?: boolean;
@@ -374,8 +404,8 @@ export type HostEvent =
   | { type: 'suggestions'; suggestions: HostSuggestion[] }
   /** Whether viewers can open whole code files, after the host changed it. */
   | { type: 'shared'; wholeFiles: boolean }
-  /** The shared files, or whether viewers may share them, changed. */
-  | { type: 'shared-files'; files: SharedFileInfo[]; filesAllowed: boolean }
+  /** The shared files, the braindump, or whether viewers may add to them, changed. */
+  | { type: 'shared-files'; files: SharedFileInfo[]; braindump?: BraindumpItemInfo[]; filesAllowed: boolean }
   /** Whether viewers may send links, after the host changed it. */
   | { type: 'links-allowed'; links: boolean }
   /** Every link viewers sent, oldest first, on every change. */
@@ -425,6 +455,8 @@ export type ViewEvent =
   | { type: 'files-allowed'; files: boolean }
   /** The files shared in the session now. */
   | { type: 'shared-files'; files: SharedFileInfo[] }
+  /** The braindump now; never sent by a host of the previous release. */
+  | { type: 'braindump'; items: BraindumpItemInfo[] }
   /** Bytes of a shared file this viewer is opening. */
   | { type: 'file-progress'; file: number; received: number; size: number }
   /** Whether the host lets viewers send links; never sent by a host of the previous release. */

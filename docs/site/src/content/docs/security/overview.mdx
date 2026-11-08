@@ -13,7 +13,7 @@ These pages are for anyone deciding whether SpecDeck may be used at work: the de
 
 - **The session stays with the host.** The terminal, the timeline, documents, shared files and links go straight from the host's computer to each viewer, encrypted. The sharing service and the relay pass on traffic they cannot read, and nothing of a session is stored anywhere but on the host's computer, only while it runs.
 - **Viewers see everything in the terminal.** The timeline adds nothing from outside the session folder, but whatever the agent or a command prints is shared as it appears. Viewers who join late get the whole session from its start.
-- **Viewers only watch.** Nothing a viewer sends reaches the agent unless the host acts on it in their own window.
+- **Viewers only watch.** Nothing a viewer sends reaches the agent unless the host acts on it in their own window: a suggested prompt the host sends, a file the host puts in the session folder, or a braindump the host gives, with a prompt the host sees and can edit first.
 - **The invite code is the key.** Anyone who has it can watch, until the host makes a new one or ends the session. Whoever runs the sharing service could in principle guess a code by trying codes on their own computers; a fix is planned. See [The sharing service](/specdeck/security/sharing-service/#the-invite-code).
 - **No accounts, no telemetry.** SpecDeck sends nothing about you or your sessions to anyone. It contacts only the sharing service, the relay, and GitHub to check for updates.
 - **Updates are signed, installers not yet.** The app installs only updates signed with SpecDeck's key, but the installers are not signed by Apple or Microsoft yet.

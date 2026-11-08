@@ -1190,6 +1190,47 @@ async fn host_put_shared_file(
     host.put_shared_file(file).await
 }
 
+/// Adds a file the host chose or dropped to the braindump; answers with the file as listed.
+#[tauri::command]
+async fn host_add_to_braindump(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<serde_json::Value, String> {
+    let (name, bytes) = handed_file(&request)?;
+    let host = state.host_of(window.label())?;
+    host.add_to_braindump(name, &bytes).await
+}
+
+#[tauri::command]
+async fn host_add_note(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<serde_json::Value, String> {
+    state.host_of(window.label())?.add_note(text).await
+}
+
+#[tauri::command]
+async fn host_replace_note(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    file: u32,
+    text: String,
+) -> Result<serde_json::Value, String> {
+    state.host_of(window.label())?.replace_note(file, text).await
+}
+
+/// Gives the braindump to the agent; the paths written in the session folder.
+#[tauri::command]
+async fn host_give_braindump(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    prompt: Option<String>,
+) -> Result<Vec<String>, String> {
+    state.host_of(window.label())?.give_braindump(prompt).await
+}
+
 fn viewer_of(state: &AppState, window: &WebviewWindow) -> Result<Arc<ViewerRuntime>, String> {
     match state.sessions.lock().unwrap().of_window(window.label()) {
         Some((_, Session::Viewer(viewer))) => Ok(viewer),
@@ -1207,6 +1248,28 @@ async fn viewer_share_file(
     let (name, bytes) = handed_file(&request)?;
     let viewer = viewer_of(&state, &window)?;
     viewer.share_file(name, bytes).await
+}
+
+/// Adds a file the viewer chose or dropped to the braindump, if the host allows it.
+#[tauri::command]
+async fn viewer_add_to_braindump(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<(), String> {
+    let (name, bytes) = handed_file(&request)?;
+    viewer_of(&state, &window)?.add_to_braindump(name, bytes).await
+}
+
+/// Adds a note to the braindump, or replaces the viewer's own note `file`.
+#[tauri::command]
+async fn viewer_add_note(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    text: String,
+    file: Option<u32>,
+) -> Result<(), String> {
+    viewer_of(&state, &window)?.add_note(text, file).await
 }
 
 /// A shared file's bytes, fetched from the host.
@@ -2403,6 +2466,12 @@ pub fn run() {
             host_read_shared_file,
             host_put_shared_file,
             viewer_share_file,
+            host_add_to_braindump,
+            host_add_note,
+            host_replace_note,
+            host_give_braindump,
+            viewer_add_to_braindump,
+            viewer_add_note,
             viewer_open_file,
             viewer_remove_file,
             save_shared_file,

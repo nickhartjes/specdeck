@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Download, FileText, FolderInput, Image, Share2, Trash2, Upload } from 'lucide-react';
+import { Check, Download, FileText, FolderInput, Image, NotebookPen, Pencil, Send, Share2, Trash2, Upload } from 'lucide-react';
 import { errorMessage } from '../api/bridge';
-import type { SharedFileInfo } from '../api/types';
+import { MAX_NOTE_BYTES, type BraindumpItemInfo, type SharedFileInfo } from '../api/types';
 import { languageOf, tokenizeLines } from '../model/highlight';
-import { dataUrl, formatSize, refusal, SHAREABLE, sharedBy, textOf } from '../model/sharedFiles';
+import { dataUrl, formatSize, noteBytes, refusal, SHAREABLE, sharedBy, textOf } from '../model/sharedFiles';
+import { AddDialog } from './AddDialog';
 import { CodeLines } from './CodeLines';
+import { GiveDialog } from './GiveDialog';
 import { Markdown } from './Markdown';
 
 /** Text longer than this is shown without highlighting, to keep the window responsive. */
@@ -30,13 +32,33 @@ export interface SharedFiles {
   save: (name: string, bytes: ArrayBuffer) => Promise<boolean>;
   /** Tells this person something, such as a refusal. */
   say: (message: string) => void;
+  /** The braindump; absent where the session has none. */
+  braindump?: Braindump;
+}
+
+/** The braindump and what this person may do with it (`braindump`). */
+export interface Braindump {
+  items: BraindumpItemInfo[];
+  /** Adds files; refusals are reported by the caller, file by file. */
+  add: (files: File[]) => void;
+  /** Adds a note, or replaces this person's note `file`; fails with why. */
+  note: (text: string, file?: number) => Promise<void>;
+  /** The host's: gives what was not given yet, with a prompt unless `promptPossible` is false; the paths written. */
+  give?: (prompt: string | null) => Promise<string[]>;
+  /** False in terminal sessions, where giving only writes the files. */
+  promptPossible: boolean;
 }
 
 /**
  * Checks `files` and shares those that may go, one by one; says why for each one that may not.
  * The host decides again from the content.
  */
-export async function shareEach(files: File[], send: (name: string, bytes: ArrayBuffer) => Promise<unknown>, say: (message: string) => void) {
+export async function shareEach(
+  files: File[],
+  send: (name: string, bytes: ArrayBuffer) => Promise<unknown>,
+  say: (message: string) => void,
+  done = (name: string) => `${name} is shared with everyone.`,
+) {
   for (const file of files) {
     const refused = refusal(file);
     if (refused) {
@@ -45,23 +67,30 @@ export async function shareEach(files: File[], send: (name: string, bytes: Array
     }
     try {
       await send(file.name, await file.arrayBuffer());
-      say(`${file.name} is shared with everyone.`);
+      say(done(file.name));
     } catch (error) {
       say(`${file.name}: ${errorMessage(error)}`);
     }
   }
 }
 
-const iconOf = (file: SharedFileInfo) => (file.kind === 'image' ? Image : FileText);
+const iconOf = (file: SharedFileInfo, note = false) => (note ? NotebookPen : file.kind === 'image' ? Image : FileText);
 const TIME = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 
-/** The Shared tab of the files panel: for now the group Shared with everyone (`session-window` spec: Shared tab). */
+/** The Shared tab of the files panel: the braindump and Shared with everyone (`session-window` spec: Shared tab). */
 export function SharedTab({ shared, active, onOpen }: { shared: SharedFiles; active: number | null; onOpen: (file: SharedFileInfo, keep: boolean) => void }) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
+  // Open with the files chosen so far, or closed.
+  const [adding, setAdding] = useState<File[] | null>(null);
+  const [giving, setGiving] = useState(false);
   const newestFirst = useMemo(() => [...shared.files].reverse(), [shared.files]);
+  const braindump = shared.braindump;
   const take = (files: FileList | null) => {
-    if (files && files.length > 0) shared.share([...files]);
+    if (!files || files.length === 0) return;
+    // With a braindump, the dialog asks where they go.
+    if (braindump) setAdding([...files]);
+    else shared.share([...files]);
   };
   return (
     <div
@@ -79,6 +108,15 @@ export function SharedTab({ shared, active, onOpen }: { shared: SharedFiles; act
         take(event.dataTransfer.files);
       }}
     >
+      {braindump && (
+        <BraindumpGroup
+          shared={shared}
+          braindump={braindump}
+          active={active}
+          onOpen={onOpen}
+          onGive={() => setGiving(true)}
+        />
+      )}
       <section aria-labelledby="shared-everyone">
         <h3 id="shared-everyone" className="group-title">
           Shared with everyone
@@ -128,15 +166,105 @@ export function SharedTab({ shared, active, onOpen }: { shared: SharedFiles; act
                 event.target.value = '';
               }}
             />
-            <button className="btn small" onClick={() => input.current?.click()} title={`${SHAREABLE}. Or drop them here.`}>
-              <Upload aria-hidden /> Share files
-            </button>
+            {braindump ? (
+              <button className="btn small" onClick={() => setAdding([])} title={`${SHAREABLE}, or a note. Or drop files here.`}>
+                <Upload aria-hidden /> Add files or a note
+              </button>
+            ) : (
+              <button className="btn small" onClick={() => input.current?.click()} title={`${SHAREABLE}. Or drop them here.`}>
+                <Upload aria-hidden /> Share files
+              </button>
+            )}
           </>
         ) : (
-          <span className="field-hint">{shared.hostName} has not turned on sharing files.</span>
+          <span className="field-hint">{shared.hostName} has not turned on {braindump ? 'adding files and notes' : 'sharing files'}.</span>
         )}
       </div>
+      {adding && <AddDialog shared={shared} files={adding} onClose={() => setAdding(null)} />}
+      {giving && braindump?.give && (
+        <GiveDialog
+          items={braindump.items.filter((item) => item.given === null)}
+          agentName={shared.agentName}
+          promptPossible={braindump.promptPossible}
+          onGive={braindump.give}
+          onGiven={(paths) => shared.say(`In shared/braindump/ now: ${paths.map((path) => path.split('/').at(-1)).join(', ')}.`)}
+          onClose={() => setGiving(false)}
+        />
+      )}
     </div>
+  );
+}
+
+/** The braindump for the agent: everyone's notes and files, and the host's Give N to the agent. */
+function BraindumpGroup({
+  shared,
+  braindump,
+  active,
+  onOpen,
+  onGive,
+}: {
+  shared: SharedFiles;
+  braindump: Braindump;
+  active: number | null;
+  onOpen: (file: SharedFileInfo, keep: boolean) => void;
+  onGive: () => void;
+}) {
+  const fresh = braindump.items.filter((item) => item.given === null).length;
+  const agent = shared.agentName;
+  // A terminal session has no agent to give to: the host copies the items into the folder.
+  const title = braindump.promptPossible ? `Braindump for ${agent}` : 'Braindump';
+  const done = braindump.promptPossible ? `Given to ${agent}` : 'Copied to the session folder';
+  return (
+    <section aria-labelledby="shared-braindump" className="braindump">
+      <div className="group-head">
+        <h3 id="shared-braindump" className="group-title">
+          {title}
+        </h3>
+        {shared.host && braindump.give && fresh > 0 && (
+          <button className="btn small primary" onClick={onGive}>
+            <Send aria-hidden /> {braindump.promptPossible ? `Give ${fresh} to ${agent}` : `Copy ${fresh} to the session folder`}
+          </button>
+        )}
+      </div>
+      <p className="field-hint group-help">
+        Notes and files from everyone.{' '}
+        {braindump.promptPossible
+          ? `${shared.host ? 'You give' : `${shared.hostName} gives`} them to ${agent} together, as one folder.`
+          : `${shared.host ? 'You copy' : `${shared.hostName} copies`} them into the session folder together.`}
+      </p>
+      {braindump.items.length === 0 ? (
+        <p className="field-hint group-help">Nothing yet. {shared.canShare ? 'Add a note or a file.' : ''}</p>
+      ) : (
+        <ul className="files" aria-label={title}>
+          {braindump.items.map(({ info, note, given }) => {
+            const Icon = iconOf(info, note);
+            const who = sharedBy(info, shared.me);
+            return (
+              <li key={info.file}>
+                <button
+                  aria-current={active === info.file || undefined}
+                  aria-label={`${info.name}, added by ${who}, ${formatSize(info.size)}${given !== null ? (braindump.promptPossible ? `, given to ${agent}` : ', copied to the session folder') : ''}`}
+                  title={info.name}
+                  onClick={() => onOpen(info, false)}
+                  onDoubleClick={() => onOpen(info, true)}
+                >
+                  <Icon aria-hidden />
+                  <span className="name">{info.name}</span>
+                  <span className="folder">
+                    {who}, {TIME.format(info.atMs)}, {formatSize(info.size)}
+                  </span>
+                  {given !== null && (
+                    <span className="given" title={done}>
+                      <Check aria-hidden /> {braindump.promptPossible ? 'Given' : 'Copied'}
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -146,12 +274,15 @@ type Loaded = { id: number } & ({ state: 'ready'; bytes: ArrayBuffer } | { state
 /** A shared file in a tab: an image, Markdown or text, with who shared it and what can be done with it. */
 export function SharedFileTab({
   file,
+  item,
   shared,
   progress,
   onKeep,
 }: {
   /** Null once the file was removed. */
   file: SharedFileInfo | null;
+  /** The file's place in the braindump, when it is in it. */
+  item?: BraindumpItemInfo;
   shared: SharedFiles;
   /** Bytes received so far, while it is fetched. */
   progress?: number;
@@ -159,6 +290,8 @@ export function SharedFileTab({
 }) {
   const [result, setLoaded] = useState<Loaded | null>(null);
   const [source, setSource] = useState(false);
+  // The note's text while its author edits it.
+  const [editing, setEditing] = useState<string | null>(null);
   const id = file?.file;
   const open = shared.open;
   const loaded = result?.id === id ? result : null;
@@ -192,6 +325,18 @@ export function SharedFileTab({
       (error) => shared.say(errorMessage(error)),
     );
   };
+  const agent = shared.agentName;
+  const editable = item?.note && item.given === null && mine && shared.braindump !== undefined;
+  const forAgent = shared.braindump?.promptPossible !== false;
+  const where = item
+    ? item.given !== null
+      ? forAgent
+        ? `Given to ${agent}`
+        : 'Copied to the session folder'
+      : forAgent
+        ? `In the braindump for ${agent}`
+        : 'In the braindump'
+    : 'Shared with everyone';
   const put = () =>
     shared.put?.(file.file).then(
       (path) => shared.say(`In ${path} now. ${shared.agentName} can read it there.`),
@@ -202,10 +347,10 @@ export function SharedFileTab({
       <div className="filebar">
         <span className="path selectable">{file.name}</span>
         <span className="muted">
-          From {sharedBy(file, shared.me).replace(/^You$/, 'you')}, {TIME.format(file.atMs)}, {formatSize(file.size)}. Shared with everyone.
+          From {sharedBy(file, shared.me).replace(/^You$/, 'you')}, {TIME.format(file.atMs)}, {formatSize(file.size)}. {where}.
         </span>
         <span className="spacer" />
-        {file.kind === 'markdown' && ready && (
+        {file.kind === 'markdown' && ready && editing === null && (
           <div className="toggle" role="group" aria-label="How to show the document">
             <button type="button" aria-pressed={!source} onClick={() => (setSource(false), onKeep())}>
               Formatted
@@ -215,7 +360,12 @@ export function SharedFileTab({
             </button>
           </div>
         )}
-        {shared.host && shared.put && (
+        {editable && ready && editing === null && (
+          <button className="btn small" onClick={() => (setEditing(textOf(ready)), onKeep())}>
+            <Pencil aria-hidden /> Edit
+          </button>
+        )}
+        {shared.host && shared.put && !item && (
           <button className="btn small" onClick={put} title={`Writes it into shared/ in the session folder, where ${shared.agentName} can read it`}>
             <FolderInput aria-hidden /> Put in the session folder
           </button>
@@ -242,9 +392,42 @@ export function SharedFileTab({
             Getting {file.name}… {progress !== undefined && file.size > 0 ? `${Math.floor((progress / file.size) * 100)}%` : ''}
           </span>
         </div>
+      ) : editing !== null && shared.braindump ? (
+        <NoteEditor
+          text={editing}
+          onChange={setEditing}
+          onCancel={() => setEditing(null)}
+          onSave={() =>
+            shared.braindump!.note(editing, file.file).then(
+              () => (setEditing(null), shared.say(`${file.name} saved.`)),
+              (error) => shared.say(errorMessage(error)),
+            )
+          }
+        />
       ) : (
         <SharedContent file={file} bytes={ready} source={source} />
       )}
+    </div>
+  );
+}
+
+/** A note being edited by its author, before it is given. */
+function NoteEditor({ text, onChange, onCancel, onSave }: { text: string; onChange: (text: string) => void; onCancel: () => void; onSave: () => void }) {
+  const bytes = noteBytes(text);
+  const tooLong = bytes > MAX_NOTE_BYTES;
+  return (
+    <div className="note-editor">
+      <textarea className="field" aria-label="Note" value={text} onChange={(event) => onChange(event.target.value)} autoFocus />
+      <div className="actions">
+        <span className={`field-hint${tooLong ? ' error-text' : ''}`}>{formatSize(bytes)} of 32 KB</span>
+        <span className="spacer" />
+        <button className="btn small" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn small primary" onClick={onSave} disabled={tooLong || !text.trim()}>
+          Save
+        </button>
+      </div>
     </div>
   );
 }

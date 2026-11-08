@@ -17,6 +17,8 @@ declare module 'specdeck-web-wasm' {
     sendLink(url: string, title: string | null | undefined, sessionOnly: boolean): unknown;
     unansweredRequests(): unknown;
     shareFile(name: string, bytes: Uint8Array): unknown;
+    addToBraindump(name: string, bytes: Uint8Array): unknown;
+    addNote(text: Uint8Array, file?: number | null): unknown;
     removeFile(file: number): unknown;
   }
   export class FileFetch {

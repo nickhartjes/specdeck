@@ -34,14 +34,21 @@ describe('sharing settings', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('lets viewers share files only when the host turns it on', async () => {
+  it('lets viewers add files and notes only when the host turns it on', async () => {
     const onChange = vi.fn();
     render(<SharingSettings files={{ allowed: false, onChange }} agentName="Claude Code" />);
     await userEvent.click(screen.getByRole('button', { name: 'Sharing settings' }));
-    const box = screen.getByRole('checkbox', { name: /Viewers can share files/ });
+    const box = screen.getByRole('checkbox', { name: /Viewers can add files and notes/ });
     expect(box).not.toBeChecked();
-    expect(screen.getByText(/Claude Code sees one only when you put it in the session folder/)).toBeInTheDocument();
+    expect(screen.getByText(/Claude Code sees nothing until you give the braindump or put a file in the session folder/)).toBeInTheDocument();
     await userEvent.click(box);
     expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  it('names no agent in a terminal session, where the braindump is only copied', async () => {
+    render(<SharingSettings files={{ allowed: true, onChange: vi.fn(), terminal: true }} agentName="Terminal" />);
+    await userEvent.click(screen.getByRole('button', { name: 'Sharing settings' }));
+    expect(screen.getByText(/Nothing reaches the session folder until you copy the braindump or put a file there/)).toBeInTheDocument();
+    expect(screen.queryByText(/Terminal sees/)).not.toBeInTheDocument();
   });
 });

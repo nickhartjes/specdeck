@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Eye, LogOut, WifiOff } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, BraindumpItemInfo, EndReason, Participant, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
 import { shareEach, type SharedFiles } from '../components/SharedFiles';
 import { Toast, useToast } from '../components/Toast';
 import { useSharedBytes } from './useSharedBytes';
@@ -84,6 +84,8 @@ interface State {
   /** Whether the host lets viewers share files; null while the host has not said, as older hosts never do. */
   filesAllowed: boolean | null;
   sharedFiles: SharedFileInfo[];
+  /** The braindump; null while the host has not sent it, as older hosts never do. */
+  braindump: BraindumpItemInfo[] | null;
   /** Bytes received of files being fetched, by file. */
   fileProgress: ReadonlyMap<number, number>;
   /** Whether the host lets viewers send links; null while the host has not said, as older hosts never do. */
@@ -101,6 +103,7 @@ const initial: State = {
   wholeFiles: false,
   filesAllowed: null,
   sharedFiles: [],
+  braindump: null,
   fileProgress: new Map(),
   linksAllowed: null,
   myLinks: [],
@@ -155,6 +158,8 @@ export function viewerReducer(state: State, event: ViewEvent | { type: 'link-sen
       return { ...state, filesAllowed: event.files };
     case 'shared-files':
       return { ...state, sharedFiles: event.files };
+    case 'braindump':
+      return { ...state, braindump: event.items };
     case 'file-progress':
       return { ...state, fileProgress: new Map(state.fileProgress).set(event.file, event.received) };
     case 'links-allowed':
@@ -245,7 +250,8 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   const ending = state.ended ? END_MESSAGES[state.ended] : null;
   const statusBar = useMemo(() => statusBarInfo(state.timeline, state.timelineSupported), [state.timeline, state.timelineSupported]);
   const [toast, showToast] = useToast();
-  const open = useSharedBytes(state.sharedFiles, bridge.viewerOpenFile);
+  const held = useMemo(() => [...state.sharedFiles, ...(state.braindump ?? []).map((item) => item.info)], [state.sharedFiles, state.braindump]);
+  const open = useSharedBytes(held, bridge.viewerOpenFile);
   const hostName = host?.label ?? 'The host';
   const live = state.phase !== 'ended';
   const shared = useMemo<SharedFiles | undefined>(
@@ -264,9 +270,17 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
             remove: (file) => void bridge.viewerRemoveFile(file).catch((e) => showToast(errorMessage(e))),
             save: bridge.saveSharedFile,
             say: showToast,
+            braindump: state.braindump
+              ? {
+                  items: state.braindump,
+                  add: (files) => void shareEach(files, bridge.viewerAddToBraindump, showToast, (name) => `${name} is in the braindump.`),
+                  note: (text, file) => bridge.viewerAddNote(text, file),
+                  promptPossible: !terminal,
+                }
+              : undefined,
           }
         : undefined,
-    [state.filesAllowed, state.sharedFiles, state.viewerId, live, hostName, terminal, agentName, bridge, showToast, open],
+    [state.filesAllowed, state.sharedFiles, state.braindump, state.viewerId, live, hostName, terminal, agentName, bridge, showToast, open],
   );
 
   // Ended before ever joining: explain, and offer to try again.

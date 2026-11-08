@@ -79,6 +79,18 @@ export interface Bridge {
   hostReadSharedFile(file: number): Promise<ArrayBuffer>;
   /** Puts a shared file into shared/ in the session folder; the path it was written to. */
   hostPutSharedFile(file: number): Promise<string>;
+  /** Adds a file the host chose to the braindump; fails with why it was refused. */
+  hostAddToBraindump(name: string, bytes: ArrayBuffer): Promise<SharedFileInfo>;
+  /** Adds a note the host wrote to the braindump. */
+  hostAddNote(text: string): Promise<SharedFileInfo>;
+  /** Replaces the host's own note while it is not given. */
+  hostReplaceNote(file: number, text: string): Promise<SharedFileInfo>;
+  /**
+   * Gives the braindump to the agent: writes what was not given yet into shared/braindump/, then
+   * types `prompt` and the paths into the agent; null in a terminal session, which types nothing.
+   * The paths written, relative to the session folder.
+   */
+  hostGiveBraindump(prompt: string | null): Promise<string[]>;
   /** Shares the host's own link with everyone; `url` is checked again on the Rust side. */
   hostShareLink(url: string, title: string | null, sessionOnly: boolean): Promise<void>;
   /** Shares a viewer's waiting link with everyone as they sent it, or declines it. */
@@ -95,6 +107,10 @@ export interface Bridge {
   suggestPrompt(text: string): Promise<void>;
   /** Shares a file with everyone in the watched session; fails with why the host refused it. */
   viewerShareFile(name: string, bytes: ArrayBuffer): Promise<void>;
+  /** Adds a file to the braindump of the watched session; fails with why the host refused it. */
+  viewerAddToBraindump(name: string, bytes: ArrayBuffer): Promise<void>;
+  /** Adds a note to the braindump, or replaces this viewer's note `file` while it is not given. */
+  viewerAddNote(text: string, file?: number): Promise<void>;
   /** A shared file's bytes, fetched from the host and checked. */
   viewerOpenFile(file: number): Promise<ArrayBuffer>;
   /** Removes a file this viewer shared. */

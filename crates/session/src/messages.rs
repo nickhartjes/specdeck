@@ -107,6 +107,33 @@ pub enum Command {
         id: u64,
         file: u32,
     },
+    /// Adds a file the host chose to the braindump, `data` in base64; answered like
+    /// [`Command::ShareFile`] (`braindump`).
+    AddToBraindump {
+        id: u64,
+        name: String,
+        data: String,
+    },
+    /// Adds a note the host wrote to the braindump; answered like [`Command::ShareFile`].
+    AddNote {
+        id: u64,
+        text: String,
+    },
+    /// Replaces the host's own note `file`, while it is not given; answered with the new
+    /// version's `SharedFileInfo`.
+    ReplaceNote {
+        id: u64,
+        file: u32,
+        text: String,
+    },
+    /// Gives the braindump to the agent: what was not given yet is written to
+    /// `shared/braindump/`, then `prompt` and the paths are typed into the agent; a terminal
+    /// session takes no prompt. Answered with the paths written.
+    GiveBraindump {
+        id: u64,
+        #[serde(default)]
+        prompt: Option<String>,
+    },
     /// The host's answer to a waiting suggestion; a sent one is typed into the agent's prompt.
     AnswerSuggestion {
         viewer_id: u32,
@@ -262,6 +289,31 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Command>(put).unwrap(),
             Command::PutSharedFile { id: 4, file: 2 }
+        );
+        let note = r#"{"type":"add-note","id":5,"text":"Edge cases"}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(note).unwrap(),
+            Command::AddNote { id: 5, text: "Edge cases".into() }
+        );
+        let replace = r#"{"type":"replace-note","id":6,"file":3,"text":"Edited"}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(replace).unwrap(),
+            Command::ReplaceNote { id: 6, file: 3, text: "Edited".into() }
+        );
+        let add = r#"{"type":"add-to-braindump","id":7,"name":"a.png","data":"YQ=="}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(add).unwrap(),
+            Command::AddToBraindump { id: 7, name: "a.png".into(), data: "YQ==".into() }
+        );
+        let give = r#"{"type":"give-braindump","id":8,"prompt":"Read these"}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(give).unwrap(),
+            Command::GiveBraindump { id: 8, prompt: Some("Read these".into()) }
+        );
+        let copy = r#"{"type":"give-braindump","id":9}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(copy).unwrap(),
+            Command::GiveBraindump { id: 9, prompt: None }
         );
         let answer = Event::Answer { id: 4, value: Some("shared/a.md".into()), error: None };
         let json = serde_json::to_string(&answer).unwrap();

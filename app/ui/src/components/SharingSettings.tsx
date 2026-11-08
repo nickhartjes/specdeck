@@ -6,8 +6,8 @@ interface Props {
   wholeFiles?: { on: boolean; onChange: (on: boolean) => void };
   /** Whether viewers may suggest prompts, with its switch; absent where they cannot. */
   suggestions?: { allowed: boolean; onChange: (on: boolean) => void };
-  /** Whether viewers may share files, with its switch; absent where the session takes none. */
-  files?: { allowed: boolean; onChange: (on: boolean) => void };
+  /** Whether viewers may add files and notes, with its switch; absent where the session takes none. */
+  files?: { allowed: boolean; onChange: (on: boolean) => void; terminal?: boolean };
   /** Whether viewers may send links, with its switch; absent for a session that can't share links. */
   links?: { allowed: boolean; onChange: (on: boolean) => void };
   agentName?: string;
@@ -86,10 +86,13 @@ export function SharingSettings({ wholeFiles, suggestions, files, links, agentNa
             <label className="check">
               <input type="checkbox" checked={files.allowed} onChange={(event) => files.onChange(event.target.checked)} />
               <span>
-                Viewers can share files
+                Viewers can add files and notes
                 <span className="field-hint">
                   {' '}
-                  · their files reach you and everyone in the session; {agentName} sees one only when you put it in the session folder
+                  · to the braindump or shared with everyone.{' '}
+                  {files.terminal
+                    ? 'Nothing reaches the session folder until you copy the braindump or put a file there'
+                    : `${agentName} sees nothing until you give the braindump or put a file in the session folder`}
                 </span>
               </span>
             </label>

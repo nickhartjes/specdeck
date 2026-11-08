@@ -2,7 +2,7 @@
 // open /?demo=start, /?demo=host or /?demo=viewer) and for component tests. Never used by the app.
 
 import type { Bridge, TerminalSink } from './bridge';
-import type { DiagnosticsStatus, FileKind, HostEvent, HostLink, HostSuggestion, Participant, Profile, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from './types';
+import type { BraindumpItemInfo, DiagnosticsStatus, FileKind, HostEvent, HostLink, HostSuggestion, Participant, Profile, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from './types';
 import { formatCode } from '../model/code';
 import { applyAppearance } from '../appearance';
 
@@ -367,6 +367,44 @@ export function demoBridge(screen: string): Bridge {
     hostEvents?.({ type: 'shared-files', files: sharedFiles, filesAllowed });
     viewerEvents?.({ type: 'shared-files', files: sharedFiles });
   };
+  // The braindump: a note from Sanne and edge cases from Mo, in the same store as shared files.
+  let braindump: BraindumpItemInfo[] = [];
+  let rounds = 0;
+  for (const [info, bytes] of [
+    demoFile(3, 'sanne-note-1.md', 'markdown', '# What I need from the heartbeat\n\n- Say **reconnecting**, not "error".\n- Show how long the host has been gone.\n', 3, 'Sanne'),
+    demoFile(4, 'edge-cases.txt', 'text', 'host laptop sleeps 25 s, comes back: viewer must not end the session\nhost on a train: ICE restarts every few minutes\n', 2, 'Mo'),
+  ]) {
+    braindump.push({ info, note: info.name.endsWith('.md'), given: null });
+    sharedBytes.set(info.file, bytes);
+  }
+  nextFile = 5;
+  const braindumpChanged = () => {
+    hostEvents?.({ type: 'shared-files', files: sharedFiles, braindump, filesAllowed });
+    viewerEvents?.({ type: 'braindump', items: braindump });
+  };
+  const notes = new Map<string, number>();
+  const addToBraindump = (name: string, bytes: ArrayBuffer, by: number, byLabel: string, note: boolean, replaces?: number) => {
+    const kind = note ? 'markdown' : fileKind(name);
+    const mediaType = kind === 'markdown' ? 'text/markdown' : kind === 'image' ? `image/${name.split('.').at(-1)!.toLowerCase().replace('jpg', 'jpeg')}` : 'text/plain';
+    const old = braindump.find((item) => item.info.file === replaces);
+    let named = old?.info.name ?? name;
+    if (note && !old) {
+      const number = (notes.get(byLabel) ?? 0) + 1;
+      notes.set(byLabel, number);
+      named = `${byLabel.toLowerCase().replace(/\s+/g, '-')}-note-${number}.md`;
+    }
+    const info: SharedFileInfo = { file: nextFile++, name: named, kind, mediaType, size: bytes.byteLength, sha256: [], by, byLabel, atMs: Date.now() };
+    sharedBytes.set(info.file, bytes.slice(0));
+    const item = { info, note, given: null };
+    braindump = old ? braindump.map((each) => (each === old ? item : each)) : [...braindump, item];
+    if (old) sharedBytes.delete(old.info.file);
+    braindumpChanged();
+    return info;
+  };
+  const removeFromBraindump = (file: number) => {
+    braindump = braindump.filter((item) => item.info.file !== file);
+    braindumpChanged();
+  };
   const fileBytes = async (file: number) => {
     const bytes = sharedBytes.get(file);
     if (!bytes) throw new Error('That file is no longer shared.');
@@ -441,6 +479,8 @@ export function demoBridge(screen: string): Bridge {
         sharedFilesPossible: true,
         filesAllowed,
         sharedFiles,
+        braindump,
+        braindumpPromptPossible: true,
         linksPossible: true,
         linksAllowed: true,
         viewerLinks: hostLinks,
@@ -475,9 +515,28 @@ export function demoBridge(screen: string): Bridge {
       hostEvents?.({ type: 'shared-files', files: sharedFiles, filesAllowed });
     },
     hostShareFile: async (name, bytes) => addFile(name, bytes, 0, 'Nick'),
-    hostRemoveSharedFile: async (file) => removeFile(file),
+    hostRemoveSharedFile: async (file) => (braindump.some((item) => item.info.file === file) ? removeFromBraindump(file) : removeFile(file)),
     hostReadSharedFile: fileBytes,
     hostPutSharedFile: async (file) => `shared/${sharedFiles.find((info) => info.file === file)?.name ?? 'file'}`,
+    hostAddToBraindump: async (name, bytes) => addToBraindump(name, bytes, 0, 'Nick', false),
+    hostAddNote: async (text) => addToBraindump('', new TextEncoder().encode(text).buffer, 0, 'Nick', true),
+    hostReplaceNote: async (file, text) => {
+      if (braindump.find((item) => item.info.file === file)?.given) throw new Error('That note was given to the agent, so it can’t be edited.');
+      return addToBraindump('', new TextEncoder().encode(text).buffer, 0, 'Nick', true, file);
+    },
+    hostGiveBraindump: async () => {
+      const fresh = braindump.filter((item) => item.given === null);
+      if (fresh.length === 0) throw new Error('Everything in the braindump has been given already.');
+      rounds += 1;
+      braindump = braindump.map((item) => (item.given === null ? { ...item, given: rounds } : item));
+      const paths = fresh.map((item) => `shared/braindump/${item.info.name}`);
+      const from = [...new Set(fresh.map((item) => item.info.byLabel))];
+      const step: TimelineEvent = { outputSeq: 0, at: Date.now(), kind: 'braindump-given', round: rounds, files: fresh.map((item) => item.info.file), paths, from };
+      hostEvents?.({ type: 'timeline', event: step });
+      viewerEvents?.({ type: 'timeline', event: step });
+      braindumpChanged();
+      return paths;
+    },
     hostShareLink: async (url, title, sessionOnly) => shareLink(url, title, 'Nick', sessionOnly),
     hostAnswerLink: async (viewerId, id, share) => {
       const link = hostLinks.find((l) => l.viewer === viewerId && l.id === id && l.state === 'Waiting');
@@ -524,6 +583,7 @@ export function demoBridge(screen: string): Bridge {
         events({ type: 'suggestions', mine: [] });
         events({ type: 'files-allowed', files: params.get('files') !== 'off' });
         events({ type: 'shared-files', files: sharedFiles });
+        events({ type: 'braindump', items: braindump });
         events({ type: 'links-allowed', links: params.get('links') !== 'off' });
         events({ type: 'links', mine: [] });
         // A viewer takes the host's size from the stream's resize records, as from the engine.
@@ -550,8 +610,16 @@ export function demoBridge(screen: string): Bridge {
       if (!filesAllowed) throw new Error('The host has not turned on sharing files.');
       addFile(name, bytes, 2, 'Mo');
     },
+    viewerAddToBraindump: async (name, bytes) => {
+      if (!filesAllowed) throw new Error('The host has not turned on adding files and notes.');
+      addToBraindump(name, bytes, 2, 'Mo', false);
+    },
+    viewerAddNote: async (text, file) => {
+      if (!filesAllowed) throw new Error('The host has not turned on adding files and notes.');
+      addToBraindump('', new TextEncoder().encode(text).buffer, 2, 'Mo', true, file);
+    },
     viewerOpenFile: fileBytes,
-    viewerRemoveFile: async (file) => removeFile(file),
+    viewerRemoveFile: async (file) => (braindump.some((item) => item.info.file === file) ? removeFromBraindump(file) : removeFile(file)),
     saveSharedFile: async () => true,
     sendLink: async (url, title, sessionOnly) => {
       const id = nextRequest++;

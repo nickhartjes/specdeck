@@ -185,6 +185,33 @@ impl SessionClient {
         self.ask(|id| Command::ShareFile { id, name, data }).await
     }
 
+    /// Adds a file the host chose to the braindump; the file as the session lists it.
+    pub async fn add_to_braindump(
+        &self,
+        name: String,
+        bytes: &[u8],
+    ) -> Result<serde_json::Value, String> {
+        use base64::Engine as _;
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        self.ask(|id| Command::AddToBraindump { id, name, data }).await
+    }
+
+    /// Adds a note the host wrote to the braindump; the note as the session lists it.
+    pub async fn add_note(&self, text: String) -> Result<serde_json::Value, String> {
+        self.ask(|id| Command::AddNote { id, text }).await
+    }
+
+    /// Replaces the host's own note while it is not given; the new version.
+    pub async fn replace_note(&self, file: u32, text: String) -> Result<serde_json::Value, String> {
+        self.ask(|id| Command::ReplaceNote { id, file, text }).await
+    }
+
+    /// Gives the braindump to the agent, typing `prompt` in an agent session; the paths written.
+    pub async fn give_braindump(&self, prompt: Option<String>) -> Result<Vec<String>, String> {
+        let value = self.ask(|id| Command::GiveBraindump { id, prompt }).await?;
+        serde_json::from_value(value).map_err(|_| "The braindump was not given.".to_owned())
+    }
+
     pub fn remove_shared_file(&self, file: u32) {
         self.send(&Command::RemoveSharedFile { file });
     }

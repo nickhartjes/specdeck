@@ -11,11 +11,11 @@ use specdeck_local::{Compat, Frame, Protocol, compat};
 use specdeck_session::messages::{Command, Event};
 
 /// Commands added in this release (`viewer-to-host-channel`, `files-documents-and-code`,
-/// `shared-files`, `shared-links`), which a session of the release before it does not know. Its
-/// snapshot has no `suggestionsPossible`, `wholeFilesPossible`, `sharedFilesPossible` or
-/// `linksPossible`, so the window offers none of them; this keeps a stray one from reaching it.
-/// Remove a release later.
-const NEW_COMMANDS: [&str; 12] = [
+/// `shared-files`, `shared-links`, `braindump`), which a session of the release before it does
+/// not know. Its snapshot has no `suggestionsPossible`, `wholeFilesPossible`,
+/// `sharedFilesPossible`, `linksPossible` or `braindump`, so the window offers none of them; this
+/// keeps a stray one from reaching it. Remove a release later.
+const NEW_COMMANDS: [&str; 16] = [
     "allow-requests",
     "answer-suggestion",
     "share-code",
@@ -28,6 +28,10 @@ const NEW_COMMANDS: [&str; 12] = [
     "answer-link",
     "remove-link",
     "allow-links",
+    "add-to-braindump",
+    "add-note",
+    "replace-note",
+    "give-braindump",
 ];
 
 /// `command` as a session of release `peer` understands it, or None when it cannot take it.
@@ -223,6 +227,16 @@ mod tests {
         ] {
             assert!(command(previous, &links).is_none(), "{links:?}");
             assert!(command(Protocol::own(), &links).is_some(), "{links:?}");
+        }
+
+        for braindump in [
+            Command::AddToBraindump { id: 1, name: "a.png".into(), data: "YQ==".into() },
+            Command::AddNote { id: 2, text: "Edge cases".into() },
+            Command::ReplaceNote { id: 3, file: 1, text: "Edited".into() },
+            Command::GiveBraindump { id: 4, prompt: Some("Read these".into()) },
+        ] {
+            assert!(command(previous, &braindump).is_none(), "{braindump:?}");
+            assert!(command(Protocol::own(), &braindump).is_some(), "{braindump:?}");
         }
     }
 

@@ -68,3 +68,73 @@ export function shareSteps(events: TimelineEvent[]): ShareStep[] {
     event.kind === 'file-shared' ? [{ file: event.file, name: event.name, by: event.by, byLabel: event.byLabel, at: event.at }] : [],
   );
 }
+
+/** An item a giving of the braindump wrote, as the timeline step lists it. */
+export interface GivenItem {
+  file: number;
+  /** The name it was written under in shared/braindump/, which may carry a number. */
+  name: string;
+  path: string;
+  /** No longer in the braindump; its copy stays in the session folder. */
+  removed: boolean;
+}
+
+/** A giving of the braindump in the timeline (`braindump`): when, from whom, and what. */
+export interface GiveStep {
+  round: number;
+  at: number;
+  from: string[];
+  items: GivenItem[];
+}
+
+/** The timeline's givings of the braindump, in order; items not in `present` are marked removed. */
+export function giveSteps(events: TimelineEvent[], present: ReadonlySet<number>): GiveStep[] {
+  return events.flatMap((event) =>
+    event.kind === 'braindump-given'
+      ? [
+          {
+            round: event.round,
+            at: event.at,
+            from: event.from,
+            items: event.files.map((file, i) => {
+              const path = event.paths[i] ?? '';
+              return { file, name: path.split('/').at(-1) ?? path, path, removed: !present.has(file) };
+            }),
+          },
+        ]
+      : [],
+  );
+}
+
+/** Names as a list people read: "Sanne", "Sanne and Mo", "Sanne, Mo and Nick". */
+export function people(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? 'nobody';
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
+/** "3 items from Sanne and Mo", for a giving and the button that starts one. */
+export function itemsFrom(count: number, from: string[]): string {
+  return `${count} ${count === 1 ? 'item' : 'items'} from ${people(from)}`;
+}
+
+/** The prompt the host starts from when giving the braindump; the paths follow it. */
+export const DEFAULT_GIVE_PROMPT =
+  'Read the files below: notes and files from the people in this session. Turn them into a short list of what they need, and ask me about anything that is unclear or contradicts the plan.';
+
+/** A note's size in bytes of UTF-8, which the host limits to `MAX_NOTE_BYTES`. */
+export function noteBytes(text: string): number {
+  return new TextEncoder().encode(text.replace(/\r\n/g, '\n')).byteLength;
+}
+
+/** For each braindump note that was edited, its newest version, from the timeline's `replaces`. */
+export function newestVersions(events: TimelineEvent[]): Map<number, number> {
+  const newer = new Map<number, number>();
+  for (const event of events) if (event.kind === 'braindump-item' && event.replaces !== undefined) newer.set(event.replaces, event.file);
+  const newest = new Map<number, number>();
+  for (const old of newer.keys()) {
+    let file = old;
+    while (newer.has(file)) file = newer.get(file)!;
+    newest.set(old, file);
+  }
+  return newest;
+}

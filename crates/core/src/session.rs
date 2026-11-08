@@ -13,7 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::{ChildKiller, MasterPty, PtySize};
-use specdeck_protocol::control::SharedFileInfo;
+use specdeck_protocol::control::{BraindumpItemInfo, SharedFileInfo};
 use specdeck_protocol::links::{self, LinkRefusal};
 use specdeck_protocol::timeline::{Entry, MAX_EVENT_JSON_BYTES, TimelineEvent, fit};
 use specdeck_protocol::{AgentId, AgentStatus};
@@ -33,7 +33,9 @@ use crate::output_log::{Batcher, OutputLog};
 use crate::plans::{self, ChangeRef, Plans};
 use crate::program_status::{self, Scanner, Signal};
 use crate::session_folder::SessionFolder;
-use crate::shared_files::{self, PutError, Refusal, SharedFile, Sharer, Store};
+use crate::shared_files::{
+    self, BRAINDUMP_FOLDER, Group, Purpose, PutError, Refusal, SharedFile, Sharer, Store,
+};
 use crate::shell_changes::{CommandChanges, ShellChanges};
 use crate::status::{self, StatusLineReader};
 use crate::timeline::{self, TimelineBuilder, stamp};
@@ -67,9 +69,11 @@ pub enum SessionEvent {
     Exited {
         code: u32,
     },
-    /// The shared files or the viewers' switch for them changed (`shared-files`).
+    /// The shared files, the braindump or the viewers' switch for them changed (`shared-files`,
+    /// `braindump`).
     SharedFiles {
         files: Vec<SharedFileInfo>,
+        braindump: Vec<BraindumpItemInfo>,
         viewers_allowed: bool,
     },
 }
@@ -179,6 +183,11 @@ impl SessionView {
         self.files.lock().unwrap().store.list()
     }
 
+    /// The braindump now, oldest first.
+    pub fn braindump(&self) -> Vec<BraindumpItemInfo> {
+        self.files.lock().unwrap().store.braindump()
+    }
+
     /// A shared file with its bytes; `None` when it was removed or never shared.
     pub fn shared_file(&self, file: u32) -> Option<SharedFile> {
         self.files.lock().unwrap().store.get(file).cloned()
@@ -215,12 +224,80 @@ impl SessionView {
             file_kind: info.kind,
             media_type: info.media_type.clone(),
             size: info.size,
-            sha256: info.sha256.iter().map(|b| format!("{b:02x}")).collect(),
+            sha256: hex(&info.sha256),
             by: info.by,
             by_label: info.by_label.clone(),
         });
         self.files_changed();
         Ok(info)
+    }
+
+    /// Adds `bytes` to the braindump as `sharer`, under the rules of shared files.
+    pub fn add_to_braindump(
+        &self,
+        sharer: Sharer,
+        by_label: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<SharedFileInfo, Refusal> {
+        let added = self.change_store(|store| {
+            store.add_to(Group::Braindump, sharer, by_label, name, bytes, now_ms())
+        })?;
+        self.added_to_braindump(&added, false, None);
+        Ok(added)
+    }
+
+    /// Adds a note to the braindump as `sharer`, named after them.
+    pub fn add_note(
+        &self,
+        sharer: Sharer,
+        by_label: &str,
+        bytes: Vec<u8>,
+    ) -> Result<SharedFileInfo, Refusal> {
+        let added = self.change_store(|store| store.add_note(sharer, by_label, bytes, now_ms()))?;
+        self.added_to_braindump(&added, true, None);
+        Ok(added)
+    }
+
+    /// Replaces `sharer`'s note `file`, while it is not given, with a new version.
+    pub fn replace_note(
+        &self,
+        sharer: Sharer,
+        file: u32,
+        bytes: Vec<u8>,
+    ) -> Result<SharedFileInfo, Refusal> {
+        let (new, old) =
+            self.change_store(|store| store.replace_note(file, sharer, bytes, now_ms()))?;
+        self.added_to_braindump(&new, true, Some(old.file));
+        Ok(new)
+    }
+
+    /// Changes the store, and counts the change for the sharing side when it succeeds.
+    fn change_store<T>(
+        &self,
+        change: impl FnOnce(&mut Store) -> Result<T, Refusal>,
+    ) -> Result<T, Refusal> {
+        let mut files = self.files.lock().unwrap();
+        let changed = change(&mut files.store)?;
+        files.version += 1;
+        Ok(changed)
+    }
+
+    /// The braindump's entry for an item, which carries the hash viewers check it against.
+    fn added_to_braindump(&self, info: &SharedFileInfo, note: bool, replaces: Option<u32>) {
+        self.add_entry(Entry::BraindumpItem {
+            file: info.file,
+            name: info.name.clone(),
+            file_kind: info.kind,
+            media_type: info.media_type.clone(),
+            size: info.size,
+            sha256: hex(&info.sha256),
+            by: info.by,
+            by_label: info.by_label.clone(),
+            note,
+            replaces,
+        });
+        self.files_changed();
     }
 
     /// Removes a shared file: any file for the host (`asker` `None`), only their own for a
@@ -247,12 +324,13 @@ impl SessionView {
         name: String,
         size: u64,
         sha256: [u8; 32],
+        purpose: Purpose,
     ) -> Result<u32, Refusal> {
         let mut files = self.files.lock().unwrap();
         if !files.viewers_allowed {
             return Err(Refusal::Off);
         }
-        files.store.reserve(viewer, name, size, sha256)
+        files.store.reserve(viewer, name, size, sha256, purpose)
     }
 
     /// Frees an upload's room, when it failed or its viewer left.
@@ -277,7 +355,12 @@ impl SessionView {
             reservation
         };
         let sharer = Sharer::Viewer(reservation.viewer);
-        self.share_file(sharer, by_label, &reservation.name, bytes)
+        match reservation.purpose {
+            Purpose::Share => self.share_file(sharer, by_label, &reservation.name, bytes),
+            Purpose::Braindump => self.add_to_braindump(sharer, by_label, &reservation.name, bytes),
+            Purpose::Note => self.add_note(sharer, by_label, bytes),
+            Purpose::ReplaceNote { file } => self.replace_note(sharer, file, bytes),
+        }
     }
 
     fn files_changed(&self) {
@@ -318,8 +401,31 @@ impl SessionView {
     }
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// A giving of the braindump: its round, the items given, where they were written relative to
+/// the session folder, in the same order, and the labels of the people they came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Given {
+    pub round: u32,
+    pub files: Vec<u32>,
+    pub paths: Vec<String>,
+    pub from: Vec<String>,
+}
+
+/// Why the braindump was not given.
+#[derive(Debug, thiserror::Error)]
+pub enum GiveError {
+    #[error("everything in the braindump has been given already")]
+    Nothing,
+    #[error(transparent)]
+    Put(#[from] PutError),
 }
 
 pub struct HostSession {
@@ -334,6 +440,8 @@ pub struct HostSession {
     host_entered: Arc<Mutex<Option<Instant>>>,
     /// The id of the next shared link.
     next_link: AtomicU32,
+    /// Held while the braindump is given, so two givings never write the same items.
+    giving: Mutex<()>,
     /// The endpoint, the settings file and the status-line relay script.
     /// Where shared files are put for the agent.
     folder: PathBuf,
@@ -461,6 +569,7 @@ impl HostSession {
             host_entered: Arc::default(),
             folder: config.folder.clone(),
             next_link: AtomicU32::new(1),
+            giving: Mutex::new(()),
             _hooks: hooks,
         };
         let pump = Pump {
@@ -570,7 +679,91 @@ impl HostSession {
     pub fn put_shared_file(&self, file: u32) -> Result<String, PutError> {
         let shared = self.view.shared_file(file).ok_or(PutError::Gone)?;
         let folder = SessionFolder::new(&self.folder, None);
-        shared_files::put_in_folder(&folder, &self.folder, &shared.info.name, &shared.bytes)
+        shared_files::put_in_folder(&folder, &self.folder, "", &shared.info.name, &shared.bytes)
+    }
+
+    /// Adds a file the host chose in their window to the braindump.
+    pub fn add_to_braindump(
+        &self,
+        by_label: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<SharedFileInfo, Refusal> {
+        self.view.add_to_braindump(Sharer::Host, by_label, name, bytes)
+    }
+
+    /// Adds a note the host wrote to the braindump.
+    pub fn add_note(&self, by_label: &str, text: &str) -> Result<SharedFileInfo, Refusal> {
+        self.view.add_note(Sharer::Host, by_label, text.as_bytes().to_vec())
+    }
+
+    /// Replaces the host's own note `file`, while it is not given.
+    pub fn replace_note(&self, file: u32, text: &str) -> Result<SharedFileInfo, Refusal> {
+        self.view.replace_note(Sharer::Host, file, text.as_bytes().to_vec())
+    }
+
+    /// Gives the braindump to the agent (`braindump` design decision 4): writes every item not
+    /// given yet into `shared/braindump/` in the session folder, oldest first, marks them as
+    /// given and adds the timeline step. When one cannot be written, the files written so far
+    /// are removed again and nothing is marked. Nothing is typed into the agent here.
+    pub fn give_braindump(&self) -> Result<Given, GiveError> {
+        let _giving = self.giving.lock().unwrap();
+        let items: Vec<SharedFile> = {
+            let files = self.view.files.lock().unwrap();
+            files.store.not_given().into_iter().cloned().collect()
+        };
+        if items.is_empty() {
+            diag::host_braindump_given(0, 0, "nothing");
+            return Err(GiveError::Nothing);
+        }
+        let folder = SessionFolder::new(&self.folder, None);
+        let bytes: u64 = items.iter().map(|item| item.info.size).sum();
+        let mut paths = Vec::new();
+        for item in &items {
+            match shared_files::put_in_folder(
+                &folder,
+                &self.folder,
+                BRAINDUMP_FOLDER,
+                &item.info.name,
+                &item.bytes,
+            ) {
+                Ok(path) => paths.push(path),
+                Err(error) => {
+                    // Each of these was created new by this call, so nothing else is removed.
+                    for path in &paths {
+                        let _ = std::fs::remove_file(self.folder.join(path));
+                    }
+                    let outcome = match error {
+                        PutError::OutsideFolder => "outside",
+                        _ => "io",
+                    };
+                    diag::host_braindump_given(items.len(), bytes, outcome);
+                    return Err(GiveError::Put(error));
+                }
+            }
+        }
+        let files: Vec<u32> = items.iter().map(|item| item.info.file).collect();
+        let mut from: Vec<String> = Vec::new();
+        for item in &items {
+            if !from.contains(&item.info.by_label) {
+                from.push(item.info.by_label.clone());
+            }
+        }
+        let round = {
+            let mut shared = self.view.files.lock().unwrap();
+            let round = shared.store.mark_given(&files);
+            shared.version += 1;
+            round
+        };
+        diag::host_braindump_given(items.len(), bytes, "given");
+        self.view.add_entry(Entry::BraindumpGiven {
+            round,
+            files: files.clone(),
+            paths: paths.clone(),
+            from: from.clone(),
+        });
+        self.view.files_changed();
+        Ok(Given { round, files, paths, from })
     }
 
     /// Shares a link with everyone in the session as a timeline entry, in any session, and
@@ -771,11 +964,12 @@ impl Pump {
                     self.emit_entry(entry);
                 }
                 Some(Command::SharedFiles) => {
-                    let (files, viewers_allowed) = {
+                    let (files, braindump, viewers_allowed) = {
                         let files = self.view.files.lock().unwrap();
-                        (files.store.list(), files.viewers_allowed)
+                        (files.store.list(), files.store.braindump(), files.viewers_allowed)
                     };
-                    let _ = self.events.send(SessionEvent::SharedFiles { files, viewers_allowed });
+                    let event = SessionEvent::SharedFiles { files, braindump, viewers_allowed };
+                    let _ = self.events.send(event);
                 }
                 Some(Command::Git(entry)) => {
                     if self.git.as_ref() != Some(&entry) {

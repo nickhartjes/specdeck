@@ -21,7 +21,7 @@ SpecDeck keeps a few files for each session in a folder of its own, `sessions/<n
 | `snapshots-…` | In a git repository, copies of files in the session folder before and after Claude's shell commands, to show what a command changed |
 | `hooks-….json`, `mcp-….json`, `statusline-….sh` | The settings SpecDeck gives Claude Code, which name the session's local endpoint. They refer to the session's secret token, but do not contain it |
 
-SpecDeck deletes them when the session ends. If the session's process is killed instead, for example by a crash or a power cut, they can stay behind; see [Known limits](/specdeck/security/known-limits/#leftover-session-files). Shared files are kept in memory only, and are written to disk only when you put one in the session folder yourself.
+SpecDeck deletes them when the session ends. If the session's process is killed instead, for example by a crash or a power cut, they can stay behind; see [Known limits](/specdeck/security/known-limits/#leftover-session-files). Shared files and the braindump are kept in memory only, and are written to disk only when you put a file in the session folder or give the braindump yourself.
 
 A session keeps running when SpecDeck restarts to update or crashes, and ends by itself if SpecDeck is not back within 10 minutes (see [When SpecDeck restarts or stops](/specdeck/guide/host/#when-specdeck-restarts-or-stops)).
 
@@ -55,6 +55,8 @@ Viewers can copy text, save shared files and take their own screenshots, and a v
 
 - **Shared files** are images, Markdown or plain text, checked by their content, up to 10 MB each. They travel over the same encrypted connections, never through the sharing service, and a viewer gets one only when they open or save it. Nothing in them runs as a script. Viewers can share files only while the host allows it.
 - **Shared files never reach the agent by themselves.** Only the host can put a shared file in the session folder (in `shared/`), and only then can the agent read it.
+- **The braindump** holds notes (text up to 32 KB) and files that people collect for the agent. Its files follow the rules of shared files, and its notes are shown as text, so nothing in them runs. It is held only in the host's memory and is gone when the session ends. Viewers can add to it only while the host allows it.
+- **The braindump reaches the agent only when the host gives it.** Giving writes the items not given yet to `shared/braindump/` in the session folder, then types a prompt into the agent that ends with their paths. The host sees and can edit that prompt first, and nothing is typed in a terminal session. The copies in `shared/braindump/` stay after the session, like any file in the session folder. Read what viewers added before you give it.
 - **SpecDeck shares no other file.** It reads only files the host or a viewer chose to share, whatever a viewer's app asks for.
 - **Links** are shown as text with their site in plain ASCII, so a look-alike name stands out. SpecDeck never loads a shared page itself: a link opens in your own browser only when you choose to open it. Links from viewers wait for the host's approval before anyone else sees them.
 
