@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { errorMessage } from '../api/bridge';
 import { MAX_LINK_TITLE_CHARS, checkLink, hasFragment, refusalText, validTitle } from '../model/links';
+import { PLAIN_TEXT } from './fields';
 
 interface Props {
   /** The host shares with everyone at once; a viewer sends it to the host. */
@@ -60,12 +61,12 @@ export function ShareLinkDialog({ host, hostName = 'the host', onShare, onClose 
           <label>
             Address
             <input
+              {...PLAIN_TEXT}
               ref={input}
               className="field"
               type="url"
               inputMode="url"
               autoComplete="off"
-              spellCheck={false}
               placeholder="https://"
               value={address}
               onChange={(event) => setAddress(event.target.value)}
@@ -75,7 +76,7 @@ export function ShareLinkDialog({ host, hostName = 'the host', onShare, onClose 
           </label>
           <label>
             Title (optional)
-            <input className="field" maxLength={MAX_LINK_TITLE_CHARS} value={title} onChange={(event) => setTitle(event.target.value)} />
+            <input {...PLAIN_TEXT} className="field" maxLength={MAX_LINK_TITLE_CHARS} value={title} onChange={(event) => setTitle(event.target.value)} />
           </label>
           <label className="check">
             <input type="checkbox" checked={marked} onChange={(event) => setSessionOnly(event.target.checked)} />

@@ -4,6 +4,7 @@ import { errorMessage } from '../api/bridge';
 import { MAX_NOTE_BYTES } from '../api/types';
 import { formatSize, noteBytes, SHAREABLE } from '../model/sharedFiles';
 import type { SharedFiles } from './SharedFiles';
+import { PLAIN_TEXT } from './fields';
 
 type Destination = 'braindump' | 'everyone';
 
@@ -124,6 +125,7 @@ export function AddDialog({ shared, files: dropped = [], onClose }: Props) {
             <label>
               Or write a note
               <textarea
+                {...PLAIN_TEXT}
                 className="field"
                 rows={5}
                 value={note}
