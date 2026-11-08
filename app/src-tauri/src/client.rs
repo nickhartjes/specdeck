@@ -160,13 +160,9 @@ impl SessionClient {
         self.send(&Command::ShareCode { whole_files });
     }
 
-    /// Sends a waiting suggestion as `text`, which the host may have edited, or declines it
-    /// (`None`).
-    pub fn answer_suggestion(&self, viewer_id: u32, id: u32, text: Option<String>) {
-        let answer = match text {
-            Some(text) => SuggestionAnswer::Send { text },
-            None => SuggestionAnswer::Decline,
-        };
+    /// Sends a waiting or kept suggestion as the host may have edited it, keeps it for later, or
+    /// declines it.
+    pub fn answer_suggestion(&self, viewer_id: u32, id: u32, answer: SuggestionAnswer) {
         self.send(&Command::AnswerSuggestion { viewer_id, id, answer });
     }
 

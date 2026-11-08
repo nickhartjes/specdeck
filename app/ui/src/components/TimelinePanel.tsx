@@ -174,6 +174,15 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
             {askCards(model.asks)}
           </section>
         )}
+        {model.suggested.length > 0 && (
+          <section aria-label="Sent suggestions" className="links-early">
+            {model.suggested.map((item) => (
+              <p key={item.id} className="field-hint">
+                {TIME.format(item.at)} · Sent a prompt {suggestedBy(item)}
+              </p>
+            ))}
+          </section>
+        )}
       </div>
     );
   }
@@ -406,6 +415,11 @@ function StepView({ step, onSelect, onReadPlan, onOpenScreenshot }: { step: Step
   );
 }
 
+/** "suggested by Sanne", and that the host edited it. */
+function suggestedBy({ by, edited }: { by: string; edited: boolean }): string {
+  return `suggested by ${by}${edited ? ', edited' : ''}`;
+}
+
 interface TurnProps {
   turn: Turn;
   /** Missed by a late joiner: only the prompt, its outcome and a way to unfold it. */
@@ -443,7 +457,10 @@ function TurnBody({ turn, folded, outcome, hidden, onUnfold, summary, latest, on
   const prompt = (
     <button className="prompt" onClick={() => onJump(turn.outputSeq)} title="Show in the terminal">
       <span className="meta">
-        <span>Prompt {number}</span>
+        <span>
+          Prompt {number}
+          {turn.suggested && ` · ${suggestedBy(turn.suggested)}`}
+        </span>
         <span>
           {turn.tokens ? <span title={`${turn.tokens.toLocaleString()} tokens used for this prompt`}>{formatTokens(turn.tokens)} tokens · </span> : null}
           {turn.at ? TIME.format(turn.at) : ''}

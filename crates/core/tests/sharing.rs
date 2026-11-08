@@ -361,6 +361,25 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     .await;
     newer.suggest("Add a test".into());
     host_suggestions(&mut hosted.events, |list| list.len() == 1).await;
+    // Both keep a suggestion; the older viewer's is sent with its mark. The newer viewer sees
+    // its own as kept.
+    _older.suggest("Write docs".into());
+    let list = host_suggestions(&mut hosted.events, |list| list.len() == 2).await;
+    for s in &list {
+        assert!(
+            hosted.sharing.answer_suggestion(s.viewer, s.id, Answer::Kept).await.unwrap().is_some()
+        );
+    }
+    until(&mut newer_events, &mut seen_newer, |_, e| {
+        matches!(e, ViewerEvent::Suggestions(mine)
+            if mine.first().is_some_and(|s| s.state == SuggestionState::Kept))
+    })
+    .await;
+    let anna = list.iter().find(|s| s.from == "anna").unwrap();
+    let sent = Answer::Sent { text: anna.text.clone() };
+    let answered = hosted.sharing.answer_suggestion(anna.viewer, anna.id, sent).await.unwrap();
+    let answered = answered.expect("kept, so it can be sent");
+    hosted.session.suggestion_sent(&answered.from, answered.edited);
     // The braindump: added to, edited, given and removed from.
     let note = hosted.session.add_note("nick", "For Claude").unwrap();
     let item = hosted.session.add_to_braindump("nick", "a.txt", b"a".to_vec()).unwrap();
@@ -385,6 +404,7 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     // its version cannot read. Version 5 reads requests, whole files, shared files and links,
     // so it is told about those, but not about the host's asks, the braindump or their entries.
     let mut newer_messages = Vec::new();
+    let mut older_states = Vec::new();
     tokio::time::timeout(WAIT, async {
         loop {
             let event = older.recv().await.expect("viewer stopped");
@@ -395,6 +415,14 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
                             seen_older.text.push_str(&String::from_utf8_lossy(bytes));
                         }
                     }
+                }
+                ViewerEvent::Suggestions(mine)
+                    if mine.iter().any(|s| s.state == SuggestionState::Kept) =>
+                {
+                    newer_messages.push(event.clone());
+                }
+                ViewerEvent::Suggestions(mine) => {
+                    older_states.extend(mine.iter().map(|s| s.state));
                 }
                 ViewerEvent::ReadRequest(_)
                 | ViewerEvent::Vote(_)
@@ -408,6 +436,7 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
                             | Entry::Estimated { .. }
                             | Entry::BraindumpItem { .. }
                             | Entry::BraindumpGiven { .. }
+                            | Entry::Suggested { .. }
                     ) =>
                 {
                     newer_messages.push(event.clone());
@@ -422,6 +451,11 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     .await
     .expect("the older viewer stopped following");
     assert!(newer_messages.is_empty(), "{newer_messages:?}");
+    assert_eq!(
+        older_states.last(),
+        Some(&SuggestionState::Sent { edited: false }),
+        "kept shows as waiting, then sent: {older_states:?}"
+    );
     let fetched = tokio::time::timeout(WAIT, _older.fetch_file(note.file + 2)).await.unwrap();
     assert_eq!(fetched.unwrap(), Err(FileError::Gone), "no braindump bytes for an older viewer");
 }
@@ -588,7 +622,7 @@ async fn a_reconnected_viewer_sees_what_the_host_did() {
     anna.interrupt(Duration::from_secs(2));
     until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
     let answered = hosted.sharing.answer_suggestion(list[0].viewer, list[0].id, Answer::Declined);
-    assert!(answered.await.unwrap());
+    assert!(answered.await.unwrap().is_some());
 
     let event = until(&mut events, &mut seen, |_, e| {
         matches!(e, ViewerEvent::Suggestions(mine)
@@ -618,10 +652,15 @@ async fn nothing_a_viewer_suggests_reaches_the_agent() {
     let list = host_suggestions(&mut hosted.events, |list| list.len() == 1).await;
     let sent = Answer::Sent { text: list[0].text.clone() };
     assert!(
-        hosted.sharing.answer_suggestion(list[0].viewer, list[0].id, sent.clone()).await.unwrap()
+        hosted
+            .sharing
+            .answer_suggestion(list[0].viewer, list[0].id, sent.clone())
+            .await
+            .unwrap()
+            .is_some()
     );
     assert!(
-        !hosted.sharing.answer_suggestion(list[0].viewer, list[0].id, sent).await.unwrap(),
+        hosted.sharing.answer_suggestion(list[0].viewer, list[0].id, sent).await.unwrap().is_none(),
         "a suggestion is sent once"
     );
 

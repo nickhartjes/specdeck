@@ -205,6 +205,11 @@ mod tests {
             id: 1,
             answer: specdeck_session::messages::SuggestionAnswer::Decline,
         };
+        let keep = Command::AnswerSuggestion {
+            viewer_id: 1,
+            id: 1,
+            answer: specdeck_session::messages::SuggestionAnswer::Keep,
+        };
         let share = Command::ShareCode { whole_files: true };
         let files = [
             Command::AllowFiles { files: true },
@@ -213,7 +218,7 @@ mod tests {
             Command::ReadSharedFile { id: 2, file: 1 },
             Command::PutSharedFile { id: 3, file: 1 },
         ];
-        for new in [&allow, &answer, &share].into_iter().chain(&files) {
+        for new in [&allow, &answer, &keep, &share].into_iter().chain(&files) {
             assert!(command(previous, new).is_none(), "{new:?} reached the previous release");
             assert!(command(Protocol::own(), new).is_some(), "{new:?} did not reach this one");
         }

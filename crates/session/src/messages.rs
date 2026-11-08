@@ -206,9 +206,10 @@ pub enum Command {
 pub enum SuggestionAnswer {
     /// Typed into the agent's prompt and submitted; `text` is what the host's window shows,
     /// edited or not.
-    Send {
-        text: String,
-    },
+    Send { text: String },
+    /// Kept to send or remove later.
+    Keep,
+    /// Declines a waiting suggestion, or removes a kept one.
     Decline,
 }
 
@@ -298,6 +299,11 @@ mod tests {
                 id: 5,
                 answer: SuggestionAnswer::Send { text: "Add a test".into() },
             }
+        );
+        let keep = r#"{"type":"answer-suggestion","viewerId":2,"id":5,"answer":{"type":"keep"}}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(keep).unwrap(),
+            Command::AnswerSuggestion { viewer_id: 2, id: 5, answer: SuggestionAnswer::Keep }
         );
         let allow = r#"{"type":"allow-requests","suggestions":true}"#;
         assert_eq!(

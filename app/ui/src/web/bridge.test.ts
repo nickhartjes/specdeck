@@ -117,7 +117,7 @@ describe('web bridge', () => {
     const page = bridge();
     await expect(page.suggestPrompt('Add a test')).rejects.toThrow('not in a session');
     await expect(page.hostAllowSuggestions(true)).rejects.toThrow('only watch');
-    await expect(page.hostAnswerSuggestion(1, 1, 'x')).rejects.toThrow('only watch');
+    await expect(page.hostAnswerSuggestion(1, 1, { type: 'decline' })).rejects.toThrow('only watch');
   });
 
   it('sends links only while in a session, and never shares or removes them', async () => {

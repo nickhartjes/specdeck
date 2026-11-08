@@ -470,8 +470,8 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
                     agentName={agentName}
                     suggestions={state.suggestions}
                     allowed={state.suggestionsAllowed}
-                    onAnswer={(suggestion, text) =>
-                      void bridge.hostAnswerSuggestion(suggestion.viewer, suggestion.id, text).catch((e) => showToast(errorMessage(e)))
+                    onAnswer={(suggestion, answer) =>
+                      void bridge.hostAnswerSuggestion(suggestion.viewer, suggestion.id, answer).catch((e) => showToast(errorMessage(e)))
                     }
                   />
                 ),

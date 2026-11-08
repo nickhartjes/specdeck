@@ -17,7 +17,8 @@ use crate::{AgentId, AgentStatus};
 /// 5 shared links (the `Link` and `LinkRemoved` entries, `ShareLink`, `LinksAllowed` and `Links`);
 /// version 6 the host's asks (the `ReadDone` and `Estimated` entries, `Answer`, `ReadRequest` and
 /// `Vote`) and the braindump (the `BraindumpItem` and `BraindumpGiven` entries, `AddToBraindump`,
-/// `AddNote`, `ReplaceNote`, `AlreadyGiven` and `Braindump`).
+/// `AddNote`, `ReplaceNote`, `AlreadyGiven` and `Braindump`) and kept suggestions (`Kept` and the
+/// `Suggested` entry).
 pub const PROTOCOL_VERSION: u32 = 6;
 
 /// The oldest viewer protocol a host admits. Older viewers watch only: the host never sends them
@@ -48,6 +49,10 @@ pub const ASKS_PROTOCOL_VERSION: u32 = 6;
 /// entries, `Braindump`, `AlreadyGiven`, and the `AddToBraindump`, `AddNote` and `ReplaceNote`
 /// requests.
 pub const BRAINDUMP_PROTOCOL_VERSION: u32 = 6;
+
+/// The first protocol version with kept suggestions and the `Suggested` entry; older viewers see
+/// a kept suggestion as waiting.
+pub const SUGGESTED_PROTOCOL_VERSION: u32 = 6;
 
 /// Longest note in the braindump, in bytes of UTF-8.
 pub const MAX_NOTE_BYTES: u64 = 32 * 1024;
@@ -316,6 +321,8 @@ pub enum SuggestionState {
         edited: bool,
     },
     Declined,
+    /// The host kept it to send or remove later (version 6).
+    Kept,
 }
 
 /// A viewer's link and what became of it. Camel case for the UI, which gets it as JSON;
@@ -616,6 +623,7 @@ mod tests {
                         state: SuggestionState::Sent { edited: true },
                     },
                     Suggestion { id: 3, text: "c".into(), state: SuggestionState::Declined },
+                    Suggestion { id: 4, text: "d".into(), state: SuggestionState::Kept },
                 ],
             },
             HostMessage::Shared { whole_files: true },
@@ -757,6 +765,12 @@ mod tests {
         assert_eq!(encode(&HostMessage::Reply { id: 4, outcome: Outcome::Gone }), [6, 4, 7]);
         assert_eq!(encode(&add_to_braindump(1, "a"))[..3], [3, 1, 5]);
         assert_eq!(encode(&note(1, 1))[..3], [3, 1, 6]);
+        // `Kept` comes after the version 3 states, which keep their bytes.
+        let state = |state| HostMessage::Suggestions {
+            mine: vec![Suggestion { id: 1, text: String::new(), state }],
+        };
+        assert_eq!(encode(&state(SuggestionState::Declined)), [7, 1, 1, 0, 2]);
+        assert_eq!(encode(&state(SuggestionState::Kept)), [7, 1, 1, 0, 3]);
     }
 
     #[test]

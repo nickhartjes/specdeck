@@ -1033,3 +1033,51 @@ async fn read_requests_and_estimates_land_in_the_timeline_of_a_terminal_session(
     }
     session.close();
 }
+
+#[tokio::test]
+async fn a_sent_suggestion_is_marked_before_the_agents_prompt() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    // Reports a prompt for the line typed into it, as Claude Code's hook does on submit.
+    fake_agent(
+        bin.path(),
+        "claude",
+        r#"[ "$1" = "--settings" ] || { echo "no settings"; exit 9; }
+url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$2" | head -n 1)
+post() { curl -s -o /dev/null -X POST -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -H 'Content-Type: application/json' -d "$1" "$url"; }
+echo ready
+read line
+post "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt_id\":\"p1\",\"prompt\":\"$line\"}"
+echo posted
+read wait"#,
+    );
+    let (session, mut events) =
+        HostSession::start(config(AgentId::ClaudeCode, bin.path(), data.path()), &env(bin.path()))
+            .await
+            .unwrap();
+    wait_for_output(&session, &mut events, "ready").await;
+
+    session.input(b"Add a test").unwrap();
+    session.suggestion_sent("Sanne", true);
+    session.input(b"\r").unwrap();
+    next_matching(
+        &mut events,
+        |e| matches!(e, SessionEvent::Timeline(t) if matches!(t.entry, Entry::Prompt { .. })),
+    )
+    .await;
+
+    let entries: Vec<Entry> = session
+        .timeline()
+        .into_iter()
+        .map(|e| e.entry)
+        .filter(|e| matches!(e, Entry::Suggested { .. } | Entry::Prompt { .. }))
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            Entry::Suggested { by: "Sanne".into(), edited: true },
+            Entry::Prompt { prompt_id: "p1".into(), text: "Add a test".into() },
+        ]
+    );
+    session.close();
+}
