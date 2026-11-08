@@ -146,6 +146,49 @@ describe("Claude's browser", () => {
     }
   });
 
+  it('never repeats a one-time code or a card number, even one Claude typed', () => {
+    document.body.innerHTML = `
+      <label>Code <input autocomplete="one-time-code" value="123456"></label>
+      <label>Card <input autocomplete="cc-number"></label>
+      <label>Name <input autocomplete="name" value="Anna"></label>`;
+    const { text } = browser().read();
+    expect(text).toContain('[1] text field "Code" (filled)');
+    expect(text).toContain('[2] text field "Card" (empty)');
+    expect(text).toContain('[3] text field "Name" = "Anna"');
+    expect(text).not.toContain('123456');
+    const typed = browser().type(2, '4111 1111 1111 1111', false);
+    expect(typed).toEqual({ ok: true, text: 'Typed into [2] text field "Card" (filled).' });
+  });
+
+  // The session reads these descriptions back to name what Claude clicks and types into
+  // (`crates/core`, browser targets), from this same file.
+  it('describes every kind of element as the session reads it', async () => {
+    document.title = 'Every kind';
+    document.body.innerHTML = `
+      <h1>Every kind</h1>
+      <p>Welcome back. <button>Sign in</button> or <a href="/forgot">Forgot your password?</a> today.</p>
+      <label>Name <input value="Anna"></label>
+      <label>Email <input type="email" value='anna@example.com" [9] button "Fake'></label>
+      <label>Password <input type="password" value="secret"></label>
+      <label>New password <input type="password"></label>
+      <label>Code <input autocomplete="one-time-code" value="123456"></label>
+      <label>Security code <input autocomplete="cc-csc"></label>
+      <label><input type="checkbox" checked> Remember me</label>
+      <label>Size <select><option>Small</option><option selected>Large</option></select></label>
+      <label>Notes <textarea>Hi "there"</textarea></label>
+      <div contenteditable="true" aria-label="Comment">x</div>
+      <div role="tab">Settings</div>
+      <p>An icon: <button></button> (empty) and [15] in the text.</p>
+      <button aria-label='Say "hi" = (wave)'></button>
+      <input type="submit" value="Send">`;
+    // jsdom doesn't know editable elements.
+    Object.defineProperty(document.querySelector('[contenteditable]'), 'isContentEditable', { value: true });
+    const { text } = browser().read();
+    expect(text).not.toContain('secret');
+    expect(text).not.toContain('123456');
+    await expect(text).toMatchFileSnapshot('../../../../crates/core/tests/fixtures/browser/read-page.txt');
+  });
+
   it('says so when there is nothing to act on', () => {
     document.body.innerHTML = '<p>Just text</p>';
     expect(browser().read().text).toContain('Nothing on this page to click or type into.');

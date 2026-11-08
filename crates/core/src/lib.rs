@@ -3,6 +3,7 @@
 pub mod activity;
 pub mod agent;
 pub mod browser;
+pub mod browser_targets;
 pub mod code_files;
 // The only module that may emit diagnostic events; a test in it holds that.
 pub mod diag;

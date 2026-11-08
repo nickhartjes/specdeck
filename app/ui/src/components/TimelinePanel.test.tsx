@@ -254,3 +254,31 @@ describe('shared links', () => {
     expect(onRemoveLink).toHaveBeenCalledWith(1);
   });
 });
+
+describe("Claude's browser steps", () => {
+  const stamp = (n: number) => ({ outputSeq: n, at: 1_700_000_000_000 + n });
+  const promptId = 'p';
+  const events: TimelineEvent[] = [
+    { ...stamp(1), kind: 'prompt', promptId, text: 'Log in' },
+    {
+      ...stamp(2),
+      kind: 'tool-call',
+      promptId,
+      toolUseId: 'pw',
+      toolName: 'mcp__specdeck__type',
+      input: { element: 2 },
+      target: { kind: 'password field', label: 'Password', sensitive: true },
+    },
+    { ...stamp(3), kind: 'tool-result', promptId, toolUseId: 'pw', status: 'succeeded' },
+  ];
+
+  for (const steps of ['summary', 'details'] as const) {
+    it(`names the field and says its text is hidden, ${steps === 'summary' ? 'in plain words' : 'with every step'}`, async () => {
+      panel(events, steps);
+      if (steps === 'summary') await userEvent.click(screen.getByText('Filled in “Password” in its browser'));
+      await userEvent.click(screen.getByText('mcp__specdeck__type', { selector: '.name' }));
+      expect(screen.getByText('On “Password”, password field')).toBeInTheDocument();
+      expect(screen.getByText('Text hidden')).toBeInTheDocument();
+    });
+  }
+});

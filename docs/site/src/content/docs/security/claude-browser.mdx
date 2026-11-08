@@ -34,6 +34,6 @@ SpecDeck does not approve the browser tools on your behalf, neither in the setti
 
 ## What viewers see
 
-Viewers see the browser steps in the timeline, such as *Opened localhost:5173/login in its browser*, and what Claude types into pages, as they see any other tool. Use test accounts, not your own passwords.
+Viewers see the browser steps in the timeline, such as *Opened localhost:5173/login in its browser* or *Clicked “Sign in”*, and what Claude types into pages, as they see any other tool. Text Claude types into a password field, or into a field the page marks as a one-time code, card number or card security code, is left out of the timeline before it is sent; so is text typed into a field SpecDeck can't identify. The terminal is not filtered: Claude Code prints each tool call there, including what Claude types. Use test accounts, not your own passwords.
 
 **Screenshots** the browser takes are kept in the timeline with the page's address, and everyone in the session sees them, including people who join later. A screenshot can show more than the terminal does. To keep them out, turn off **Show screenshots in the timeline** in [Settings](/specdeck/guide/settings/): sessions you start afterwards then only say that Claude took a screenshot. The same applies to pictures from other MCP tools, such as Playwright MCP.

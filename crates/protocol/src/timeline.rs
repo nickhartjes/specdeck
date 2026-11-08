@@ -164,6 +164,10 @@ pub enum Entry {
         tool_use_id: String,
         tool_name: String,
         input: Map<String, Value>,
+        /// The element a click or typing in Claude's browser acts on, from Claude's last read
+        /// of the page; older apps ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<Target>,
     },
     ToolResult {
         prompt_id: String,
@@ -398,6 +402,19 @@ pub enum ToolOutcome {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         left_out: Option<LeftOut>,
     },
+}
+
+/// An element of a page in Claude's browser, as Claude's last read of the page described it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Target {
+    /// What it is, as the browser says it: `button`, `link`, `email field`, a role.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// A password field or the like, whose typed text is never sent.
+    #[serde(default)]
+    pub sensitive: bool,
 }
 
 /// An image as it is sent: base64 data of `media_type`, `width` by `height` pixels.
@@ -754,6 +771,52 @@ mod tests {
     }
 
     #[test]
+    fn tool_calls_carry_the_browser_element_they_act_on() {
+        let entry = Entry::ToolCall {
+            prompt_id: "p".into(),
+            tool_use_id: "t".into(),
+            tool_name: "mcp__specdeck__click".into(),
+            input: serde_json::json!({ "element": 3 }).as_object().unwrap().clone(),
+            target: Some(Target {
+                kind: "button".into(),
+                label: Some("Sign in".into()),
+                sensitive: false,
+            }),
+        };
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "tool-call", "promptId": "p", "toolUseId": "t",
+                "toolName": "mcp__specdeck__click", "input": { "element": 3 },
+                "target": { "kind": "button", "label": "Sign in", "sensitive": false }
+            })
+        );
+        assert_eq!(serde_json::from_value::<Entry>(json.clone()).unwrap(), entry);
+
+        // Without a target, as from an older host.
+        let mut plain = json.clone();
+        plain.as_object_mut().unwrap().remove("target");
+        let Entry::ToolCall { target, .. } = serde_json::from_value::<Entry>(plain).unwrap() else {
+            panic!()
+        };
+        assert_eq!(target, None);
+
+        // An older app, whose tool call has no target, still reads the entry.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+        enum Older {
+            ToolCall {
+                #[allow(dead_code)]
+                tool_name: String,
+                #[allow(dead_code)]
+                input: Map<String, Value>,
+            },
+        }
+        assert!(matches!(serde_json::from_value::<Older>(json).unwrap(), Older::ToolCall { .. }));
+    }
+
+    #[test]
     fn message_final_field_is_named_final() {
         let entry = Entry::Message {
             prompt_id: "p".into(),
@@ -871,6 +934,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                target: None,
             },
         ];
         for entry in entries {
