@@ -44,11 +44,12 @@ describe('settings window', () => {
     const plans = within(group).getByRole('checkbox', { name: 'A plan is ready for review' });
     const documents = within(group).getByRole('checkbox', { name: 'A document changed' });
     const finished = within(group).getByRole('checkbox', { name: 'The agent finished' });
-    expect([plans, documents, finished].map((box) => (box as HTMLInputElement).checked)).toEqual([true, true, false]);
-    // Read and vote requests do not exist yet.
-    expect(within(group).getAllByRole('checkbox')).toHaveLength(3);
+    const reads = within(group).getByRole('checkbox', { name: 'The host asks you to read' });
+    const estimates = within(group).getByRole('checkbox', { name: 'The host asks for an estimate' });
+    expect([plans, documents, finished, reads, estimates].map((box) => (box as HTMLInputElement).checked)).toEqual([true, true, false, true, true]);
+    expect(within(group).getAllByRole('checkbox')).toHaveLength(5);
     await userEvent.click(finished);
-    expect(bridge.setViewerNotifications).toHaveBeenCalledWith({ plans: true, documents: true, finished: true });
+    expect(bridge.setViewerNotifications).toHaveBeenCalledWith({ plans: true, documents: true, finished: true, reads: true, estimates: true });
     await waitFor(() => expect(finished).toBeChecked());
   });
 

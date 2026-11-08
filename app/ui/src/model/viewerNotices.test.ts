@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentStatus, PlanDocument, TimelineEvent, ViewerNotifications } from '../api/types';
 import { createViewerNotices, SETTLE_MS, type ViewerNotice } from './viewerNotices';
 
-const DEFAULTS: ViewerNotifications = { plans: true, documents: true, finished: false };
+const DEFAULTS: ViewerNotifications = { plans: true, documents: true, finished: false, reads: true, estimates: true };
 
 let seq = 0;
 function event(entry: Record<string, unknown>): TimelineEvent {

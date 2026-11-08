@@ -9,8 +9,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { ArrowDown, FileDiff, FileText, Image, Share2, SquareTerminal, X } from "lucide-react";
-import type { TimelineEvent, TerminalSnapshot } from "../api/types";
+import { ArrowDown, FileDiff, FileText, Files, Image, Share2, SquareTerminal, X } from "lucide-react";
+import type { ReadTarget, TimelineEvent, TerminalSnapshot } from "../api/types";
+import { ChangesTab } from "../components/ChangesTab";
+import { changesTabPath } from "../model/asks";
 import { Divider } from "../components/Divider";
 import { DiffTab, type CodeView } from "../components/DiffTab";
 import { DocumentTab } from "../components/DocumentTab";
@@ -60,6 +62,8 @@ export interface WorkspaceHandle {
   /** Terminal data from the session, as received over the bridge. */
   terminalData(data: ArrayBuffer): void;
   resetTerminal(): void;
+  /** Opens what the host asked to read, as a kept tab. */
+  openTarget(target: ReadTarget, label: string): void;
 }
 
 interface Props {
@@ -91,6 +95,8 @@ interface Props {
   linksBar?: ReactNode;
   /** The host's: removes a shared link. */
   onRemoveLink?: (linkId: number) => void;
+  /** The request row above the panes: an open read request and vote; nothing takes no space. */
+  requests?: ReactNode;
 }
 
 type Pane = "files" | "session" | "timeline";
@@ -213,15 +219,6 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
         .map((turn) => turn.promptId);
     }, [model, term]);
 
-    useImperativeHandle(ref, () => ({
-      terminalData(data) {
-        terminal.current?.write(decodeTerminalStream(data));
-      },
-      resetTerminal() {
-        terminal.current?.reset();
-      },
-    }));
-
     // Opening something on a narrow window shows it.
     const show = useCallback(
       (next: Tabs) => {
@@ -282,6 +279,31 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
 
     const openShared = (file: number, name: string, keep = false) =>
       show(openTab(tabs, "shared", String(file), { keep, title: name }));
+
+    useImperativeHandle(ref, () => ({
+      terminalData(data) {
+        terminal.current?.write(decodeTerminalStream(data));
+      },
+      resetTerminal() {
+        terminal.current?.reset();
+      },
+      openTarget(target, label) {
+        if ("document" in target) {
+          // A document the agent wrote opens as one; a code file shows its changes.
+          const path = target.document.path;
+          show(openTab(tabs, written.documents.has(path) ? "document" : "diff", path, { keep: true }));
+        } else if ("code" in target) {
+          show(openTab(tabs, "diff", target.code.path, { keep: true }));
+        } else if ("shared" in target) {
+          show(openTab(tabs, "shared", String(target.shared.file), { keep: true, title: label }));
+        } else {
+          const { fromSeq, toSeq } = target.changes;
+          // The label reads in a sentence; a tab starts with a capital.
+          const title = label.charAt(0).toUpperCase() + label.slice(1);
+          show(openTab(tabs, "changes", changesTabPath(fromSeq, toSeq), { keep: true, title }));
+        }
+      },
+    }));
 
     const readPlan = useCallback(
       (_plan: Plan, path: string) => openDocument(path),
@@ -472,8 +494,8 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
 
     return (
       <main className="workspace">
-        {/* Requests from the host (#53, #54) come here; it takes no space while there are none. */}
-        <div className="requests" aria-live="polite" />
+        {/* The host's read request and vote (#53, #54); the row takes no space while neither is open. */}
+        <div className="requests">{props.requests}</div>
         {narrow && (
           <nav className="pane-switch" aria-label="Panels">
             {(
@@ -617,6 +639,12 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                         shared={props.shared}
                         progress={props.sharedProgress?.get(Number(tab.path))}
                         onKeep={() => keep(tab.id)}
+                      />
+                    ) : tab.kind === "changes" ? (
+                      <ChangesTab
+                        timeline={props.timeline}
+                        fromSeq={Number(tab.path!.split("-")[0])}
+                        toSeq={Number(tab.path!.split("-")[1])}
                       />
                     ) : tab.kind === "image" ? (
                       <ScreenshotTab
@@ -814,6 +842,7 @@ const TAB_ICONS = {
   diff: FileDiff,
   image: Image,
   shared: Share2,
+  changes: Files,
 };
 
 /** The screenshot of tool call `toolUseId`, if the timeline has one. */

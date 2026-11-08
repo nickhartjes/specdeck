@@ -63,12 +63,15 @@ pub struct ViewerNotifications {
     pub documents: bool,
     /// The agent finished a turn; off by default, since it comes after every turn.
     pub finished: bool,
-    // Requests from the host to read something or to vote (#53, #54) add their kinds here.
+    /// The host asks everyone to read something (`read-and-estimate`).
+    pub reads: bool,
+    /// The host starts a vote, or a new round of one.
+    pub estimates: bool,
 }
 
 impl Default for ViewerNotifications {
     fn default() -> Self {
-        Self { plans: true, documents: true, finished: false }
+        Self { plans: true, documents: true, finished: false, reads: true, estimates: true }
     }
 }
 
@@ -79,6 +82,8 @@ pub enum ViewerNotificationKind {
     Plans,
     Documents,
     Finished,
+    Reads,
+    Estimates,
 }
 
 impl ViewerNotificationKind {
@@ -87,6 +92,8 @@ impl ViewerNotificationKind {
             Self::Plans => "plans",
             Self::Documents => "documents",
             Self::Finished => "finished",
+            Self::Reads => "reads",
+            Self::Estimates => "estimates",
         }
     }
 }
@@ -97,6 +104,8 @@ impl ViewerNotifications {
             ViewerNotificationKind::Plans => self.plans,
             ViewerNotificationKind::Documents => self.documents,
             ViewerNotificationKind::Finished => self.finished,
+            ViewerNotificationKind::Reads => self.reads,
+            ViewerNotificationKind::Estimates => self.estimates,
         }
     }
 }
@@ -448,10 +457,29 @@ mod tests {
         // A kind the file does not have gets its default.
         std::fs::write(&path, br#"{"viewerNotifications":{"finished":true}}"#).unwrap();
         let kinds = Settings::load(&path).viewer_notifications;
-        assert_eq!(kinds, ViewerNotifications { plans: true, documents: true, finished: true });
+        assert_eq!(
+            kinds,
+            ViewerNotifications {
+                plans: true,
+                documents: true,
+                finished: true,
+                reads: true,
+                estimates: true
+            }
+        );
+
+        // A file with only the three kinds of the release before: the host's asks load as on,
+        // and the rest is kept.
+        let older = br#"{"viewerNotifications":{"plans":false,"documents":true,"finished":true}}"#;
+        std::fs::write(&path, older).unwrap();
+        let kinds = Settings::load(&path).viewer_notifications;
+        assert!(!kinds.plans && kinds.documents && kinds.finished);
+        assert!(kinds.allows(ViewerNotificationKind::Reads));
+        assert!(kinds.allows(ViewerNotificationKind::Estimates));
 
         let mut settings = Settings::default();
         settings.viewer_notifications.documents = false;
+        settings.viewer_notifications.estimates = false;
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path), settings);
     }
