@@ -62,7 +62,7 @@ A participant SHALL resize a side panel by dragging the divider next to it, or w
 - **THEN** the panel returns to the preset's usual width
 
 ### Requirement: Tabs in the middle
-The tab area SHALL show the terminal and the documents, diffs, files and screenshots a participant opens, each as a tab. Every tab except the terminal tab SHALL close with its close button, and a tab SHALL be selectable with the keyboard.
+The tab area SHALL show the terminal and the documents, diffs, files, screenshots and plans a participant opens, each as a tab. Every tab except the terminal tab SHALL close with its close button, and a tab SHALL be selectable with the keyboard.
 
 #### Scenario: Open a document beside the terminal
 - **WHEN** a viewer opens `design.md` from the files panel
@@ -231,3 +231,14 @@ The request row SHALL show an open read request and an open vote, one above the 
 #### Scenario: Request closed
 - **WHEN** the open read request closes and no vote is open
 - **THEN** the request row takes no space again
+
+### Requirement: Plan tab
+A plan the agent presented for the host's approval SHALL be able to open in a tab of its own, named after the agent's plan, showing the plan formatted and whether it waits for the host, was approved or was rejected, updated as the host decides. The tab SHALL be read-only. It SHALL be opened from a viewer's notification about that plan (see `viewer-notifications`); the timeline keeps showing the plan in its step.
+
+#### Scenario: Plan approved while open
+- **WHEN** a viewer opened Claude's plan from a notification, and the host then approves it
+- **THEN** the tab *Claude's plan* shows the plan marked as approved
+
+#### Scenario: Revised plan
+- **WHEN** the host rejected Claude's plan, Claude presents a revised one, and the viewer opens it from its notification
+- **THEN** the tab shows the revised plan, waiting for the host, in place of the first one if that was a preview
