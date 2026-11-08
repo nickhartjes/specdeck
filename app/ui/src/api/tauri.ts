@@ -7,7 +7,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exportFileName } from '../model/diagnostics';
 import type { Bridge } from './bridge';
 import type { MenuCommand } from '../menu/menu';
-import type { AgentVersion, Appearance, DiagnosticsStatus, HostEvent, JoinLink, NoticeOpen, Profile, RunningSession, ServiceCheck, SharedFileInfo, UpdateState, ViewEvent } from './types';
+import type { AgentVersion, Appearance, DiagnosticsStatus, HostEvent, HostNoticeOpen, JoinLink, NoticeOpen, Profile, RunningSession, ServiceCheck, SharedFileInfo, UpdateState, ViewEvent } from './types';
 
 function channel<T>(handler: (message: T) => void): Channel<T> {
   const ch = new Channel<T>();
@@ -41,10 +41,11 @@ export const tauriBridge: Bridge = {
   setUsername: (username) => invoke<Profile>('set_username', { username }),
   setNotifications: (enabled) => invoke<Profile>('set_notifications', { enabled }),
   setViewerNotifications: (kinds) => invoke<Profile>('set_viewer_notifications', { kinds }),
+  setHostNotifications: (kinds) => invoke<Profile>('set_host_notifications', { kinds }),
   viewerNotify: (kind, title, body, open) => invoke('viewer_notify', { kind, title, body, open: open ?? null }),
   onNoticeOpen: (handler) => {
     // Sent to the window of the clicked notification's session (`notification-open` design decision 2).
-    const stop = getCurrentWebviewWindow().listen<NoticeOpen>('notice-open', (event) => handler(event.payload));
+    const stop = getCurrentWebviewWindow().listen<NoticeOpen | HostNoticeOpen>('notice-open', (event) => handler(event.payload));
     return () => void stop.then((unlisten) => unlisten());
   },
   setCheckUpdates: (enabled) => invoke<Profile>('set_check_updates', { enabled }),

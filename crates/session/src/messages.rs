@@ -418,6 +418,30 @@ mod tests {
     }
 
     #[test]
+    fn ask_notices_read_back() {
+        let label = || "design.md".to_owned();
+        for notice in [
+            HostNotice::Question {
+                ask: 3,
+                name: "Anna".into(),
+                text: Some("Why?".into()),
+                label: label(),
+            },
+            HostNotice::EveryoneRead { label: label(), ready: 4, questions: 1 },
+            HostNotice::TimeUp { label: label(), ready: 3, questions: 1, reading: 1 },
+            HostNotice::EveryoneVoted {
+                task: "Show unreachable".into(),
+                votes: 4,
+                host_missing: true,
+            },
+        ] {
+            let notice = Event::Notice { notice };
+            let json = serde_json::to_string(&notice).unwrap();
+            assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), notice);
+        }
+    }
+
+    #[test]
     fn browser_messages_read_back() {
         let ask = Event::Browser { id: 7, action: BrowserAction::Click { element: 4 } };
         let json = serde_json::to_string(&ask).unwrap();

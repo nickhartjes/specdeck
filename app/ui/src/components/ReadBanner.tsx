@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { BookOpen, Check, Clock, MessageCircleQuestionMark } from 'lucide-react';
 import type { Participant, ReadAnswer, ReadView } from '../api/types';
 import { formatLeft, MAX_QUESTION_CHARS, READ_STATE_TEXT, targetKind, timeLeft } from '../model/asks';
@@ -30,10 +30,12 @@ interface Props {
   onAnswer?: (answer: ReadAnswer) => void;
   /** Why the last answer did not count, if it did not. */
   notice?: string | null;
+  /** The host's: each new value shows the question texts, after a click on a question's notification. */
+  showQuestions?: number;
 }
 
 /** An open read request in the request row (`host-requests`: Ask to read, Ready or a question, The host sees who read). */
-export function ReadBanner({ view, receivedAt, participants, onOpen, onEnd, onAnswer, notice }: Props) {
+export function ReadBanner({ view, receivedAt, participants, onOpen, onEnd, onAnswer, notice, showQuestions = 0 }: Props) {
   const left = useTimeLeft(view.leftMs, receivedAt);
   const host = onEnd !== undefined;
   const answering = view.people.filter(([, state]) => state !== 'older-app');
@@ -45,6 +47,13 @@ export function ReadBanner({ view, receivedAt, participants, onOpen, onEnd, onAn
   const ids = useId();
   const mine = view.mine;
   const myQuestion = typeof mine === 'object' ? mine.question.text : null;
+  const banner = useRef<HTMLElement>(null);
+  const questionTexts = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (showQuestions === 0) return;
+    if (questionTexts.current) questionTexts.current.open = true;
+    banner.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [showQuestions]);
 
   const sendQuestion = (event: FormEvent) => {
     event.preventDefault();
@@ -54,7 +63,7 @@ export function ReadBanner({ view, receivedAt, participants, onOpen, onEnd, onAn
   };
 
   return (
-    <section className="ask-banner" aria-labelledby={`${ids}-title`}>
+    <section ref={banner} className="ask-banner" aria-labelledby={`${ids}-title`}>
       <div className="ask-banner-head">
         <BookOpen aria-hidden />
         <strong id={`${ids}-title`}>
@@ -142,7 +151,7 @@ export function ReadBanner({ view, receivedAt, participants, onOpen, onEnd, onAn
         </ul>
       )}
       {host && view.questions.length > 0 && (
-        <details className="ask-questions">
+        <details ref={questionTexts} className="ask-questions">
           <summary>{view.questions.length === 1 ? '1 question' : `${view.questions.length} questions`}</summary>
           <ul>
             {view.questions.map(([id, question]) => (
