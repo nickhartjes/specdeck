@@ -1,12 +1,13 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ViewEvent } from '../api/types';
+import type { ReadView, ViewEvent } from '../api/types';
 import { choose, type Layout } from '../model/layout';
 import { demoParticipants } from '../api/demo';
 import { fakeBridge, renderWith } from '../test/helpers';
 import { terminal, TerminalViewStub } from '../test/terminal-stub';
-import { ViewerScreen } from './ViewerScreen';
+import { initial, ViewerScreen, viewerReducer, type ViewerAction } from './ViewerScreen';
+import { setDefaultSchedule, type Schedule } from '../model/viewQueue';
 
 vi.mock('../terminal/TerminalView', () => ({ TerminalView: TerminalViewStub }));
 
@@ -614,5 +615,131 @@ describe('the host’s asks for a viewer', () => {
     expect(bridge.viewerNotify).toHaveBeenCalledWith('reads', 'Nick asks you to read', 'design.md');
     act(() => emit({ type: 'vote', open: vote({ round: 2, voted: [] }) }));
     expect(bridge.viewerNotify).toHaveBeenLastCalledWith('estimates', 'Nick asks for an estimate', 'Round 2');
+  });
+});
+
+describe('applying what arrives together', () => {
+  const at = (n: number) => ({ outputSeq: n, at: 1_700_000_000_000 + n });
+  const read: ReadView = { id: 1, target: { document: { path: 'design.md' } }, label: 'design.md', limitS: 0, leftMs: null, people: [], mine: 'reading', questions: [] };
+  const actions: ViewerAction[] = [
+    { type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 },
+    { type: 'timeline', event: { ...at(1), kind: 'prompt', promptId: 'p', text: 'Go' } },
+    { type: 'timeline', event: { ...at(2), kind: 'attention', message: 'Claude needs your permission' } },
+    { type: 'status', status: 'waiting' },
+    { type: 'request-sent', id: 1 },
+    { type: 'link-sending' },
+    { type: 'request-sent', id: 2 },
+    { type: 'reply', id: 2, outcome: 'Received' },
+    { type: 'read-request', open: read },
+    { type: 'timeline', event: { ...at(3), kind: 'response', promptId: 'p', text: 'Done.' } },
+  ];
+
+  it('ends in the same state as applying each on its own', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    const one = actions.reduce(viewerReducer, initial);
+    const batched = viewerReducer(initial, { type: 'batch', events: actions });
+    expect(batched).toEqual(one);
+    expect(batched.timeline.map((event) => event.outputSeq)).toEqual([1, 2, 3]);
+    expect(batched.request).toBe('Claude needs your permission');
+    expect(batched.sent).toEqual({ id: 1, outcome: null });
+    expect(batched.linkSent).toEqual({ id: 2, outcome: 'Received' });
+    vi.restoreAllMocks();
+  });
+
+  it('gives the same state for a batch of one, and leaves the timeline before it alone', () => {
+    const before = viewerReducer(initial, actions[1]!);
+    const timeline = before.timeline;
+    const event = actions[9]!;
+    expect(viewerReducer(before, { type: 'batch', events: [event] })).toEqual(viewerReducer(before, event));
+    expect(before.timeline).toBe(timeline);
+    expect(timeline).toHaveLength(1);
+  });
+});
+
+describe('applying once per frame', () => {
+  const HOUR = 3_600_000;
+  const prompt = (n: number, at: number): ViewEvent => ({ type: 'timeline', event: { outputSeq: n, at, kind: 'prompt', promptId: `p${n}`, text: `Prompt ${n}` } });
+  const answer = (n: number, at: number): ViewEvent => ({ type: 'timeline', event: { outputSeq: n + 100, at, kind: 'response', promptId: `p${n}`, text: `Done with ${n}.` } });
+  let frames: (() => void)[] = [];
+  const frame = () => act(() => frames.splice(0).forEach((flush) => flush()));
+
+  beforeEach(() => {
+    frames = [];
+    const manual: Schedule = (flush) => {
+      frames.push(flush);
+      return () => void frames.splice(frames.indexOf(flush), 1);
+    };
+    setDefaultSchedule(manual);
+  });
+  afterEach(() =>
+    setDefaultSchedule((flush) => {
+      flush();
+      return () => {};
+    }),
+  );
+
+  it('shows nothing of what arrived until the frame, and all of it after', () => {
+    setup();
+    act(() => {
+      emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+      emit({ type: 'status', status: 'waiting' });
+    });
+    frame();
+    const now = Date.now();
+    act(() => [prompt(1, now), answer(1, now + 1), prompt(2, now + 2)].forEach(emit));
+    expect(screen.queryByRole('article', { name: 'Prompt 1' })).not.toBeInTheDocument();
+    frame();
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Prompt 2' })).toBeInTheDocument();
+  });
+
+  it('notifies about a turn after the join without waiting for a frame, and not about the history', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { bridge } = setup();
+      const document = (n: number): ViewEvent => ({
+        type: 'timeline',
+        event: { outputSeq: n, at: n, kind: 'document', promptId: 'p', toolUseId: `t${n}`, path: `docs/note${n}.md`, text: '# Note' },
+      });
+      act(() => {
+        emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+        emit(document(1));
+        emit({ type: 'status', status: 'waiting' });
+      });
+      frame();
+      await act(async () => vi.advanceTimersByTimeAsync(5000));
+      expect(bridge.viewerNotify).not.toHaveBeenCalled();
+
+      act(() => {
+        emit({ type: 'status', status: 'working' });
+        emit(document(2));
+        emit({ type: 'status', status: 'waiting' });
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(2000));
+      expect(frames).toHaveLength(1);
+      expect(bridge.viewerNotify).toHaveBeenCalledWith('documents', expect.stringContaining('note2.md'), expect.any(String), expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('takes the join time when the join arrives, not when it is applied', () => {
+    const now = vi.spyOn(Date, 'now');
+    const start = 1_800_000_000_000;
+    now.mockReturnValue(start);
+    setup();
+    act(() => {
+      emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+      [0, 1, 2].forEach((n) => {
+        emit(prompt(n, start + 1000 + n * HOUR));
+        emit(answer(n, start + 61_000 + n * HOUR));
+      });
+    });
+    // Applied long after it arrived: the prompts were watched, so none fold.
+    now.mockReturnValue(start + 4 * HOUR);
+    frame();
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).not.toHaveClass('folded');
+    expect(screen.queryByRole('region', { name: 'So far' })).not.toBeInTheDocument();
+    now.mockRestore();
   });
 });

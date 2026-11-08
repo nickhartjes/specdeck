@@ -39,6 +39,7 @@ import { formatCode } from '../model/code';
 import { AGENT_NAMES } from './HostScreen';
 import { Workspace, type WorkspaceHandle } from './Workspace';
 import { setTimelineEvents } from '../model/heartbeat';
+import { createViewQueue } from '../model/viewQueue';
 import { createViewerNotices, DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 import { createNoticeList, type ListOpen } from '../model/noticeList';
 import { createSharedNotices } from '../model/sharedNotices';
@@ -129,7 +130,7 @@ interface State {
   answerNotice: string | null;
 }
 
-const initial: State = {
+export const initial: State = {
   suggestionsAllowed: null,
   wholeFiles: false,
   filesAllowed: null,
@@ -158,8 +159,27 @@ const initial: State = {
   request: null,
 };
 
-export function viewerReducer(state: State, event: ViewEvent | { type: 'link-sending' | 'link-refused' }): State {
+/** What the screen's state takes: an event from the session, or this viewer sending a link. */
+export type ViewerAction = ViewEvent | { type: 'link-sending' | 'link-refused' };
+
+export function viewerReducer(state: State, event: ViewerAction | { type: 'batch'; events: ViewerAction[] }): State {
   switch (event.type) {
+    // What arrived together applies together, in order; the timeline is copied once
+    // (`replay-batching` design decision 3).
+    case 'batch': {
+      let timeline: TimelineEvent[] | null = null;
+      let next = state;
+      for (const action of event.events) {
+        if (action.type !== 'timeline') {
+          next = viewerReducer(next, action);
+          continue;
+        }
+        timeline ??= [...next.timeline];
+        timeline.push(action.event);
+        next = { ...next, timeline, request: nextRequest(next.request, action) };
+      }
+      return next;
+    }
     case 'joined':
       return { ...state, phase: 'live', viewerId: event.viewerId, agent: event.agent, timelineSupported: event.timelineSupported };
     case 'reconnecting':
@@ -248,6 +268,10 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   const shown = layout ?? choose('developer');
   const workspace = useRef<WorkspaceHandle>(null);
   const [state, dispatch] = useReducer(viewerReducer, initial);
+  // Everything the state takes queues and applies once per frame, in order; side effects run as
+  // each event arrives (`replay-batching` design decision 2).
+  const [queue] = useState(() => createViewQueue<ViewerAction>((events) => dispatch({ type: 'batch', events })));
+  useEffect(() => () => queue.dispose(), [queue]);
   // When this screen first joined; reconnecting is not joining again (`catch-up`).
   const [joinedAt, setJoinedAt] = useState<number | null>(null);
   useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
@@ -302,7 +326,7 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
     [bridge, list],
   );
   const onEvent = (event: ViewEvent) => {
-    dispatch(event);
+    queue.push(event);
     if (event.type === 'joined' || event.type === 'status') {
       void bridge
         .getProfile()
@@ -513,11 +537,11 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
                 mine={state.myLinks}
                 outcome={state.linkSent?.outcome ?? null}
                 onShare={async (url, title, sessionOnly) => {
-                  dispatch({ type: 'link-sending' });
+                  queue.push({ type: 'link-sending' });
                   try {
                     await bridge.sendLink(url, title, sessionOnly);
                   } catch (error) {
-                    dispatch({ type: 'link-refused' });
+                    queue.push({ type: 'link-refused' });
                     throw error;
                   }
                 }}
