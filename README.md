@@ -18,6 +18,15 @@ Short narrated walkthroughs, with captions; select one to watch it in the docume
 |---|---|---|
 | **Getting started** (1 min): host a session, share the code, a teammate joins | **Following a session** (1½ min): Overview or Developer, steps, search and files | **Diagnostics** (1½ min): Connection Status and a file for bug reports |
 
+## Security and privacy
+
+The session goes straight from the host's computer to each viewer, encrypted. The sharing service only helps them find each other, and neither it nor the relay can read the session. Viewers see everything in the terminal. [Security and privacy](https://nickhartjes.github.io/specdeck/security/overview/) in the documentation says what SpecDeck does with your data, who runs the servers, and the [known limits](https://nickhartjes.github.io/specdeck/security/known-limits/); [SECURITY.md](SECURITY.md) says how to report a vulnerability.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/data-flow-dark.svg">
+  <img src="docs/diagrams/data-flow-light.svg" width="640" alt="The host's computer sends the session to each viewer over an encrypted connection, directly or through a TURN relay that cannot read it. The sharing service only passes on the connection setup; it sees IP addresses and room ids, but never the session.">
+</picture>
+
 ## Install
 
 | Platform | How |

@@ -31,6 +31,17 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Security and privacy',
+          items: [
+            'security/overview',
+            'security/data',
+            'security/sharing-service',
+            'security/claude-browser',
+            'security/your-computer',
+            'security/known-limits',
+          ],
+        },
+        {
           label: 'Run your own server',
           items: [
             'self-host/overview',
