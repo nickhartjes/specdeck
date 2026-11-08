@@ -36,3 +36,10 @@ describe('start screen accent', () => {
     ]);
   });
 });
+
+describe('side panels', () => {
+  it('keep their content as wide as the panel, so nothing is cut off at its edge (#86)', () => {
+    expect(declarations('.pane')).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(declarations('.pane-tab .label')).toEqual(['overflow: hidden', 'text-overflow: ellipsis', 'white-space: nowrap']);
+  });
+});

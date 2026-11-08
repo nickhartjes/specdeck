@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { errorMessage, useBridge } from '../api/bridge';
 import type { Profile } from '../api/types';
 import { ShortcutsDialog } from '../components/ShortcutsDialog';
+import { PLAIN_TEXT } from '../components/fields';
 import { dispatchMenu } from '../menu/menu';
 import { profileLayout } from '../model/layout';
 import { ViewerScreen } from '../screens/ViewerScreen';
@@ -160,12 +161,12 @@ function JoinPage({
           Invite code
         </label>
         <input
+          {...PLAIN_TEXT}
           id="code"
           className="field"
           autoFocus={!code}
           placeholder="7K2M-9QXH-4TPA"
           autoComplete="off"
-          spellCheck={false}
           value={code}
           onChange={(event) => setCode(event.target.value)}
         />
@@ -173,6 +174,7 @@ function JoinPage({
           Your name
         </label>
         <input
+          {...PLAIN_TEXT}
           id="username"
           className="field"
           autoFocus={Boolean(code) && !name}

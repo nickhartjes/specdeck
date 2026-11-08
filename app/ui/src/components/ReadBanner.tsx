@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from 'react';
 import { BookOpen, Check, Clock, MessageCircleQuestionMark } from 'lucide-react';
 import type { Participant, ReadAnswer, ReadView } from '../api/types';
 import { formatLeft, MAX_QUESTION_CHARS, READ_STATE_TEXT, targetKind, timeLeft } from '../model/asks';
+import { PLAIN_TEXT } from './fields';
 
 /** The time left, counted down each second from what the host sent; null without a limit. */
 export function useTimeLeft(leftMs: number | null, receivedAt: number): number | null {
@@ -112,6 +113,7 @@ export function ReadBanner({ view, receivedAt, participants, onOpen, onEnd, onAn
           <label>
             Your question for the host (optional)
             <input
+              {...PLAIN_TEXT}
               className="field"
               autoFocus
               value={text}

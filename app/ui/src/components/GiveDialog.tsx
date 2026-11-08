@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { errorMessage } from '../api/bridge';
 import type { BraindumpItemInfo } from '../api/types';
 import { DEFAULT_GIVE_PROMPT } from '../model/sharedFiles';
+import { PLAIN_TEXT } from './fields';
 
 interface Props {
   /** The items not given yet, oldest first. */
@@ -61,7 +62,7 @@ export function GiveDialog({ items, agentName, promptPossible, onGive, onGiven, 
               </p>
               <label>
                 Prompt for {agentName}
-                <textarea ref={field} className="field" rows={5} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+                <textarea {...PLAIN_TEXT} ref={field} className="field" rows={5} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
               </label>
             </>
           ) : (
