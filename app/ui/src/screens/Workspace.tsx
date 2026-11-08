@@ -9,8 +9,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { ArrowDown, FileDiff, FileText, Files, Image, Share2, SquareTerminal, X } from "lucide-react";
-import type { ReadTarget, TimelineEvent, TerminalSnapshot } from "../api/types";
+import { ArrowDown, ClipboardList, FileDiff, FileText, Files, Image, Share2, SquareTerminal, X } from "lucide-react";
+import type { NoticeOpen, ReadTarget, TimelineEvent, TerminalSnapshot } from "../api/types";
 import { ChangesTab } from "../components/ChangesTab";
 import { changesTabPath } from "../model/asks";
 import { Divider } from "../components/Divider";
@@ -18,6 +18,7 @@ import { DiffTab, type CodeView } from "../components/DiffTab";
 import { DocumentTab } from "../components/DocumentTab";
 import { ScreenshotTab, screenshotTitle } from "../components/Screenshot";
 import { FilesPanel, isDocument } from "../components/FilesPanel";
+import { PlanTab } from "../components/PlanTab";
 import { SearchBar } from "../components/SearchBar";
 import { SharedFileTab, type SharedFiles } from "../components/SharedFiles";
 import { shareSteps } from "../model/sharedFiles";
@@ -64,6 +65,11 @@ export interface WorkspaceHandle {
   resetTerminal(): void;
   /** Opens what the host asked to read, as a kept tab. */
   openTarget(target: ReadTarget, label: string): void;
+  /**
+   * Opens what a clicked notification is about, if this window has it (`notification-open`
+   * design decision 4).
+   */
+  open(target: NoticeOpen): void;
 }
 
 interface Props {
@@ -255,6 +261,7 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
         show(openTab(tabs, "document", path, { keep })),
       [show, tabs],
     );
+
     const openChange = useCallback(
       (path: string, toolUseId: string) =>
         show(openTab(tabs, "diff", path, { focus: toolUseId })),
@@ -301,6 +308,17 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
           // The label reads in a sentence; a tab starts with a capital.
           const title = label.charAt(0).toUpperCase() + label.slice(1);
           show(openTab(tabs, "changes", changesTabPath(fromSeq, toSeq), { keep: true, title }));
+        }
+      },
+      open(target) {
+        if (target.kind === "document") {
+          if (written.documents.has(target.path)) openDocument(target.path);
+        } else if (planIn(model, target.toolUseId)) {
+          show(
+            openTab(tabs, "plan", target.toolUseId, {
+              title: `${props.agentName}'s plan`,
+            }),
+          );
         }
       },
     }));
@@ -640,6 +658,11 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                         progress={props.sharedProgress?.get(Number(tab.path))}
                         onKeep={() => keep(tab.id)}
                       />
+                    ) : tab.kind === "plan" ? (
+                      <PlanTab
+                        item={planIn(model, tab.path!)}
+                        title={tab.title ?? `${props.agentName}'s plan`}
+                      />
                     ) : tab.kind === "changes" ? (
                       <ChangesTab
                         timeline={props.timeline}
@@ -843,17 +866,30 @@ const TAB_ICONS = {
   image: Image,
   shared: Share2,
   changes: Files,
+  plan: ClipboardList,
 };
 
-/** The screenshot of tool call `toolUseId`, if the timeline has one. */
-function screenshotIn(model: TimelineModel, toolUseId: string) {
+/** Tool call `toolUseId`, if the timeline has it. */
+function toolIn(model: TimelineModel, toolUseId: string): ToolItem | null {
   for (const turn of model.turns) {
     const item = turn.items.find(
       (entry) => entry.kind === "tool" && entry.id === toolUseId,
     );
-    if (item?.kind === "tool") return screenshotOf(item);
+    if (item?.kind === "tool") return item;
   }
   return null;
+}
+
+/** The screenshot of tool call `toolUseId`, if the timeline has one. */
+function screenshotIn(model: TimelineModel, toolUseId: string) {
+  const item = toolIn(model, toolUseId);
+  return item && screenshotOf(item);
+}
+
+/** The plan the agent presented with tool call `toolUseId`, if the timeline has it. */
+function planIn(model: TimelineModel, toolUseId: string): ToolItem | null {
+  const item = toolIn(model, toolUseId);
+  return item?.toolName === "ExitPlanMode" ? item : null;
 }
 
 /** The tabs in the middle, like an editor's: a preview in italics, the terminal tab never closed. */

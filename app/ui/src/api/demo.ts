@@ -443,6 +443,7 @@ export function demoBridge(screen: string): Bridge {
     setNotifications: async (notifications) => ({ ...profile, notifications }),
     setViewerNotifications: async (viewerNotifications) => ({ ...profile, viewerNotifications }),
     viewerNotify: async () => {},
+    onNoticeOpen: () => () => {},
     setCheckUpdates: async (checkUpdates) => ({ ...profile, checkUpdates }),
     setScreenReader: async (screenReader) => ({ ...profile, screenReader }),
     setVerboseLogging: async (verboseLogging) => ({ ...profile, verboseLogging }),

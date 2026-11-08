@@ -55,6 +55,23 @@ You get at most one notification each time the agent finishes a prompt, naming e
 
 The host's read requests and votes notify you on their own, outside that one per prompt. A request or vote that was already open when you joined, or that comes back after you reconnect, doesn't notify you.
 
+Clicking one of these opens what its title names, in the preview tab:
+
+| Notification | Opens |
+|---|---|
+| *Plan add-login is ready for review*, or *was updated* | The first document of the plan that changed: the proposal of a new plan, the design of a revised one |
+| *README.md changed*, or *README.md and 2 other documents changed* | `README.md` |
+| *Claude Code has a plan for you to review* | Claude Code's plan, in a tab of its own, which shows whether the host approved it |
+| *Claude Code finished* | Nothing; the session comes to the front |
+| *Henk asks you to read*, *Henk asks for an estimate* | Nothing; the session comes to the front, where the request waits |
+
+It also works for an older notification, and after the host ended the session: you see the latest version you received, even of a document deleted since. Once you left the session, a click opens nothing.
+
+A click only reaches SpecDeck when your system reports it:
+
+- On Windows, click the notification while it is on screen. Once it moved to the notification center, clicking it opens nothing.
+- On Linux, it depends on your notification server. GNOME and KDE report clicks; some lightweight servers don't, and then clicking opens nothing.
+
 In a browser, turn notifications on under the layout button instead. See [Notifications in the browser](/specdeck/guide/follow/#notifications-in-the-browser).
 
 ## The window

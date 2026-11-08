@@ -120,7 +120,7 @@ The app SHALL send OS notifications for events that need attention while the win
 
 #### Scenario: Viewer called in for a plan
 - **WHEN** a viewer's window is in the background and Claude proposes a change in the session they watch
-- **THEN** the viewer gets a notification that the plan is ready for review, and clicking it brings that session's window to the front
+- **THEN** the viewer gets a notification that the plan is ready for review, and clicking it brings that session's window to the front with the plan's proposal open
 
 #### Scenario: Viewer's window in front
 - **WHEN** Claude changes a document while the viewer's window of that session has focus
@@ -439,3 +439,18 @@ Each session on the start screen's list SHALL offer Open, which shows the sessio
 #### Scenario: Session started by an older SpecDeck
 - **WHEN** a session started by an older SpecDeck is running
 - **THEN** the start screen lists it as started by an older SpecDeck, with End and without Open, and ending it asks first and then ends it for its viewers
+
+### Requirement: Notification clicks per platform
+A click on a notification SHALL be acted on whenever the OS reports it to the app: on macOS; on Windows while the notification is on screen; on Linux with a notification server that supports clicks. A click the OS doesn't report SHALL open nothing, and the user guide SHALL say where that happens.
+
+#### Scenario: Windows Action Center
+- **WHEN** a viewer on Windows clicks a notification about `README.md` after it moved to the Action Center
+- **THEN** the app does not open `README.md`, as the guide says
+
+#### Scenario: Linux server without clicks
+- **WHEN** a viewer on Linux uses a notification server that doesn't report clicks
+- **THEN** notifications are still shown, and clicking them opens nothing
+
+#### Scenario: macOS
+- **WHEN** a viewer on macOS clicks the notification that `README.md` changed
+- **THEN** the session's window comes to the front with `README.md` open

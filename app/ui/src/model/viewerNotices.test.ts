@@ -74,7 +74,7 @@ describe('viewer notices', () => {
       vi.advanceTimersByTime(SETTLE_MS);
       expect(sent).toEqual([]);
       turn(documentWritten('notes.md'));
-      expect(sent).toEqual([{ kind: 'documents', title: 'notes.md changed', body: 'Claude Code changed it in this turn.' }]);
+      expect(sent).toEqual([{ kind: 'documents', title: 'notes.md changed', body: 'Claude Code changed it in this turn.', open: { kind: 'document', path: 'notes.md' } }]);
     });
 
     it('waits through a permission and notifies once at the end of the turn', () => {
@@ -120,7 +120,7 @@ describe('viewer notices', () => {
       const { sent, status, turn } = setup();
       status('waiting');
       turn(['a.md', 'b.md', 'c.md', 'd.md'].flatMap((path) => documentWritten(path)));
-      expect(sent).toEqual([{ kind: 'documents', title: 'a.md and 3 other documents changed', body: 'Claude Code changed them in this turn.' }]);
+      expect(sent).toEqual([{ kind: 'documents', title: 'a.md and 3 other documents changed', body: 'Claude Code changed them in this turn.', open: { kind: 'document', path: 'a.md' } }]);
     });
 
     it('notifies when the agent exits, without saying it waits', () => {
@@ -129,7 +129,7 @@ describe('viewer notices', () => {
       status('working');
       timeline(documentWritten('README.md'));
       status('exited');
-      expect(sent).toEqual([{ kind: 'documents', title: 'README.md changed', body: 'Claude Code changed it in this turn.' }]);
+      expect(sent).toEqual([{ kind: 'documents', title: 'README.md changed', body: 'Claude Code changed it in this turn.', open: { kind: 'document', path: 'README.md' } }]);
     });
 
     it('keeps the turn across a reconnect, with what was missed', () => {
@@ -187,7 +187,12 @@ describe('viewer notices', () => {
       status('waiting');
       turn(planWritten('add-login', SPEC_DRIVEN));
       expect(sent).toEqual([
-        { kind: 'plans', title: 'Plan add-login is ready for review', body: 'Claude Code wrote proposal, specs, design and tasks.' },
+        {
+          kind: 'plans',
+          title: 'Plan add-login is ready for review',
+          body: 'Claude Code wrote proposal, specs, design and tasks.',
+          open: { kind: 'document', path: 'openspec/changes/add-login/proposal.md' },
+        },
       ]);
     });
 
@@ -196,7 +201,7 @@ describe('viewer notices', () => {
       timeline([planState('add-login')]);
       status('waiting');
       turn(planWritten('add-login', ['design']));
-      expect(sent).toEqual([{ kind: 'plans', title: 'Plan add-login was updated', body: 'Claude Code changed design.' }]);
+      expect(sent).toEqual([{ kind: 'plans', title: 'Plan add-login was updated', body: 'Claude Code changed design.', open: { kind: 'document', path: 'openspec/changes/add-login/design.md' } }]);
     });
 
     it('stays quiet while tasks are ticked', () => {
@@ -230,6 +235,7 @@ describe('viewer notices', () => {
           kind: 'plans',
           title: 'Plan add-login is ready for review',
           body: 'Claude Code wrote proposal, specs, design and tasks. README.md changed too.',
+          open: { kind: 'document', path: 'openspec/changes/add-login/proposal.md' },
         },
       ]);
     });
@@ -238,7 +244,12 @@ describe('viewer notices', () => {
       const { sent, status, turn } = setup({ plans: false });
       status('waiting');
       turn(planWritten('add-login', SPEC_DRIVEN));
-      expect(sent).toEqual([{ kind: 'documents', title: 'proposal.md and 3 other documents changed', body: 'Claude Code changed them in this turn.' }]);
+      expect(sent).toEqual([{
+        kind: 'documents',
+        title: 'proposal.md and 3 other documents changed',
+        body: 'Claude Code changed them in this turn.',
+        open: { kind: 'document', path: 'openspec/changes/add-login/proposal.md' },
+      }]);
     });
 
     it('stays quiet when the kinds are off', () => {
@@ -267,7 +278,14 @@ describe('viewer notices', () => {
       status('waiting');
       status('working');
       timeline([event({ kind: 'tool-call', promptId: 'p', toolUseId: 'plan', toolName: 'ExitPlanMode', input: { plan: '# Secret plan' } })]);
-      expect(sent).toEqual([{ kind: 'plans', title: 'Claude Code has a plan for you to review', body: 'Open the session to read it.' }]);
+      expect(sent).toEqual([
+        {
+          kind: 'plans',
+          title: 'Claude Code has a plan for you to review',
+          body: 'Open the session to read it.',
+          open: { kind: 'plan-mode', toolUseId: 'plan' },
+        },
+      ]);
       timeline([event({ kind: 'attention', message: 'Claude has a plan for you to review' })]);
       status('waiting');
       vi.advanceTimersByTime(SETTLE_MS * 4);
@@ -283,6 +301,47 @@ describe('viewer notices', () => {
       status('waiting');
       turn([...planWritten('add-login', SPEC_DRIVEN), ...documentWritten('README.md')]);
       expect(JSON.stringify(sent)).not.toContain('# text');
+    });
+  });
+
+  describe('what a click opens', () => {
+    it('opens the first document of the first plan when two plans are ready', () => {
+      const { sent, status, turn } = setup();
+      status('waiting');
+      turn([...planWritten('add-login', ['design', 'tasks']), ...planWritten('fix-search', SPEC_DRIVEN)]);
+      expect(sent[0]?.title).toBe('Plan add-login is ready for review');
+      expect(sent[0]?.open).toEqual({ kind: 'document', path: 'openspec/changes/add-login/design.md' });
+    });
+
+    it('opens the plan, not a README named in the body', () => {
+      const { sent, status, turn } = setup();
+      status('waiting');
+      turn([...documentWritten('README.md'), ...planWritten('add-login', ['proposal'])]);
+      expect(sent[0]?.open).toEqual({ kind: 'document', path: 'openspec/changes/add-login/proposal.md' });
+    });
+
+    it('opens the document the title names, past a plan whose tasks were only ticked', () => {
+      const { sent, status, timeline, turn } = setup();
+      timeline([planState('add-login')]);
+      status('waiting');
+      turn([...planWritten('add-login', ['tasks'], { done: 2, total: 8 }), ...documentWritten('notes.md'), ...documentWritten('README.md')]);
+      expect(sent[0]?.title).toBe('notes.md and 1 other document changed');
+      expect(sent[0]?.open).toEqual({ kind: 'document', path: 'notes.md' });
+    });
+
+    it('opens nothing when the agent only finished', () => {
+      const { sent, status, turn } = setup({ finished: true });
+      status('waiting');
+      turn([]);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).not.toHaveProperty('open');
+    });
+
+    it('opens the plan when the agent also finished', () => {
+      const { sent, status, turn } = setup({ finished: true });
+      status('waiting');
+      turn(planWritten('add-login', ['proposal']));
+      expect(sent[0]?.open).toEqual({ kind: 'document', path: 'openspec/changes/add-login/proposal.md' });
     });
   });
 });

@@ -284,10 +284,25 @@ describe('notifications for the viewer', () => {
       });
       await act(async () => vi.advanceTimersByTimeAsync(2000));
       expect(bridge.viewerNotify).toHaveBeenCalledTimes(1);
-      expect(bridge.viewerNotify).toHaveBeenCalledWith('plans', 'Plan add-login is ready for review', 'Claude Code wrote proposal.');
+      expect(bridge.viewerNotify).toHaveBeenCalledWith('plans', 'Plan add-login is ready for review', 'Claude Code wrote proposal.', {
+        kind: 'document',
+        path: 'openspec/changes/add-login/proposal.md',
+      });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('opens what a clicked notification is about', () => {
+    const { bridge } = setup();
+    join();
+    act(() => {
+      emit({ type: 'timeline', event: proposal(1) });
+      emit({ type: 'timeline', event: plan(2) });
+    });
+    const opened = vi.mocked(bridge.onNoticeOpen).mock.calls[0]![0];
+    act(() => opened({ kind: 'document', path: 'openspec/changes/add-login/proposal.md' }));
+    expect(screen.getByRole('tab', { name: /proposal\.md/ })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('stays quiet about what happened before the viewer came in', async () => {

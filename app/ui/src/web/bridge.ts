@@ -3,7 +3,7 @@
 // folder, agent and update calls are not part of the web viewer and fail.
 
 import type { Bridge } from '../api/bridge';
-import type { Appearance, JoinLink, Profile, RequestOutcome, View, ViewEvent, ViewerNotifications } from '../api/types';
+import type { Appearance, JoinLink, NoticeOpen, Profile, RequestOutcome, View, ViewEvent, ViewerNotifications } from '../api/types';
 import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 import { asAppearance } from '../appearance';
 import { Connection, type Platform, type ViewerCore } from './connection';
@@ -41,7 +41,8 @@ export interface BrowserNotifications {
   permission(): NotificationPermission;
   /** Asks the viewer; browsers allow it only right after a click. */
   request(): Promise<NotificationPermission>;
-  show(title: string, body: string): void;
+  /** Shows a notification; a click on it brings the page to the front and calls `onClick`. */
+  show(title: string, body: string, onClick: () => void): void;
   /** The page is hidden, or the browser window is not in front. */
   away(): boolean;
 }
@@ -54,11 +55,12 @@ export function browserNotifications(): BrowserNotifications | null {
   return {
     permission: () => Notification.permission,
     request: () => Notification.requestPermission(),
-    show: (title, body) => {
+    show: (title, body, onClick) => {
       const notification = new Notification(title, { body, tag: 'specdeck-viewer' });
       notification.onclick = () => {
         window.focus();
         notification.close();
+        onClick();
       };
     },
     away: () => document.visibilityState === 'hidden' || !document.hasFocus(),
@@ -192,6 +194,8 @@ export function webBridge(options: WebBridgeOptions): Bridge {
   let viewerNotifications = readViewerNotifications(storage);
   const allowed = () => notifying && notifier?.permission() === 'granted';
   const appearanceHandlers = new Set<(appearance: Appearance) => void>();
+  // Who opens what a clicked notification is about (`notification-open` design decision 3).
+  const noticeHandlers = new Set<(open: NoticeOpen) => void>();
   // The session's links by id, as they arrived: the page opens only these.
   const links = new Map<number, string>();
   const open = options.open ?? ((url, target, features) => void window.open(url, target, features));
@@ -257,9 +261,17 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       write(storage, STORAGE_KEYS.viewerNotifications, JSON.stringify(kinds));
       return Promise.resolve(profile());
     },
-    viewerNotify: (kind, title, body) => {
-      if (allowed() && viewerNotifications[kind] && notifier?.away()) notifier.show(title, body);
+    viewerNotify: (kind, title, body, target) => {
+      if (allowed() && viewerNotifications[kind] && notifier?.away()) {
+        notifier.show(title, body, () => {
+          if (target) noticeHandlers.forEach((handler) => handler(target));
+        });
+      }
       return Promise.resolve();
+    },
+    onNoticeOpen: (handler) => {
+      noticeHandlers.add(handler);
+      return () => void noticeHandlers.delete(handler);
     },
     setCheckUpdates: () => Promise.resolve(profile()),
     setScreenReader: () => Promise.resolve(profile()),

@@ -14,6 +14,7 @@ import type {
   DiagnosticsStatus,
   HostEvent,
   JoinLink,
+  NoticeOpen,
   Profile,
   ReadAnswer,
   ReadTarget,
@@ -38,8 +39,13 @@ export interface Bridge {
   setUsername(username: string): Promise<Profile>;
   setNotifications(enabled: boolean): Promise<Profile>;
   setViewerNotifications(kinds: ViewerNotifications): Promise<Profile>;
-  /** Notifies about the session this window watches, unless that kind is off or the window is in front. */
-  viewerNotify(kind: ViewerNotificationKind, title: string, body: string): Promise<void>;
+  /**
+   * Notifies about the session this window watches, unless that kind is off or the window is in
+   * front. A click on it brings the window to the front and passes `open` to `onNoticeOpen`.
+   */
+  viewerNotify(kind: ViewerNotificationKind, title: string, body: string, open?: NoticeOpen): Promise<void>;
+  /** Calls `handler` with what a clicked notification about this window's session opens; returns a function that stops listening. */
+  onNoticeOpen(handler: (open: NoticeOpen) => void): () => void;
   setCheckUpdates(enabled: boolean): Promise<Profile>;
   setScreenReader(enabled: boolean): Promise<Profile>;
   setVerboseLogging(enabled: boolean): Promise<Profile>;

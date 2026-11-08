@@ -417,6 +417,68 @@ describe('the terminal tab', () => {
   });
 });
 
+describe('opening from a notification', () => {
+  const design = 'openspec/changes/demo/design.md';
+  const planMode = (approved?: boolean): TimelineEvent[] => [
+    ...planTimeline(),
+    { ...at(10), kind: 'prompt', promptId: 'p3', text: 'plan the next step' },
+    { ...at(11), kind: 'tool-call', promptId: 'p3', toolUseId: 'x1', toolName: 'ExitPlanMode', input: { plan: '# Plan: next step' } },
+    ...(approved === undefined
+      ? []
+      : [{ ...at(12), kind: 'tool-result', promptId: 'p3', toolUseId: 'x1', status: 'succeeded', outcome: { kind: 'plan-decision', approved } } as TimelineEvent]),
+  ];
+
+  it('opens a document in the preview tab', () => {
+    const ref = createRef<WorkspaceHandle>();
+    renderWorkspace({ ref, timeline: planTimeline() });
+    act(() => ref.current!.open({ kind: 'document', path: design }));
+    expect(screen.getByRole('tab', { name: 'design.md, preview' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('selects a document kept open, without replacing the preview', () => {
+    const ref = createRef<WorkspaceHandle>();
+    renderWorkspace({ ref, timeline: planTimeline() });
+    act(() => ref.current!.open({ kind: 'document', path: design }));
+    fireEvent.doubleClick(screen.getByRole('tab', { name: /design\.md/ }));
+    act(() => ref.current!.open({ kind: 'document', path: 'openspec/changes/demo/proposal.md' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Terminal, read-only' }));
+    act(() => ref.current!.open({ kind: 'document', path: design }));
+    expect(tabNames()).toEqual(['Terminal, read-only', 'design.md', 'proposal.md, preview']);
+    expect(screen.getByRole('tab', { name: 'design.md' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it("opens the agent's plan in a plan tab that follows the host's decision", () => {
+    const ref = createRef<WorkspaceHandle>();
+    const { rerender } = renderWorkspace({ ref, timeline: planMode() });
+    act(() => ref.current!.open({ kind: 'plan-mode', toolUseId: 'x1' }));
+    expect(screen.getByRole('tab', { name: "Claude Code's plan, preview" })).toHaveAttribute('aria-selected', 'true');
+    const panel = screen.getByRole('tabpanel', { name: "Claude Code's plan" });
+    expect(within(panel).getByText('Waiting for the host')).toBeInTheDocument();
+    rerender(<Harness ref={ref} timeline={planMode(true)} />);
+    expect(within(screen.getByRole('tabpanel', { name: "Claude Code's plan" })).getByText('Approved')).toBeInTheDocument();
+  });
+
+  it('opens nothing for a document or plan it does not have', () => {
+    const ref = createRef<WorkspaceHandle>();
+    renderWorkspace({ ref, timeline: planTimeline() });
+    const before = tabNames();
+    act(() => ref.current!.open({ kind: 'document', path: 'gone.md' }));
+    act(() => ref.current!.open({ kind: 'plan-mode', toolUseId: 'w1' }));
+    expect(tabNames()).toEqual(before);
+  });
+
+  it('shows the session on a narrow window', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('max-width'), addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const ref = createRef<WorkspaceHandle>();
+    renderWorkspace({ ref, timeline: planTimeline() });
+    const switcher = screen.getByRole('navigation', { name: 'Panels' });
+    fireEvent.click(within(switcher).getByRole('button', { name: 'Timeline' }));
+    act(() => ref.current!.open({ kind: 'document', path: design }));
+    expect(within(switcher).getByRole('button', { name: 'Session' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('tab', { name: /design\.md/ })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
 describe('narrow window', () => {
   it('shows one panel at a time, and switches to Session to show what is opened', () => {
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('max-width'), addEventListener: vi.fn(), removeEventListener: vi.fn() }));
