@@ -36,6 +36,8 @@ Settings are the same for every window: your name, sharing service, layout and z
 
 Start the session in the folder you mean to share, not a folder above it: the timeline does not show changes elsewhere in a git repository.
 
+For where all of this travels and what stays on your computer, see [Your data](/specdeck/security/data/).
+
 :::caution[Anything in the terminal is shared]
 SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a command prints while people watch, for example by not asking the agent to show `.env` files. This holds whatever **Code viewers can open** is set to: a file Claude reads or prints in the terminal is shared as it appears there.
 :::

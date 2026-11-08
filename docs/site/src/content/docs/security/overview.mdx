@@ -1,0 +1,57 @@
+---
+title: Security and privacy
+description: What SpecDeck does with your data, who runs the servers, and what the risks are.
+sidebar:
+  label: Overview
+---
+
+import DataFlow from '../../../assets/security/data-flow.svg';
+
+These pages are for anyone deciding whether SpecDeck may be used at work: the developer who wants to host or join sessions, and the security officer who has to agree. They describe the current release, including what is not done yet.
+
+## In short
+
+- **The session stays with the host.** The terminal, the timeline, documents, shared files and links go straight from the host's computer to each viewer, encrypted. The sharing service and the relay pass on traffic they cannot read, and nothing of a session is stored anywhere but on the host's computer, only while it runs.
+- **Viewers see everything in the terminal.** The timeline adds nothing from outside the session folder, but whatever the agent or a command prints is shared as it appears. Viewers who join late get the whole session from its start.
+- **Viewers only watch.** Nothing a viewer sends reaches the agent unless the host acts on it in their own window.
+- **The invite code is the key.** Anyone who has it can watch, until the host makes a new one or ends the session. Whoever runs the sharing service could in principle guess a code by trying codes on their own computers; a fix is planned. See [The sharing service](/specdeck/security/sharing-service/#the-invite-code).
+- **No accounts, no telemetry.** SpecDeck sends nothing about you or your sessions to anyone. It contacts only the sharing service, the relay, and GitHub to check for updates.
+- **Updates are signed, installers not yet.** The app installs only updates signed with SpecDeck's key, but the installers are not signed by Apple or Microsoft yet.
+
+The [known limits](/specdeck/security/known-limits/) list everything that is weaker than you might expect, with what you can do about it.
+
+## How a session travels
+
+<DataFlow />
+
+The host runs the coding agent in a folder on their own computer, and SpecDeck mirrors the session from there. Each viewer, in the app or in a browser, connects straight to the host over an encrypted WebRTC connection (DTLS). When the networks in between do not allow a direct connection, the same encrypted traffic goes through a TURN relay, which forwards it without being able to read it.
+
+The sharing service only helps them find each other: it matches a viewer to the host by the invite code and passes on the messages that set up the connection. It sees IP addresses, room ids and that setup. The server keeps them in memory only; the relay logs the addresses it connects (see [What the service sees and keeps](/specdeck/security/sharing-service/#what-the-service-sees-and-keeps)).
+
+## Who runs the built-in sharing service
+
+SpecDeck comes with a sharing service at `specdeck.hartj.es`. It is run by the project's maintainer, Nick Hartjes, on a best-effort basis: there is no promise of uptime or support. It runs on a server at Hetzner in Falkenstein, Germany.
+
+The server and the web viewer are reached through a Cloudflare Tunnel, so Cloudflare handles that traffic too. Like the server, Cloudflare can see IP addresses, room ids and the connection setup, and it delivers the web viewer's code to browsers. It never sees the session itself, which goes from host to viewer, and the relay is reached directly, not through Cloudflare.
+
+## When to run your own
+
+Run your own sharing service when your team does not want to depend on a third party for any of this:
+
+- who can see your IP addresses and when your sessions happen;
+- the code of the web viewer, if people watch in a browser;
+- whether the service is up.
+
+On your own service, all of that is in your team's hands, and the setup is one server with Docker Compose or a few Kubernetes manifests. See [How the sharing service works](/specdeck/self-host/overview/).
+
+## The pages in this section
+
+- [Your data](/specdeck/security/data/): where session content lives, how it travels, and what viewers can see.
+- [The sharing service](/specdeck/security/sharing-service/): invite codes, what the service and the relay see and keep, and their limits.
+- [Claude's browser](/specdeck/security/claude-browser/): how the browser SpecDeck gives Claude Code is kept apart from the app and your own browsers.
+- [On your computer](/specdeck/security/your-computer/): what SpecDeck keeps on your computer, what it sends, and how releases are signed.
+- [Known limits](/specdeck/security/known-limits/): what is not as strong as it could be, and what you can do.
+
+## Report a vulnerability
+
+Please do not open a public issue. Report it privately, as described in [SECURITY.md](https://github.com/nickhartjes/specdeck/blob/main/SECURITY.md).

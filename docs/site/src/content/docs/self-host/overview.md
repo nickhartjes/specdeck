@@ -22,12 +22,15 @@ SpecDeck sends a session straight from the host to each viewer. The **sharing se
 
 ## What the service can see
 
-Sessions are end-to-end encrypted between host and viewers, and every frame is signed by the host. Neither the server nor the relay can read or change a session. The server never sees invite codes either: apps send it a room id derived from the code, and sign the connection setup with a key that never leaves the apps, so the service cannot put itself in between.
+Sessions are end-to-end encrypted between host and viewers, so neither the server nor the relay can read them. Apps send the server a room id made from the invite code, not the code itself. Whoever runs the service could still try to guess a code from its room id offline, which is why it matters who runs it; see [The sharing service](/specdeck/security/sharing-service/) in *Security and privacy*.
 
 They do see:
 
 - the network addresses of hosts and viewers;
+- the messages that set up each connection, which list the addresses each app can be reached at, including local network addresses from the app;
 - that a session exists, and how many people join it.
+
+The relay also logs each connection it relays, with both ends' addresses.
 
 That is why SpecDeck asks before it joins through a service other than your own (see [Through another sharing service](/specdeck/guide/join/#through-another-sharing-service)).
 
