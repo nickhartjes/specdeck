@@ -4,7 +4,8 @@ import type { ShareStep } from '../model/sharedFiles';
 import type { AskItem, LinkItem, TimelineModel, ToolItem, Turn } from '../model/timeline';
 import { SHOWN_IN_PART, toolSummary } from '../model/timeline';
 import { liveLine, named, screenshotOf, summarize, typedTextHidden, type Step, type SummaryEntry } from '../model/steps';
-import type { Steps } from '../api/types';
+import type { Steps, TimelineEvent } from '../api/types';
+import { eventsBefore, missedTurns, outcomeOf, soFar, turnFacts, type SoFar } from '../model/catchUp';
 import { DiffView } from './DiffView';
 import { formatTokens } from '../model/statusbar';
 import { Markdown } from './Markdown';
@@ -12,6 +13,8 @@ import { asksTheHost, interactionBody, PermissionBadge } from './HostInteraction
 import { ScreenshotThumbnail } from './Screenshot';
 import { LinkCard } from './LinkCard';
 import { AskCard } from './AskCard';
+import { CatchUpCard } from './CatchUpCard';
+import { PromptPicker } from './PromptPicker';
 
 interface Props {
   model: TimelineModel;
@@ -46,6 +49,21 @@ interface Props {
   linksBar?: ReactNode;
   /** The host's: removes a shared link. */
   onRemoveLink?: (linkId: number) => void;
+  /** A viewer's: when they joined, which folds the prompts they missed (`catch-up`). */
+  joinedAt?: number | null;
+  /** The events the model was built from, for the overview of what happened before joining. */
+  events?: TimelineEvent[];
+  /** Opens a document the agent wrote. */
+  onOpenDocument?: (path: string) => void;
+}
+
+/** What happened before the viewer joined, worked out once the events before the join are in. */
+interface Before {
+  count: number;
+  joinedAt: number;
+  soFar: SoFar;
+  /** The outcome line of each prompt before the join, by prompt id. */
+  outcomes: Map<string, string | null>;
 }
 
 /** What selecting a step does: its first changed file in a tab, else the terminal at its line. */
@@ -54,7 +72,7 @@ type OpenScreenshot = (item: ToolItem, keep: boolean) => void;
 
 const TIME = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 
-export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump, onStep, onOpenChange, onOpenScreenshot, shares = [], sharedNow, onOpenShared, linksBar, onRemoveLink }: Props) {
+export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump, onStep, onOpenChange, onOpenScreenshot, shares = [], sharedNow, onOpenShared, linksBar, onRemoveLink, joinedAt = null, events, onOpenDocument }: Props) {
   const select = useCallback<Select>(
     (item) => {
       const change = item.changes[0];
@@ -82,6 +100,22 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
   }, [model]);
   const list = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+
+  // Prompts the viewer missed fold until opened; search opens the one it lands on.
+  const missed = useMemo(() => missedTurns(model.turns, joinedAt), [model, joinedAt]);
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
+  const unfold = useCallback((promptId: string) => setUnfolded((open) => new Set(open).add(promptId)), []);
+  if (current && missed.has(current) && !unfolded.has(current)) setUnfolded(new Set(unfolded).add(current));
+  const [closed, setClosed] = useState(false);
+  // Worked out again only while events from before the join arrive; later events leave it alone.
+  const [before, setBefore] = useState<Before | null>(null);
+  const count = joinedAt !== null && events ? eventsBefore(events, joinedAt) : 0;
+  if (joinedAt !== null && events && missed.size > 0 && (before?.count !== count || before.joinedAt !== joinedAt)) {
+    const earlier = events.slice(0, count);
+    const facts = turnFacts(earlier);
+    const outcomes = new Map(model.turns.filter((turn) => facts.has(turn.promptId)).map((turn) => [turn.promptId, outcomeOf(turn, facts.get(turn.promptId))]));
+    setBefore({ count, joinedAt, soFar: soFar(earlier, joinedAt), outcomes });
+  }
 
   // Follow new entries while the reader is at the end of the list.
   useEffect(() => {
@@ -148,24 +182,34 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
     document.getElementById(`turn-${promptId}`)?.scrollIntoView({ block: 'start' });
     onJump(turn.outputSeq);
   };
+  // The terminal to the latest prompt, the timeline to its end, which then follows new entries again.
+  const toLatest = () => {
+    const last = model.turns.at(-1);
+    if (last) onJump(last.outputSeq);
+    const element = list.current?.parentElement;
+    atBottom.current = true;
+    element?.scrollTo({ top: element.scrollHeight });
+  };
 
   return (
     <div ref={list}>
+      {before && missed.size > 0 && !closed && (
+        <CatchUpCard
+          soFar={before.soFar}
+          turns={model.turns}
+          sharedNow={sharedNow}
+          links={model.links}
+          onJump={jumpTo}
+          onLatest={toLatest}
+          onClose={() => setClosed(true)}
+          onReadPlan={onReadPlan}
+          onOpenDocument={onOpenDocument}
+          onOpenShared={onOpenShared}
+        />
+      )}
       {model.turns.length > 1 && (
         <div className="prompt-list">
-          <label htmlFor="jump-prompt" className="field-hint">
-            Jump to
-          </label>
-          <select id="jump-prompt" value="" onChange={(event) => jumpTo(event.target.value)}>
-            <option value="" disabled>
-              Prompt…
-            </option>
-            {model.turns.map((turn, i) => (
-              <option key={turn.promptId} value={turn.promptId}>
-                {i + 1}. {turn.prompt.slice(0, 60) || 'Earlier prompt'}
-              </option>
-            ))}
-          </select>
+          <PromptPicker id="jump-prompt" label="Jump to" turns={model.turns} onPick={jumpTo} />
         </div>
       )}
       {linksBar}
@@ -200,6 +244,10 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
             <TurnView
               key={turn.promptId}
               turn={turn}
+              folded={missed.has(turn.promptId) && !unfolded.has(turn.promptId)}
+              outcome={before?.outcomes.get(turn.promptId) ?? null}
+              hidden={steps === 'summary' ? summaries[i]!.filter((entry) => entry.kind === 'step').length : turn.items.filter((item) => item.kind === 'tool').length}
+              onUnfold={unfold}
               summary={steps === 'summary' ? summaries[i]! : null}
               revision={revisions[i]!}
               latest={turn === lastTurn}
@@ -324,6 +372,12 @@ function StepView({ step, onSelect, onReadPlan, onOpenScreenshot }: { step: Step
 
 interface TurnProps {
   turn: Turn;
+  /** Missed by a late joiner: only the prompt, its outcome and a way to unfold it. */
+  folded: boolean;
+  outcome: string | null;
+  /** How many steps unfolding shows. */
+  hidden: number;
+  onUnfold: (promptId: string) => void;
   summary: SummaryEntry[] | null;
   /** Changes whenever what the turn shows changes; see `revisions`. */
   revision: number;
@@ -349,21 +403,41 @@ const TurnView = memo(
     (Object.keys(next) as (keyof TurnProps)[]).every((key) => key === 'turn' || key === 'summary' || prev[key] === next[key]),
 );
 
-function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, onJump, onSelect, onOpenScreenshot, onRemoveLink }: TurnProps) {
+function TurnBody({ turn, folded, outcome, hidden, onUnfold, summary, latest, onReadPlan, number, match, current, onJump, onSelect, onOpenScreenshot, onRemoveLink }: TurnProps) {
+  const prompt = (
+    <button className="prompt" onClick={() => onJump(turn.outputSeq)} title="Show in the terminal">
+      <span className="meta">
+        <span>Prompt {number}</span>
+        <span>
+          {turn.tokens ? <span title={`${turn.tokens.toLocaleString()} tokens used for this prompt`}>{formatTokens(turn.tokens)} tokens · </span> : null}
+          {turn.at ? TIME.format(turn.at) : ''}
+        </span>
+      </span>
+      <span className="text selectable">{turn.prompt || 'Earlier prompt'}</span>
+    </button>
+  );
+  if (folded) {
+    return (
+      <article id={`turn-${turn.promptId}`} className={`turn folded${match ? ' match' : ''}`} aria-label={`Prompt ${number}`}>
+        {prompt}
+        {outcome && (
+          <p className="outcome">
+            <Check aria-hidden /> {outcome}
+          </p>
+        )}
+        {hidden > 0 && (
+          <button className="link unfold" onClick={() => onUnfold(turn.promptId)}>
+            Show the {hidden === 1 ? 'step' : `${hidden} steps`}
+          </button>
+        )}
+      </article>
+    );
+  }
   const texts = turn.items.filter((item) => item.kind === 'text');
   const showResponse = turn.response && !texts.some((item) => item.text.trim() === turn.response?.trim());
   return (
     <article id={`turn-${turn.promptId}`} className={`turn${match ? ' match' : ''}${current ? ' current' : ''}`} aria-label={`Prompt ${number}`}>
-      <button className="prompt" onClick={() => onJump(turn.outputSeq)} title="Show in the terminal">
-        <span className="meta">
-          <span>Prompt {number}</span>
-          <span>
-            {turn.tokens ? <span title={`${turn.tokens.toLocaleString()} tokens used for this prompt`}>{formatTokens(turn.tokens)} tokens · </span> : null}
-            {turn.at ? TIME.format(turn.at) : ''}
-          </span>
-        </span>
-        <span className="text selectable">{turn.prompt || 'Earlier prompt'}</span>
-      </button>
+      {prompt}
       {(summary ?? turn.items).map((item) =>
         item.kind === 'step' ? (
           <StepView key={item.id} step={item} onSelect={onSelect} onReadPlan={onReadPlan} onOpenScreenshot={onOpenScreenshot} />

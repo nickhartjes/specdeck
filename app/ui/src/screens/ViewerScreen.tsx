@@ -238,6 +238,8 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   const shown = layout ?? choose('developer');
   const workspace = useRef<WorkspaceHandle>(null);
   const [state, dispatch] = useReducer(viewerReducer, initial);
+  // When this screen first joined; reconnecting is not joining again (`catch-up`).
+  const [joinedAt, setJoinedAt] = useState<number | null>(null);
   useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
 
   // What the viewer is notified about; the switches are read again on every status change, so
@@ -276,6 +278,7 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
         .catch(() => {});
     }
     if (event.type === 'joined') {
+      setJoinedAt((at) => at ?? Date.now());
       notices.joined(AGENT_NAMES[event.agent]);
       askNotices.joined();
     } else if (event.type === 'status') {
@@ -441,6 +444,7 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
           onLayout={setLayout}
           timelineSupported={state.timelineSupported}
           timeline={state.timeline}
+          joinedAt={joinedAt}
           wholeFiles={state.wholeFiles}
           shared={shared}
           sharedProgress={state.fileProgress}

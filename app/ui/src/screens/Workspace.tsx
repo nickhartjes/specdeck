@@ -103,6 +103,8 @@ interface Props {
   onRemoveLink?: (linkId: number) => void;
   /** The request row above the panes: an open read request and vote; nothing takes no space. */
   requests?: ReactNode;
+  /** A viewer's: when they joined, which folds the prompts they missed (`catch-up`). */
+  joinedAt?: number | null;
 }
 
 type Pane = "files" | "session" | "timeline";
@@ -836,6 +838,9 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                 onOpenShared={(file, name) => openShared(file, name)}
                 linksBar={props.linksBar}
                 onRemoveLink={props.onRemoveLink}
+                joinedAt={props.joinedAt}
+                events={props.timeline}
+                onOpenDocument={openDocument}
               />
             </div>
           </aside>

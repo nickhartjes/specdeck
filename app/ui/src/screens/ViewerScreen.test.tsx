@@ -369,6 +369,51 @@ describe('sending a link as a viewer', () => {
   });
 });
 
+describe('joining late', () => {
+  const HOUR = 3_600_000;
+  /** Three answered prompts, an hour apart, starting at `start`. */
+  const history = (start: number): ViewEvent[] =>
+    [0, 1, 2].flatMap((n): ViewEvent[] => [
+      { type: 'timeline', event: { outputSeq: n * 2, at: start + n * HOUR, kind: 'prompt', promptId: `p${n}`, text: `Prompt ${n}` } },
+      { type: 'timeline', event: { outputSeq: n * 2 + 1, at: start + n * HOUR + 60_000, kind: 'response', promptId: `p${n}`, text: `Done with ${n}.` } },
+    ]);
+
+  it('folds the prompts that finished before joining and shows what happened so far', () => {
+    setup();
+    join();
+    act(() => history(Date.now() - 3 * HOUR).forEach(emit));
+    expect(screen.getByRole('region', { name: 'So far' })).toHaveTextContent('So far: 3 prompts.');
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).toHaveClass('folded');
+    expect(screen.getByRole('article', { name: 'Prompt 3' })).not.toHaveClass('folded');
+  });
+
+  it('shows the demo as a late join', async () => {
+    renderWith(fakeBridge('viewer'), <ViewerScreen code="7K2M9QXH4TPA" layout={choose('developer')} onLayout={vi.fn()} onLeave={vi.fn()} />);
+    expect(await screen.findByRole('region', { name: 'So far' })).toHaveTextContent('So far: 2 prompts.');
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).toHaveClass('folded');
+    expect(screen.getByRole('article', { name: 'Prompt 2' })).not.toHaveClass('folded');
+  });
+
+  it('does not count reconnecting as joining', () => {
+    const now = vi.spyOn(Date, 'now');
+    const start = 1_800_000_000_000;
+    now.mockReturnValue(start);
+    setup();
+    join();
+    // Watched from the start; later the connection drops and comes back.
+    now.mockReturnValue(start + 4 * HOUR);
+    act(() => {
+      history(start + 1000).forEach(emit);
+      emit({ type: 'reconnecting' });
+      emit({ type: 'reconnected' });
+      emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+    });
+    expect(screen.queryByRole('region', { name: 'So far' })).not.toBeInTheDocument();
+    expect(document.querySelectorAll('.turn.folded')).toHaveLength(0);
+    now.mockRestore();
+  });
+});
+
 describe('the host’s asks for a viewer', () => {
   const read = (mine: 'reading' | 'ready' | { question: { text: string | null } } = 'reading') => ({
     id: 1,

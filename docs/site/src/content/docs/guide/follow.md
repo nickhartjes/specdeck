@@ -98,6 +98,16 @@ In the web viewer, notifications are off until you turn them on: open the layout
 
 What you scroll, search or open only changes your own view.
 
+## Joining late
+
+If you join after prompts have finished, the timeline starts with a card about what happened before you came in: how long the session has run, how many prompts it had, the plans with their tasks done, the documents the agent wrote, the files and links people shared, and how many code files changed. Select a plan, document, file or link to open it. The card does not change after you join, and **×** closes it for the rest of the session.
+
+The prompts that finished before you joined are folded to the prompt and its outcome, such as *4 files changed · 3 of 6 tasks done*, or the first sentence of the agent's reply. Select **Show the N steps** to unfold one. A search that finds something in a folded prompt unfolds it. The prompt that was running or latest when you joined stays open, as does everything after it.
+
+To get around, use **Jump to a prompt** in the card, or **Go to the latest prompt** to go to the end of the timeline and follow it again. Jumping to a folded prompt leaves it folded.
+
+Losing the connection and coming back does not count as joining again. In the web viewer, reloading the page does. The host never sees prompts folded.
+
 ## Share a file
 
 When the host lets viewers share files, **Files › Shared** has **Share files**: choose files, or drop them there. Images (PNG, JPEG, GIF, WebP), Markdown and text files up to 10 MB can be shared, up to 20 MB of your files in a session. Everyone in the session sees them, with your name. You can remove your own files.

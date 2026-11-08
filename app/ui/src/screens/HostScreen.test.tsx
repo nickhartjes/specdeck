@@ -352,6 +352,22 @@ describe('shared links on the host screen', () => {
     act(() => emit({ ...snapshot(), agent: 'terminal', timelineSupported: false, suggestionsPossible: false, wholeFilesPossible: false }));
     expect(screen.getByRole('button', { name: 'Share a link' })).toBeInTheDocument();
   });
+
+  it('never folds prompts for the host', async () => {
+    await setup();
+    const old = Date.now() - 3 * 3_600_000;
+    act(() =>
+      emit({
+        ...snapshot(),
+        timeline: [0, 1, 2].flatMap((n) => [
+          { outputSeq: n * 2, at: old + n * 600_000, kind: 'prompt' as const, promptId: `p${n}`, text: `Prompt ${n}` },
+          { outputSeq: n * 2 + 1, at: old + n * 600_000 + 60_000, kind: 'response' as const, promptId: `p${n}`, text: `Done with ${n}.` },
+        ]),
+      }),
+    );
+    expect(await screen.findByRole('article', { name: 'Prompt 1' })).not.toHaveClass('folded');
+    expect(screen.queryByRole('region', { name: 'So far' })).not.toBeInTheDocument();
+  });
 });
 
 describe('asks on the host screen', () => {
