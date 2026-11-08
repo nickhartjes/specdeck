@@ -1,0 +1,29 @@
+/* The viewer's bell (`notification-bell`): the count on the toolbar button, the list of what
+   happened and the switches below it. Kept apart from styles.css, as links.css is. */
+
+.bell-menu { position: relative; }
+.bell { position: relative; }
+.bell-count {
+  position: absolute; top: -3px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: var(--accent); color: var(--on-accent);
+  font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; pointer-events: none;
+}
+.bell-panel { width: 340px; }
+.bell-list { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow: auto; display: grid; }
+.bell-list li { border-bottom: 1px solid var(--border); }
+.bell-list li:last-child { border-bottom: 0; }
+.bell-entry {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%; padding: 7px 4px;
+  border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; text-align: left;
+}
+button.bell-entry { cursor: pointer; }
+button.bell-entry:hover { background: var(--hover); }
+.bell-title { font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.bell-body { grid-column: 1; font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.bell-time { grid-column: 2; grid-row: 1; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.bell-list li.new .bell-title::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; vertical-align: 1px;
+  border-radius: 50%; background: var(--accent);
+}
+.menu-panel p.bell-empty { padding-top: 0; border-top: 0; }
+.bell-panel .field-hint { font-size: 12px; }

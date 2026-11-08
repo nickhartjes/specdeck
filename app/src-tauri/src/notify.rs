@@ -30,6 +30,10 @@ pub enum NoticeOpen {
     PlanMode {
         tool_use_id: String,
     },
+    /// A shared file or braindump item, by its id (`notification-bell`).
+    Shared {
+        file: u64,
+    },
 }
 
 impl NoticeOpen {
@@ -40,6 +44,7 @@ impl NoticeOpen {
             Self::PlanMode { tool_use_id } => {
                 !tool_use_id.is_empty() && tool_use_id.len() <= OPEN_ID_BYTES
             }
+            Self::Shared { .. } => true,
         };
         fits.then_some(self)
     }
@@ -158,6 +163,8 @@ mod tests {
             read(r#"{"kind":"plan-mode","toolUseId":"toolu_1"}"#).unwrap(),
             NoticeOpen::PlanMode { tool_use_id: "toolu_1".into() }
         );
+        assert_eq!(read(r#"{"kind":"shared","file":7}"#).unwrap(), NoticeOpen::Shared { file: 7 });
+        assert!(read(r#"{"kind":"shared","file":-1}"#).is_err());
         assert!(read(r#"{"kind":"terminal","path":"x"}"#).is_err());
         assert_eq!(
             serde_json::to_value(NoticeOpen::PlanMode { tool_use_id: "toolu_1".into() }).unwrap(),

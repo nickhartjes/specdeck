@@ -12,7 +12,7 @@ Open **Settings** with **SpecDeck › Settings…** or **⌘,** on macOS, or **F
 | Your name | The name others see in sessions you start or join from now on |
 | Appearance | **System** follows your computer's light or dark appearance; **Light** and **Dark** keep SpecDeck that way. Also under **View › Appearance**. See [The window](#the-window) |
 | Show notifications | Turns all of SpecDeck's notifications on or off |
-| While you watch a session | Which [notifications](#notifications) you get about a session you watch: a plan is ready for review, a document changed, the agent finished, the host asks you to read, the host asks for an estimate |
+| While you watch a session | Which [notifications](#notifications) you get about a session you watch: a plan is ready for review, a document changed, the agent finished, the host asks you to read, the host asks for an estimate, someone shares a file, the host shares a link, someone adds to the braindump. The bell in a session's toolbar has the same switches |
 | Screen reader support | Lets screen readers (VoiceOver, Narrator, Orca) read the terminal. Off unless you turn it on: while it is on, typing in the terminal of a session you host can repeat text |
 | Give Claude a browser | Claude Code sessions you start from now on get [a browser of their own](/specdeck/guide/browser/). On by default; only on macOS |
 | Show screenshots in the timeline | Pictures that Claude's browser and other MCP tools return, such as [screenshots](/specdeck/guide/browser/#screenshots-in-the-timeline), show in the timeline, for viewers too. Applies to sessions you start from now on. On by default |
@@ -35,13 +35,13 @@ While SpecDeck is not the window in front, or its window is closed, it tells you
 | Host | Someone joins or leaves |
 | Host | Claude Code finishes a prompt, or asks your permission |
 | Viewer | The host ends the session, or removes you |
-| Viewer | A plan is ready for review, a document changed, the agent finished, or the host asks you to read or to estimate, as you chose under **While you watch a session** |
+| Viewer | A plan is ready for review, a document changed, the agent finished, the host asks you to read or to estimate, or something is shared, as you chose under **While you watch a session** |
 
 Click a notification to bring the session to the front. Nothing is shown while you are looking at SpecDeck. To turn notifications off, use **Show notifications** in Settings.
 
 ### While you watch a session
 
-Choose what calls you back to a session you watch:
+Choose what calls you back to a session you watch, here or under the [bell](/specdeck/guide/follow/#the-bell) in the session's toolbar: they are the same switches, and a change in one shows in the other.
 
 | Switch | You hear when | On at first |
 |---|---|---|
@@ -50,10 +50,13 @@ Choose what calls you back to a session you watch:
 | The agent finished | The agent finished a prompt and waits for the host's next one | No |
 | The host asks you to read | The host [asks everyone to read](/specdeck/guide/read-and-estimate/) something | Yes |
 | The host asks for an estimate | The host starts a vote, or a new round of one | Yes |
+| Someone shares a file | The host or another viewer [shares a file](/specdeck/guide/follow/#share-a-file-or-add-to-the-braindump) | No |
+| The host shares a link | The host [shares a link](/specdeck/guide/follow/#links); the notification names its title, never its full address | No |
+| Someone adds to the braindump | The host or another viewer adds a file or a note to the braindump; a note's text is never shown | No |
 
 You get at most one notification each time the agent finishes a prompt, naming everything in it: *Plan add-login is ready for review*, with *README.md changed too* below it. Claude's plan in plan mode is the exception: you hear about it at once, since Claude stops for it. Ticking off tasks while the agent works through a plan does not notify you. What happened before you joined, and a prompt the agent was already working on when you joined, never notifies you.
 
-The host's read requests and votes notify you on their own, outside that one per prompt. A request or vote that was already open when you joined, or that comes back after you reconnect, doesn't notify you.
+The host's read requests and votes, and what others share, notify you on their own, outside that one per prompt. What you shared yourself never notifies you. A request or vote that was already open when you joined, or that comes back after you reconnect, doesn't notify you.
 
 Clicking one of these opens what its title names, in the preview tab:
 
@@ -64,6 +67,8 @@ Clicking one of these opens what its title names, in the preview tab:
 | *Claude Code has a plan for you to review* | Claude Code's plan, in a tab of its own, which shows whether the host approved it |
 | *Claude Code finished* | Nothing; the session comes to the front |
 | *Henk asks you to read*, *Henk asks for an estimate* | Nothing; the session comes to the front, where the request waits |
+| *Henk shared wireframe.png*, *Mo added a note to the braindump* | That file or note, while it is still shared |
+| *Henk shared a link* | Nothing; the session comes to the front, with the link in the timeline |
 
 It also works for an older notification, and after the host ended the session: you see the latest version you received, even of a document deleted since. Once you left the session, a click opens nothing.
 
@@ -72,7 +77,9 @@ A click only reaches SpecDeck when your system reports it:
 - On Windows, click the notification while it is on screen. Once it moved to the notification center, clicking it opens nothing.
 - On Linux, it depends on your notification server. GNOME and KDE report clicks; some lightweight servers don't, and then clicking opens nothing.
 
-In a browser, turn notifications on under the layout button instead. See [Notifications in the browser](/specdeck/guide/follow/#notifications-in-the-browser).
+Whatever your system does with a click, every notification is also in the [bell's list](/specdeck/guide/follow/#the-bell), and selecting it there opens the same thing.
+
+In a browser, turn notifications on under the bell instead. See [Notifications in the browser](/specdeck/guide/follow/#notifications-in-the-browser).
 
 ## The window
 

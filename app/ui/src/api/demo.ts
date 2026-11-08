@@ -36,7 +36,7 @@ export const demoProfile: Profile = {
   ],
   lastAgent: 'claude-code',
   notifications: true,
-  viewerNotifications: { plans: true, documents: true, finished: false, reads: true, estimates: true },
+  viewerNotifications: { plans: true, documents: true, finished: false, reads: true, estimates: true, files: false, links: false, braindump: false },
   view: null,
   layout: null,
   translucent: false,

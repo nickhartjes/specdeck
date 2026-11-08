@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { demoProfile } from '../api/demo';
 import { fakeBridge, renderWith } from '../test/helpers';
+import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 import { SettingsScreen } from './SettingsScreen';
 
 describe('settings window', () => {
@@ -46,10 +47,14 @@ describe('settings window', () => {
     const finished = within(group).getByRole('checkbox', { name: 'The agent finished' });
     const reads = within(group).getByRole('checkbox', { name: 'The host asks you to read' });
     const estimates = within(group).getByRole('checkbox', { name: 'The host asks for an estimate' });
-    expect([plans, documents, finished, reads, estimates].map((box) => (box as HTMLInputElement).checked)).toEqual([true, true, false, true, true]);
-    expect(within(group).getAllByRole('checkbox')).toHaveLength(5);
+    const files = within(group).getByRole('checkbox', { name: 'Someone shares a file' });
+    const links = within(group).getByRole('checkbox', { name: 'The host shares a link' });
+    const braindump = within(group).getByRole('checkbox', { name: 'Someone adds to the braindump' });
+    const boxes = [plans, documents, finished, reads, estimates, files, links, braindump];
+    expect(boxes.map((box) => (box as HTMLInputElement).checked)).toEqual([true, true, false, true, true, false, false, false]);
+    expect(within(group).getAllByRole('checkbox')).toHaveLength(8);
     await userEvent.click(finished);
-    expect(bridge.setViewerNotifications).toHaveBeenCalledWith({ plans: true, documents: true, finished: true, reads: true, estimates: true });
+    expect(bridge.setViewerNotifications).toHaveBeenCalledWith({ ...DEFAULT_VIEWER_NOTIFICATIONS, finished: true });
     await waitFor(() => expect(finished).toBeChecked());
   });
 

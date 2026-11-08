@@ -74,12 +74,12 @@ export interface RunningSession {
 }
 
 /** A kind of notification a viewer can switch on or off; `reads` and `estimates` are the host's asks. */
-export type ViewerNotificationKind = 'plans' | 'documents' | 'finished' | 'reads' | 'estimates';
+export type ViewerNotificationKind = 'plans' | 'documents' | 'finished' | 'reads' | 'estimates' | 'files' | 'links' | 'braindump';
 
 export type ViewerNotifications = Record<ViewerNotificationKind, boolean>;
 
-/** What a click on a viewer's notification opens: a document, or a plan the agent presented in plan mode. */
-export type NoticeOpen = { kind: 'document'; path: string } | { kind: 'plan-mode'; toolUseId: string };
+/** What a click on a viewer's notification opens: a document, a plan the agent presented in plan mode, or a shared file or braindump item. */
+export type NoticeOpen = { kind: 'document'; path: string } | { kind: 'plan-mode'; toolUseId: string } | { kind: 'shared'; file: number };
 
 export interface Profile {
   username: string | null;

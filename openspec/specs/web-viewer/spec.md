@@ -150,10 +150,10 @@ The web viewer SHALL show link cards and let a viewer send a link to the host as
 - **THEN** the host sees it waiting as from any other viewer, and the browser viewer sees what became of it
 
 ### Requirement: Notifications in the browser
-The web viewer SHALL offer the same kinds of viewer notification as the app, under the same rules (see `viewer-notifications`), as the browser's notifications. They SHALL be off until the viewer turns them on in the layout menu, which SHALL ask the browser's permission at that moment. They SHALL be shown only while the page is hidden or the browser window is not focused. Clicking one SHALL bring the page to the front and open what it is about, as in the app.
+The web viewer SHALL offer the same kinds of viewer notification as the app, under the same rules (see `viewer-notifications`), as the browser's notifications. They SHALL be off until the viewer turns them on in the bell, which SHALL ask the browser's permission at that moment. They SHALL be shown only while the page is hidden or the browser window is not focused. Clicking one SHALL bring the page to the front and open what it is about, as in the app.
 
 #### Scenario: Turn them on
-- **WHEN** a browser viewer turns on notifications in the layout menu
+- **WHEN** a browser viewer turns on notifications in the bell
 - **THEN** the browser asks for permission, and once it is given, plans and documents are on and the agent finished is off
 
 #### Scenario: Off by default
@@ -170,7 +170,7 @@ The web viewer SHALL offer the same kinds of viewer notification as the app, und
 
 #### Scenario: Permission denied
 - **WHEN** the browser refuses permission, or cannot show notifications
-- **THEN** the layout menu says that this browser does not allow notifications, and the switches stay off
+- **THEN** the bell says that this browser does not allow notifications, and the switches stay off
 
 #### Scenario: Page closed
 - **WHEN** a browser viewer closed the page, and then clicks a notification it showed
@@ -219,6 +219,36 @@ A viewer in the web viewer SHALL see, open and save braindump items as a viewer 
 #### Scenario: Given items in the browser
 - **WHEN** the host gives the braindump while a viewer watches in the browser
 - **THEN** the viewer sees the items marked *Given to Claude*, as in the app
+
+### Requirement: Replaying the history in the browser
+A browser viewer SHALL apply timeline events that arrive together as one batch, in arrival order, as the app's viewer does, so that joining a long session in a browser does not render once per event.
+
+#### Scenario: Late join of a long session in a browser
+- **WHEN** a viewer joins in a browser a session with 400 finished prompts, and its events arrive one per message
+- **THEN** they see the whole history in order, as in the app, after far fewer renders than messages
+
+#### Scenario: Background tab
+- **WHEN** events arrive while the browser tab is in the background
+- **THEN** the timeline has caught up when the viewer returns to the tab
+
+### Requirement: The bell in the browser
+The web viewer SHALL have the same bell and list as the app. Since it has no Settings, the bell SHALL hold the main switch for the browser's notifications above the kinds, and the layout menu SHALL NOT offer notifications. The list SHALL be kept until the page is closed or reloaded.
+
+#### Scenario: List without notifications
+- **WHEN** a browser viewer never turned notifications on, and Claude proposes `add-login`
+- **THEN** the bell shows 1, and its list has the entry that the plan `add-login` is ready for review
+
+#### Scenario: Switches in the bell
+- **WHEN** a browser viewer opens the bell
+- **THEN** it shows the main switch for this browser's notifications and, once it is on, the kinds
+
+#### Scenario: Layout menu
+- **WHEN** a browser viewer opens the layout menu
+- **THEN** it has no notification switches
+
+#### Scenario: Reload
+- **WHEN** a browser viewer reloads the page
+- **THEN** the list is empty
 
 ### Requirement: Kept and sent suggestions in the browser
 The web viewer SHALL show a viewer's suggestion as kept for later when the host keeps it, and SHALL show prompts sent from a suggestion as suggested by their author, as the app does.
