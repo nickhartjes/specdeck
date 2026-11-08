@@ -42,6 +42,8 @@ specdeck-diag.workspace = true
 specdeck-local.workspace = true
 specdeck-session.workspace = true
 tracing = "0.1"
+# Shared files' bytes to and from the window, and the screenshots of Claude's browser.
+base64 = "0.23"
 
 [target.'cfg(unix)'.dependencies]
 # Starts session processes detached from the app.
@@ -50,7 +52,6 @@ libc = "0.2"
 # Claude's browser (`claude-browser` design decision 5): WebKit's own calls for JavaScript with a
 # result and snapshots, and AppKit for the JPEG. All already in the tree through Tauri.
 [target.'cfg(target_os = "macos")'.dependencies]
-base64 = "0.23"
 block2 = "0.6"
 getrandom = "0.4"
 objc2 = "0.6"
