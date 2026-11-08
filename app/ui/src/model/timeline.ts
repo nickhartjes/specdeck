@@ -83,6 +83,8 @@ export interface Turn {
   items: (TextItem | ToolItem | NoticeItem | LinkItem)[];
   /** The final response, once the turn is over. */
   response: string | null;
+  /** When the final response came, in milliseconds since the epoch. */
+  respondedAt: number | null;
   /** Tokens the agent used for this prompt so far, once usage is known. */
   tokens: number | null;
   /** Counts the events that changed this turn, so the panel renders only turns that changed. */
@@ -133,7 +135,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
     let turn = byPrompt.get(promptId);
     if (!turn) {
       // Events for a prompt that came before this viewer's history; show them under a blank prompt.
-      turn = { promptId, prompt: '', at, outputSeq, items: [], response: null, tokens: null, revision: 0 };
+      turn = { promptId, prompt: '', at, outputSeq, items: [], response: null, respondedAt: null, tokens: null, revision: 0 };
       startTotals.set(turn, sessionTotal);
       byPrompt.set(promptId, turn);
       turns.push(turn);
@@ -173,9 +175,12 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
         }
         break;
       }
-      case 'response':
-        turnFor(event.promptId, event.at, event.outputSeq).response = withNote(event.text, event.truncated);
+      case 'response': {
+        const turn = turnFor(event.promptId, event.at, event.outputSeq);
+        turn.response = withNote(event.text, event.truncated);
+        turn.respondedAt = event.at;
         break;
+      }
       case 'tool-call': {
         const item: ToolItem = {
           kind: 'tool',

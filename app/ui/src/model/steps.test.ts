@@ -14,7 +14,7 @@ function change(path: string, kind: FileChange['change'] = 'edited'): FileChange
 }
 
 function turn(items: Turn['items']): Turn {
-  return { promptId: 'p', prompt: 'do it', at: 0, outputSeq: 0, items, response: null, tokens: null, revision: 0 };
+  return { promptId: 'p', prompt: 'do it', at: 0, outputSeq: 0, items, response: null, respondedAt: null, tokens: null, revision: 0 };
 }
 
 const steps = (items: Turn['items'], seenChanges = new Set<string>()) =>

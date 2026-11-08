@@ -36,6 +36,12 @@ describe('timeline model', () => {
     expect(turn.response).toBe('I wrote notes.txt and changed it.');
   });
 
+  it('keeps when the reply came', () => {
+    const turn = buildTimeline(editSession).turns[0]!;
+    expect(turn.respondedAt).toBe(editSession.at(-1)!.at);
+    expect(buildTimeline(editSession.slice(0, -1)).turns[0]!.respondedAt).toBeNull();
+  });
+
   it('pairs tool calls with their results', () => {
     const tools = buildTimeline(editSession).turns[0]!.items.filter((item) => item.kind === 'tool');
     expect(tools.map((tool) => tool.status)).toEqual(['succeeded', 'succeeded', 'not-run', 'succeeded']);

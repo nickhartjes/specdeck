@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BridgeContext } from '../api/bridge';
@@ -15,6 +15,19 @@ vi.mock('./Markdown', async (importOriginal) => {
     Markdown: (props: { text: string }) => {
       rendered.set(props.text, (rendered.get(props.text) ?? 0) + 1);
       return actual.Markdown(props);
+    },
+  };
+});
+
+// Counts how often the overview of what happened before joining is worked out.
+const overviews = vi.hoisted(() => ({ count: 0 }));
+vi.mock('../model/catchUp', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../model/catchUp')>();
+  return {
+    ...actual,
+    soFar: (...args: Parameters<typeof actual.soFar>) => {
+      overviews.count++;
+      return actual.soFar(...args);
     },
   };
 });
@@ -252,5 +265,119 @@ describe('shared links', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Remove…' }));
     await userEvent.click(screen.getByRole('button', { name: 'Remove link' }));
     expect(onRemoveLink).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('joining late', () => {
+  const HOUR = 3_600_000;
+  const joinedAt = 1_700_000_000_000 + HOUR;
+
+  function late(events: TimelineEvent[], extra: Partial<Parameters<typeof TimelinePanel>[0]> = {}) {
+    const props = { timelineSupported: true, agentName: 'Claude Code', matches: new Set<string>(), current: null, onJump: () => {}, joinedAt, ...extra };
+    const view = (next: TimelineEvent[], more: Partial<Parameters<typeof TimelinePanel>[0]> = {}) => (
+      <BridgeContext.Provider value={fakeBridge('viewer')}>
+        <TimelinePanel model={buildTimeline(next)} events={next} {...props} {...more} />
+      </BridgeContext.Provider>
+    );
+    const result = render(view(events));
+    return { ...result, update: (next: TimelineEvent[], more: Partial<Parameters<typeof TimelinePanel>[0]> = {}) => result.rerender(view(next, more)) };
+  }
+
+  /** Turn `n` an hour after the others, so after the join. */
+  const afterJoin = (n: number) => turn(n).map((event) => ({ ...event, at: event.at + HOUR + 60_000 }));
+
+  it('folds the prompts the viewer missed to their outcome, not the latest', () => {
+    late(session(3));
+    const first = screen.getByRole('article', { name: 'Prompt 1' });
+    expect(first).toHaveClass('folded');
+    expect(within(first).getByText('6 files changed')).toBeInTheDocument();
+    expect(within(first).getByRole('button', { name: 'Show the 6 steps' })).toBeInTheDocument();
+    expect(within(first).queryByTitle('src/turn0/file0.ts')).not.toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Prompt 3' })).not.toHaveClass('folded');
+  });
+
+  it('counts the steps in the chosen detail', () => {
+    late(session(2), { steps: 'summary' });
+    expect(within(screen.getByRole('article', { name: 'Prompt 1' })).getByRole('button', { name: 'Show the step' })).toBeInTheDocument();
+  });
+
+  it('folds nothing without a join time', () => {
+    late(session(3), { joinedAt: null });
+    expect(document.querySelectorAll('.turn.folded')).toHaveLength(0);
+    expect(screen.queryByRole('region', { name: 'So far' })).not.toBeInTheDocument();
+  });
+
+  it('unfolds one prompt at a time', async () => {
+    late(session(3));
+    await userEvent.click(within(screen.getByRole('article', { name: 'Prompt 1' })).getByRole('button', { name: 'Show the 6 steps' }));
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).not.toHaveClass('folded');
+    expect(within(screen.getByRole('article', { name: 'Prompt 1' })).getByTitle('src/turn0/file0.ts')).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Prompt 2' })).toHaveClass('folded');
+  });
+
+  it('unfolds the prompt a search lands on, not one jumped to', async () => {
+    const events = session(3);
+    const { update } = late(events);
+    await userEvent.selectOptions(screen.getByLabelText('Jump to'), 'p0');
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).toHaveClass('folded');
+
+    update(events, { current: 'p1', matches: new Set(['p1']) });
+    expect(screen.getByRole('article', { name: 'Prompt 2' })).not.toHaveClass('folded');
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).toHaveClass('folded');
+  });
+
+  it('keeps the latest prompt at the join open when a new one starts', () => {
+    const events = session(3);
+    const { update } = late(events);
+    update([...events, ...afterJoin(3)]);
+    expect(screen.getByRole('article', { name: 'Prompt 3' })).not.toHaveClass('folded');
+    expect(screen.getByRole('article', { name: 'Prompt 4' })).not.toHaveClass('folded');
+    expect(screen.getByRole('article', { name: 'Prompt 2' })).toHaveClass('folded');
+  });
+
+  it('shows the overview, and closing it keeps the folds', async () => {
+    late(session(3));
+    const card = screen.getByRole('region', { name: 'So far' });
+    expect(card).toHaveTextContent('You joined 59 minutes in. So far: 3 prompts.');
+    expect(card).toHaveTextContent('18 code files changed');
+    await userEvent.click(within(card).getByRole('button', { name: 'Close the overview' }));
+    expect(screen.queryByRole('region', { name: 'So far' })).not.toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).toHaveClass('folded');
+  });
+
+  it('jumps from the overview without unfolding', async () => {
+    const onJump = vi.fn();
+    late(session(3), { onJump });
+    await userEvent.selectOptions(screen.getByLabelText('Jump to a prompt'), 'p1');
+    expect(onJump).toHaveBeenCalledWith(buildTimeline(session(3)).turns[1]!.outputSeq);
+    expect(screen.getByRole('article', { name: 'Prompt 2' })).toHaveClass('folded');
+    await userEvent.click(screen.getByRole('button', { name: 'Go to the latest prompt' }));
+    expect(onJump).toHaveBeenLastCalledWith(buildTimeline(session(3)).turns[2]!.outputSeq);
+  });
+
+  it('keeps the overview as it was at the join', () => {
+    const planned = (n: number, done: number, shift: number): TimelineEvent => ({ outputSeq: n, at: 1_700_000_000_000 + shift, kind: 'plan', change: 'heartbeat', documents: [], tasks: { done, total: 6 } });
+    const events = [...session(2), planned(9_000, 2, 9_000)];
+    const { update } = late(events);
+    expect(screen.getByRole('region', { name: 'So far' })).toHaveTextContent('2 of 6 tasks');
+    update([...events, ...afterJoin(2), planned(9_999, 3, HOUR + 120_000)]);
+    expect(screen.getByRole('region', { name: 'So far' })).toHaveTextContent('2 of 6 tasks');
+  });
+
+  it('stays smaller than unfolded after 400 prompts, and renders only what changed', () => {
+    const events = session(400);
+    const { container } = late(events, { joinedAt: null });
+    const unfolded = container.querySelectorAll('*').length;
+    cleanup();
+    rendered.clear();
+    const { container: folded, update } = late(events);
+    expect(folded.querySelectorAll('.turn.folded')).toHaveLength(399);
+    expect(folded.querySelectorAll('*').length).toBeLessThan(unfolded);
+    expect(rendered.get('Working on 399')).toBe(1);
+    const worked = overviews.count;
+
+    update([...events, ...afterJoin(400)]);
+    expect(overviews.count).toBe(worked);
+    expect(rendered.get('Working on 400')).toBe(1);
   });
 });

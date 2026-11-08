@@ -1,0 +1,22 @@
+/* Catching up after joining late (`catch-up`): the "so far" card and folded prompts. Kept apart
+   from styles.css, as links.css is. */
+
+/* One column that cannot grow past the panel: a select is as wide as its longest prompt. */
+.catch-up {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0 0 12px; padding: 10px 12px;
+  border-radius: 8px; background: var(--accent-soft); font-size: 13px;
+}
+.catch-up-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.catch-up h3 { margin: 0; font-size: 13.5px; }
+.catch-up dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0; }
+.catch-up dt { color: var(--text-muted); }
+.catch-up dd { margin: 0; min-width: 0; }
+.catch-up ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.catch-up li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.catch-up p { margin: 0; }
+.catch-up-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.catch-up-actions select { flex: 1 1 160px; min-width: 0; height: 28px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; padding: 0 6px; }
+
+.turn .outcome { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; color: var(--text-muted); }
+.turn .outcome svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.turn .unfold { justify-self: start; font-size: 12.5px; }
