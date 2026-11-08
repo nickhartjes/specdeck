@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentStatus, PlanDocument, TimelineEvent, ViewerNotifications } from '../api/types';
-import { createViewerNotices, SETTLE_MS, type ViewerNotice } from './viewerNotices';
+import { createViewerNotices, DEFAULT_VIEWER_NOTIFICATIONS, SETTLE_MS, type ViewerNotice } from './viewerNotices';
 
-const DEFAULTS: ViewerNotifications = { plans: true, documents: true, finished: false, reads: true, estimates: true };
+const DEFAULTS: ViewerNotifications = DEFAULT_VIEWER_NOTIFICATIONS;
 
 let seq = 0;
 function event(entry: Record<string, unknown>): TimelineEvent {
@@ -37,8 +37,9 @@ function planWritten(change: string, ids: string[], tasks?: { done: number; tota
 
 function setup(switches: Partial<ViewerNotifications> = {}) {
   const sent: ViewerNotice[] = [];
+  const recorded: ViewerNotice[] = [];
   const current = { ...DEFAULTS, ...switches };
-  const notices = createViewerNotices({ switches: current, notify: (notice) => sent.push(notice) });
+  const notices = createViewerNotices({ switches: current, notify: (notice) => sent.push(notice), record: (notice) => recorded.push(notice) });
   notices.joined('Claude Code');
   const status = (s: AgentStatus) => notices.status(s);
   const timeline = (events: TimelineEvent[]) => events.forEach((e) => notices.timeline(e));
@@ -49,7 +50,7 @@ function setup(switches: Partial<ViewerNotifications> = {}) {
     status('waiting');
     vi.advanceTimersByTime(SETTLE_MS);
   };
-  return { notices, sent, status, timeline, turn, current };
+  return { notices, sent, recorded, status, timeline, turn, current };
 }
 
 describe('viewer notices', () => {
@@ -342,6 +343,60 @@ describe('viewer notices', () => {
       status('waiting');
       turn(planWritten('add-login', ['proposal']));
       expect(sent[0]?.open).toEqual({ kind: 'document', path: 'openspec/changes/add-login/proposal.md' });
+    });
+  });
+
+  describe("what the bell's list records", () => {
+    it('records a turn whose kind is off, and notifies nothing', () => {
+      const { sent, recorded, status, turn } = setup({ documents: false });
+      status('waiting');
+      turn(documentWritten('README.md'));
+      expect(sent).toEqual([]);
+      expect(recorded.map((notice) => notice.title)).toEqual(['README.md changed']);
+      expect(recorded[0]?.open).toEqual({ kind: 'document', path: 'README.md' });
+    });
+
+    it('records the plan in full while the notification names its documents', () => {
+      const { sent, recorded, status, turn } = setup({ plans: false });
+      status('waiting');
+      turn(planWritten('add-login', SPEC_DRIVEN));
+      expect(sent[0]?.title).toBe('proposal.md and 3 other documents changed');
+      expect(recorded[0]?.title).toBe('Plan add-login is ready for review');
+    });
+
+    it('records that the agent finished, which is off by default', () => {
+      const { sent, recorded, status, turn } = setup();
+      status('waiting');
+      turn([]);
+      expect(sent).toEqual([]);
+      expect(recorded).toEqual([{ kind: 'finished', title: 'Claude Code finished', body: "It waits for the host's next prompt." }]);
+    });
+
+    it('records nothing an exited agent did not do', () => {
+      const { recorded, status } = setup();
+      status('waiting');
+      status('working');
+      status('exited');
+      expect(recorded).toEqual([]);
+    });
+
+    it('records nothing from history or a turn running on joining', () => {
+      const { recorded, status, timeline } = setup();
+      timeline([...planWritten('add-login', SPEC_DRIVEN), ...documentWritten('README.md')]);
+      status('working');
+      timeline(documentWritten('notes.md'));
+      status('waiting');
+      vi.advanceTimersByTime(SETTLE_MS * 4);
+      expect(recorded).toEqual([]);
+    });
+
+    it('records a plan-mode plan with plans off', () => {
+      const { sent, recorded, status, timeline } = setup({ plans: false });
+      status('waiting');
+      status('working');
+      timeline([event({ kind: 'tool-call', promptId: 'p', toolUseId: 'plan', toolName: 'ExitPlanMode', input: { plan: '# Plan' } })]);
+      expect(sent).toEqual([]);
+      expect(recorded.map((notice) => notice.open)).toEqual([{ kind: 'plan-mode', toolUseId: 'plan' }]);
     });
   });
 });

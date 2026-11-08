@@ -2,7 +2,6 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { adjust, choose } from '../model/layout';
-import { demoProfile } from '../api/demo';
 import { fakeBridge, renderWith } from '../test/helpers';
 import { LayoutControls } from './LayoutMenu';
 
@@ -79,45 +78,12 @@ describe('appearance in the layout menu', () => {
 describe('notifications in the layout menu', () => {
   afterEach(() => delete document.documentElement.dataset.platform);
 
-  it('are offered only in the web viewer, which has no settings window', async () => {
+  it('are not offered: the web viewer has them in the bell', async () => {
+    document.documentElement.dataset.platform = 'web';
     renderWith(fakeBridge('viewer'), <LayoutControls layout={choose('developer')} onLayout={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
+    expect(await screen.findByRole('radio', { name: /System/ })).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Notifications' })).not.toBeInTheDocument();
-  });
-
-  it('are off until turned on, then offer each kind', async () => {
-    document.documentElement.dataset.platform = 'web';
-    const profile = { ...demoProfile, notifications: false };
-    const bridge = fakeBridge('viewer', {
-      getProfile: vi.fn(async () => profile),
-      setNotifications: vi.fn(async (notifications: boolean) => ({ ...profile, notifications })),
-    });
-    renderWith(bridge, <LayoutControls layout={choose('developer')} onLayout={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
-    const main = await screen.findByRole('checkbox', { name: 'While this tab is in the background' });
-    expect(main).not.toBeChecked();
-    expect(screen.queryByRole('checkbox', { name: 'A plan is ready for review' })).not.toBeInTheDocument();
-    await userEvent.click(main);
-    expect(bridge.setNotifications).toHaveBeenCalledWith(true);
-    expect(await screen.findByRole('checkbox', { name: 'A plan is ready for review' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'The host asks you to read' })).toBeChecked();
-    await userEvent.click(screen.getByRole('checkbox', { name: 'The host asks for an estimate' }));
-    expect(bridge.setViewerNotifications).toHaveBeenCalledWith({ plans: true, documents: true, finished: false, reads: true, estimates: false });
-  });
-
-  it('say so when the browser does not allow them', async () => {
-    document.documentElement.dataset.platform = 'web';
-    const bridge = fakeBridge('viewer', {
-      getProfile: vi.fn(async () => ({ ...demoProfile, notifications: false })),
-      setNotifications: vi.fn(async () => {
-        throw new Error('This browser does not allow notifications for this page.');
-      }),
-    });
-    renderWith(bridge, <LayoutControls layout={choose('developer')} onLayout={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
-    await userEvent.click(await screen.findByRole('checkbox', { name: 'While this tab is in the background' }));
-    expect(await screen.findByRole('status')).toHaveTextContent('This browser does not allow notifications for this page.');
-    expect(screen.getByRole('checkbox', { name: 'While this tab is in the background' })).not.toBeChecked();
-    expect(screen.queryByRole('checkbox', { name: 'A plan is ready for review' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'While this tab is in the background' })).not.toBeInTheDocument();
   });
 });

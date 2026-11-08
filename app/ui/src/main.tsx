@@ -10,6 +10,7 @@ import './highlight.css';
 import './shared-files.css';
 import './links.css';
 import './asks.css';
+import './notifications.css';
 import './catch-up.css';
 
 async function bridge(): Promise<Bridge> {

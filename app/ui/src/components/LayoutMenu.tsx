@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, LayoutTemplate, PanelLeft, PanelRight } from 'lucide-react';
-import { errorMessage, useBridge } from '../api/bridge';
-import type { Appearance, Profile } from '../api/types';
+import { useBridge } from '../api/bridge';
+import type { Appearance } from '../api/types';
 import { APPEARANCES } from '../appearance';
 import { choose, isAdjusted, PRESET_NAMES, type Layout, type Preset } from '../model/layout';
-import { VIEWER_NOTIFICATION_KINDS } from '../model/viewerNotices';
 
 const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
-function inWebViewer(): boolean {
+export function inWebViewer(): boolean {
   return typeof document !== 'undefined' && document.documentElement.dataset.platform === 'web';
 }
 
@@ -120,7 +119,6 @@ export function LayoutControls({ layout, onLayout, host = false, onAskAgain }: P
               )}
             </p>
             {inWebViewer() && <AppearanceChoice />}
-            {inWebViewer() && <NotificationChoice />}
           </div>
         )}
       </div>
@@ -160,49 +158,6 @@ function AppearanceChoice() {
           </span>
         </label>
       ))}
-    </fieldset>
-  );
-}
-
-/**
- * The web viewer's notifications, kept in the browser (`web-viewer` spec): off until turned on
- * here, which asks the browser. The app has them in Settings.
- */
-function NotificationChoice() {
-  const bridge = useBridge();
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [blocked, setBlocked] = useState<string | null>(null);
-  useEffect(() => void bridge.getProfile().then(setProfile), [bridge]);
-  if (!profile) return null;
-  const turn = async (enabled: boolean) => {
-    try {
-      setProfile(await bridge.setNotifications(enabled));
-      setBlocked(null);
-    } catch (error) {
-      setBlocked(errorMessage(error));
-    }
-  };
-  return (
-    <fieldset>
-      <legend>Notifications</legend>
-      <label className="check">
-        <input type="checkbox" checked={profile.notifications} onChange={(event) => void turn(event.target.checked)} />
-        <span>While this tab is in the background</span>
-      </label>
-      {blocked && <p className="muted" role="status">{blocked}</p>}
-      {profile.notifications &&
-        VIEWER_NOTIFICATION_KINDS.map(({ kind, label }) => (
-          <label key={kind} className="check">
-            <input
-              type="checkbox"
-              checked={profile.viewerNotifications[kind]}
-              onChange={async (event) =>
-                setProfile(await bridge.setViewerNotifications({ ...profile.viewerNotifications, [kind]: event.target.checked }))
-              }
-            />
-            <span>{label}</span>
-          </label>
-        ))}
     </fieldset>
   );
 }

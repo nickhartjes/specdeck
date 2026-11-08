@@ -33,8 +33,8 @@ describe('binary channel messages', () => {
 
 describe('viewer notifications', () => {
   it('saves the kinds in the app', async () => {
-    await tauriBridge.setViewerNotifications({ plans: true, documents: false, finished: true, reads: true, estimates: false });
-    expect(tauri.invoke).toHaveBeenCalledWith('set_viewer_notifications', { kinds: { plans: true, documents: false, finished: true, reads: true, estimates: false } });
+    await tauriBridge.setViewerNotifications({ plans: true, documents: false, finished: true, reads: true, estimates: false, files: true, links: false, braindump: false });
+    expect(tauri.invoke).toHaveBeenCalledWith('set_viewer_notifications', { kinds: { plans: true, documents: false, finished: true, reads: true, estimates: false, files: true, links: false, braindump: false } });
   });
 
   it('notifies through the app', async () => {

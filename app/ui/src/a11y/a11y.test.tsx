@@ -9,8 +9,8 @@ import type { Bridge } from '../api/bridge';
 import { fakeBridge, renderWith } from '../test/helpers';
 import type { MenuCommand } from '../menu/menu';
 import { SettingsScreen } from '../screens/SettingsScreen';
-import { LayoutControls } from '../components/LayoutMenu';
-import { choose } from '../model/layout';
+import { NotificationBell } from '../components/NotificationBell';
+import { createNoticeList } from '../model/noticeList';
 
 vi.mock('../terminal/TerminalView', async () => ({ TerminalView: (await import('../test/terminal-stub')).TerminalViewStub }));
 
@@ -165,20 +165,26 @@ describe('accessibility', () => {
     expect(await violations()).toEqual([]);
   });
 
-  it("web viewer's layout menu with notifications", async () => {
-    document.documentElement.dataset.platform = 'web';
-    try {
-      renderWith(
-        fakeBridge('viewer'),
-        <main>
-          <LayoutControls layout={choose('developer')} onLayout={vi.fn()} />
-        </main>,
-      );
-      await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
-      await screen.findByRole('checkbox', { name: 'A plan is ready for review' });
-      expect(await violations()).toEqual([]);
-    } finally {
-      delete document.documentElement.dataset.platform;
+  it('the bell, with its list and switches, in the app and the web viewer', async () => {
+    const list = createNoticeList();
+    list.add({ kind: 'finished', title: 'Claude Code finished', body: "It waits for the host's next prompt." });
+    list.add({ kind: 'plans', title: 'Plan add-login is ready for review', body: 'Claude Code wrote proposal.', open: { kind: 'document', path: 'proposal.md' } });
+    for (const platform of ['app', 'web']) {
+      if (platform === 'web') document.documentElement.dataset.platform = 'web';
+      try {
+        const { unmount } = renderWith(
+          fakeBridge('viewer'),
+          <main>
+            <NotificationBell list={list} onOpen={vi.fn()} onSwitches={vi.fn()} />
+          </main>,
+        );
+        await userEvent.click(screen.getByRole('button', { name: /^Notifications/ }));
+        await screen.findByRole('checkbox', { name: 'A plan is ready for review' });
+        expect(await violations()).toEqual([]);
+        unmount();
+      } finally {
+        delete document.documentElement.dataset.platform;
+      }
     }
   });
 

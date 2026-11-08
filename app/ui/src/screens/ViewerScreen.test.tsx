@@ -1,6 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ViewEvent } from '../api/types';
 import { choose, type Layout } from '../model/layout';
 import { demoParticipants } from '../api/demo';
@@ -320,6 +320,123 @@ describe('notifications for the viewer', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('the bell', () => {
+  const plan = (at: number) => ({
+    outputSeq: at,
+    at,
+    kind: 'plan' as const,
+    change: 'add-login',
+    documents: [{ id: 'proposal', name: 'proposal', paths: ['openspec/changes/add-login/proposal.md'], exists: true }],
+    tasks: { done: 0, total: 3 },
+  });
+  const proposal = (at: number) => ({
+    outputSeq: at,
+    at,
+    kind: 'document' as const,
+    promptId: 'p',
+    toolUseId: `t${at}`,
+    path: 'openspec/changes/add-login/proposal.md',
+    text: '# Add login',
+  });
+  const bell = () => screen.getByRole('button', { name: /^Notifications/ });
+
+  async function turn(events: ViewEvent[]) {
+    act(() => {
+      emit({ type: 'status', status: 'working' });
+      events.forEach(emit);
+      emit({ type: 'status', status: 'waiting' });
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+  }
+
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  it('lists a turn whose kind does not pop up, and counts it', async () => {
+    const { bridge } = setup();
+    join();
+    await turn([]);
+    expect(bridge.viewerNotify).not.toHaveBeenCalled();
+    expect(bell()).toHaveAccessibleName('Notifications, 1 new');
+    await userEvent.click(bell());
+    expect(screen.getByRole('list', { name: 'What happened' })).toHaveTextContent('Claude Code finished');
+  });
+
+  it('lists nothing of what happened before the viewer came in', async () => {
+    setup();
+    act(() => {
+      emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+      emit({ type: 'timeline', event: proposal(1) });
+      emit({ type: 'timeline', event: plan(2) });
+      emit({ type: 'status', status: 'waiting' });
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(bell()).toHaveAccessibleName('Notifications');
+  });
+
+  it('opens what an entry is about', async () => {
+    setup();
+    join();
+    await turn([
+      { type: 'timeline', event: proposal(1) },
+      { type: 'timeline', event: plan(2) },
+    ]);
+    await userEvent.click(bell());
+    await userEvent.click(screen.getByRole('button', { name: /Plan add-login is ready for review/ }));
+    expect(screen.queryByRole('dialog', { name: 'Notifications' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /proposal\.md/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('takes an entry off the count when its notification is clicked', async () => {
+    const { bridge } = setup();
+    join();
+    await turn([
+      { type: 'timeline', event: proposal(1) },
+      { type: 'timeline', event: plan(2) },
+    ]);
+    expect(bell()).toHaveAccessibleName('Notifications, 1 new');
+    const opened = vi.mocked(bridge.onNoticeOpen).mock.calls[0]![0];
+    act(() => opened({ kind: 'document', path: 'openspec/changes/add-login/proposal.md' }));
+    expect(bell()).toHaveAccessibleName('Notifications');
+  });
+
+  it('opens nothing for a read request that has ended', async () => {
+    setup();
+    join();
+    const read = { id: 1, target: { document: { path: 'openspec/changes/add-login/proposal.md' } }, label: 'proposal.md', limitS: 0, leftMs: null, people: [], mine: 'reading' as const, questions: [] };
+    act(() => {
+      emit({ type: 'timeline', event: proposal(1) });
+      emit({ type: 'read-request', open: read });
+      emit({ type: 'read-request', open: null });
+    });
+    const tabs = () => screen.getAllByRole('tab').map((tab) => tab.textContent);
+    const before = tabs();
+    await userEvent.click(bell());
+    await userEvent.click(screen.getByRole('button', { name: /Nick asks you to read/ }));
+    expect(tabs()).toEqual(before);
+  });
+
+  it('lists the end of the session, and stays after it', async () => {
+    setup();
+    join();
+    act(() => emit({ type: 'ended', reason: 'closed' }));
+    await userEvent.click(bell());
+    expect(screen.getByRole('list', { name: 'What happened' })).toHaveTextContent('The host ended the session');
+  });
+
+  it('lists a file someone else shared after joining, and not one from before', async () => {
+    const { bridge } = setup();
+    join();
+    const shared = (file: number, name: string, atMs: number, by = 0) => ({ file, name, kind: 'image' as const, mediaType: 'image/png', size: 1, sha256: [], by, byLabel: by ? 'Anna de Vries' : 'Nick', atMs });
+    act(() => emit({ type: 'shared-files', files: [shared(1, 'old.png', 0)] }));
+    act(() => emit({ type: 'shared-files', files: [shared(1, 'old.png', 0), shared(2, 'mine.png', Date.now() + 1, 2), shared(3, 'wireframe.png', Date.now() + 1)] }));
+    expect(bridge.viewerNotify).not.toHaveBeenCalled();
+    await userEvent.click(bell());
+    const entries = within(screen.getByRole('list', { name: 'What happened' })).getAllByRole('listitem');
+    expect(entries.map((entry) => entry.textContent)).toEqual([expect.stringContaining('Nick shared wireframe.png')]);
   });
 });
 

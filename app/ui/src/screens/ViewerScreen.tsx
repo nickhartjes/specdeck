@@ -14,6 +14,7 @@ import type {
   Suggestion,
   TerminalSnapshot,
   TimelineEvent,
+  ViewerNotifications,
   ViewEvent,
   VoteView,
 } from '../api/types';
@@ -39,6 +40,9 @@ import { AGENT_NAMES } from './HostScreen';
 import { Workspace, type WorkspaceHandle } from './Workspace';
 import { setTimelineEvents } from '../model/heartbeat';
 import { createViewerNotices, DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
+import { createNoticeList, type ListOpen } from '../model/noticeList';
+import { createSharedNotices } from '../model/sharedNotices';
+import { NotificationBell } from '../components/NotificationBell';
 
 /** What to tell the viewer when their session ends, and whether they can still read it. */
 export const END_MESSAGES: Record<EndReason, { title: string; text: string; keepReading?: boolean; retry?: boolean }> = {
@@ -249,14 +253,17 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
 
   // What the viewer is notified about; the switches are read again on every status change, so
-  // a change in Settings applies by the end of the turn.
+  // a change in Settings applies by the end of the turn. Every notice also goes to the bell's
+  // list, whether it pops up or not (`notification-bell`).
+  const list = useMemo(() => createNoticeList(), []);
   const notices = useMemo(
     () =>
       createViewerNotices({
         switches: DEFAULT_VIEWER_NOTIFICATIONS,
         notify: ({ kind, title, body, open }) => void bridge.viewerNotify(kind, title, body, open).catch(() => {}),
+        record: list.add,
       }),
-    [bridge],
+    [bridge, list],
   );
   useEffect(() => () => notices.dispose(), [notices]);
   const askNotices = useMemo(
@@ -264,33 +271,58 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
       createHostAskNotices({
         switches: DEFAULT_VIEWER_NOTIFICATIONS,
         notify: ({ kind, title, body }) => void bridge.viewerNotify(kind, title, body).catch(() => {}),
+        record: list.add,
       }),
-    [bridge],
+    [bridge, list],
   );
+  const sharedNotices = useMemo(
+    () =>
+      createSharedNotices({
+        switches: DEFAULT_VIEWER_NOTIFICATIONS,
+        notify: ({ kind, title, body, open }) => void bridge.viewerNotify(kind, title, body, open).catch(() => {}),
+        record: list.add,
+      }),
+    [bridge, list],
+  );
+  const setSwitches = (switches: ViewerNotifications) => {
+    notices.setSwitches(switches);
+    askNotices.setSwitches(switches);
+    sharedNotices.setSwitches(switches);
+  };
   // The host's name for notifications, read when one arrives.
   const participants = useRef<Participant[]>([]);
   const hostLabel = () => participants.current.find((p) => p.role === 'Host')?.label ?? 'The host';
   // A click on one of them opens what it is about here (`notification-open` design decision 4).
-  useEffect(() => bridge.onNoticeOpen((open) => workspace.current?.open(open)), [bridge]);
+  useEffect(
+    () =>
+      bridge.onNoticeOpen((open) => {
+        list.seen(open);
+        workspace.current?.open(open);
+      }),
+    [bridge, list],
+  );
   const onEvent = (event: ViewEvent) => {
     dispatch(event);
     if (event.type === 'joined' || event.type === 'status') {
       void bridge
         .getProfile()
-        .then((profile) => {
-          notices.setSwitches(profile.viewerNotifications);
-          askNotices.setSwitches(profile.viewerNotifications);
-        })
+        .then((profile) => setSwitches(profile.viewerNotifications))
         .catch(() => {});
     }
     if (event.type === 'joined') {
+      sharedNotices.joined(event.viewerId);
       setJoinedAt((at) => at ?? Date.now());
       notices.joined(AGENT_NAMES[event.agent]);
       askNotices.joined();
     } else if (event.type === 'status') {
       notices.status(event.status);
       askNotices.status();
-    } else if (event.type === 'timeline') notices.timeline(event.event);
+    } else if (event.type === 'timeline') {
+      notices.timeline(event.event);
+      if (event.event.kind === 'link') sharedNotices.link(event.event);
+    } else if (event.type === 'shared-files') sharedNotices.files(event.files);
+    else if (event.type === 'braindump') sharedNotices.braindump(event.items);
+    else if (event.type === 'ended' && END_MESSAGES[event.reason].keepReading) list.add({ kind: 'ended', title: END_MESSAGES[event.reason].title, body: END_MESSAGES[event.reason].text });
     else if (event.type === 'participants') participants.current = event.participants;
     else if (event.type === 'read-request') askNotices.read(event.open, hostLabel());
     else if (event.type === 'vote') askNotices.vote(event.open, hostLabel());
@@ -359,6 +391,12 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   );
 
   const { readRequest, vote } = state;
+  // What an entry in the bell opens (`notification-bell` design decision 4): what its
+  // notification opens, or a read request while it is still open.
+  const openEntry = (target: ListOpen) => {
+    if (target.kind !== 'read') workspace.current?.open(target);
+    else if (readRequest?.id === target.id) workspace.current?.openTarget(readRequest.target, readRequest.label);
+  };
   const answer = (call: () => Promise<void>) => void call().catch((e) => showToast(errorMessage(e)));
   const requests = live && (readRequest || vote) && (
     <>
@@ -424,6 +462,7 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
         {state.phase === 'ended' && <span className="pill ended">Ended</span>}
         <div className="spacer" />
         {update}
+        <NotificationBell list={list} onOpen={openEntry} onSwitches={setSwitches} />
         {state.participants.length > 0 && <PeopleButton participants={state.participants} me={state.viewerId} />}
         <LayoutControls layout={shown} onLayout={setLayout} onAskAgain={() => setAsking(true)} />
         <button className="btn" onClick={leave}>

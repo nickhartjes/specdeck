@@ -7,17 +7,41 @@
 
 import type { AgentStatus, NoticeOpen, PlanDocument, TimelineEvent, ViewerNotificationKind, ViewerNotifications } from '../api/types';
 
-/** What a viewer gets until they change it: plans, documents and the host's asks, not every turn's end. */
-export const DEFAULT_VIEWER_NOTIFICATIONS: ViewerNotifications = { plans: true, documents: true, finished: false, reads: true, estimates: true };
+/** What a viewer gets until they change it: plans, documents and the host's asks, not every turn's end or what others share. */
+export const DEFAULT_VIEWER_NOTIFICATIONS: ViewerNotifications = {
+  plans: true,
+  documents: true,
+  finished: false,
+  reads: true,
+  estimates: true,
+  files: false,
+  links: false,
+  braindump: false,
+};
 
-/** The viewer's switches, in the order shown. The host's asks notify in `hostAskNotices.ts`. */
+/** The viewer's switches, in the order shown. The host's asks notify in `hostAskNotices.ts`, what others share in `sharedNotices.ts`. */
 export const VIEWER_NOTIFICATION_KINDS: { kind: ViewerNotificationKind; label: string }[] = [
   { kind: 'plans', label: 'A plan is ready for review' },
   { kind: 'documents', label: 'A document changed' },
   { kind: 'finished', label: 'The agent finished' },
   { kind: 'reads', label: 'The host asks you to read' },
   { kind: 'estimates', label: 'The host asks for an estimate' },
+  { kind: 'files', label: 'Someone shares a file' },
+  { kind: 'links', label: 'The host shares a link' },
+  { kind: 'braindump', label: 'Someone adds to the braindump' },
 ];
+
+/** Every kind on: what the bell's list records, whatever pops up (`notification-bell` design decision 1). */
+const ALL_KINDS_ON: ViewerNotifications = {
+  plans: true,
+  documents: true,
+  finished: true,
+  reads: true,
+  estimates: true,
+  files: true,
+  links: true,
+  braindump: true,
+};
 
 /** How long the agent waits before its turn counts as ended: status and timeline arrive on separate channels. */
 export const SETTLE_MS = 1500;
@@ -37,6 +61,8 @@ export interface ViewerNoticesOptions {
   /** The viewer's switches until `setSwitches` says otherwise. */
   switches: ViewerNotifications;
   notify: (notice: ViewerNotice) => void;
+  /** Every notice for the bell's list, built with every kind on, whether it pops up or not. */
+  record?: (notice: ViewerNotice) => void;
   /** Runs `run` after `ms`; returns a function that cancels it. */
   schedule?: (run: () => void, ms: number) => () => void;
 }
@@ -76,7 +102,7 @@ function defaultSchedule(run: () => void, ms: number): () => void {
   return () => clearTimeout(timer);
 }
 
-export function createViewerNotices({ switches: initial, notify, schedule = defaultSchedule }: ViewerNoticesOptions): ViewerNotices {
+export function createViewerNotices({ switches: initial, notify, record = () => {}, schedule = defaultSchedule }: ViewerNoticesOptions): ViewerNotices {
   let switches = initial;
   let agentName = 'The agent';
   // No status since joining yet: the first one is where the viewer came in.
@@ -99,7 +125,10 @@ export function createViewerNotices({ switches: initial, notify, schedule = defa
     const ended = turn;
     turn = null;
     if (ended) {
-      const notice = turnNotice(ended, agentName, switches, status === 'exited');
+      const exited = status === 'exited';
+      const entry = turnNotice(ended, agentName, ALL_KINDS_ON, exited);
+      if (entry) record(entry);
+      const notice = turnNotice(ended, agentName, switches, exited);
       if (notice) notify(notice);
     }
   };
@@ -157,7 +186,9 @@ export function createViewerNotices({ switches: initial, notify, schedule = defa
           stopEnd();
           if (event.toolName === 'ExitPlanMode' && !turn.planModeShown) {
             turn.planModeShown = true;
-            if (switches.plans) notify(planModeNotice(agentName, event.toolUseId));
+            const notice = planModeNotice(agentName, event.toolUseId);
+            record(notice);
+            if (switches.plans) notify(notice);
           }
           break;
         case 'tool-result':

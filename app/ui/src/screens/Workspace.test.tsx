@@ -2,7 +2,8 @@ import { createRef, useState } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TimelineEvent } from '../api/types';
+import type { SharedFileInfo, TimelineEvent } from '../api/types';
+import type { SharedFiles } from '../components/SharedFiles';
 import { demoTimeline } from '../api/demo';
 import { dispatchMenu } from '../menu/menu';
 import { adjust, choose, type Layout } from '../model/layout';
@@ -465,6 +466,33 @@ describe('opening from a notification', () => {
     act(() => ref.current!.open({ kind: 'document', path: 'gone.md' }));
     act(() => ref.current!.open({ kind: 'plan-mode', toolUseId: 'w1' }));
     expect(tabNames()).toEqual(before);
+  });
+
+  it('opens a shared file or braindump item while it is still there', () => {
+    const file = (id: number, name: string): SharedFileInfo => ({ file: id, name, kind: 'image', mediaType: 'image/png', size: 10, sha256: [], by: 0, byLabel: 'Nick', atMs: 0 });
+    const shared: SharedFiles = {
+      files: [file(1, 'wireframe.png')],
+      me: 2,
+      host: false,
+      canShare: true,
+      hostName: 'Nick',
+      agentName: 'Claude Code',
+      share: vi.fn(),
+      open: vi.fn(async () => new ArrayBuffer(0)),
+      remove: vi.fn(),
+      save: vi.fn(async () => true),
+      say: vi.fn(),
+      braindump: { items: [{ info: file(2, 'sketch.png'), note: false, given: null }], add: vi.fn(), write: vi.fn(), edit: vi.fn(), remove: vi.fn() } as unknown as SharedFiles['braindump'],
+    };
+    const ref = createRef<WorkspaceHandle>();
+    renderWorkspace({ ref, timeline: planTimeline(), shared });
+    const before = tabNames();
+    act(() => ref.current!.open({ kind: 'shared', file: 9 }));
+    expect(tabNames()).toEqual(before);
+    act(() => ref.current!.open({ kind: 'shared', file: 1 }));
+    expect(screen.getByRole('tab', { name: 'wireframe.png, preview' })).toHaveAttribute('aria-selected', 'true');
+    act(() => ref.current!.open({ kind: 'shared', file: 2 }));
+    expect(screen.getByRole('tab', { name: 'sketch.png, preview' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('shows the session on a narrow window', () => {

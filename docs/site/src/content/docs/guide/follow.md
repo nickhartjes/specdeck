@@ -72,11 +72,21 @@ Agents report their state through the terminal (the [Program Status Protocol](ht
 
 ## Get called back
 
-You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. It also tells you when the host [asks you to read something or to estimate](/specdeck/guide/read-and-estimate/). Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session). Clicking a notification opens the plan or document it is about.
+You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. It also tells you when the host [asks you to read something or to estimate](/specdeck/guide/read-and-estimate/). Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session), or under the bell. Clicking a notification opens the plan or document it is about.
+
+### The bell
+
+The bell in the toolbar lists what happened in the session since you joined, newest first, also what didn't pop up: a kind you turned off, or something that happened while you were looking at SpecDeck. Its number is how many are new since you last opened it; opening the list resets it. Each entry is one notification: a turn of the agent, a request from the host, a shared file, link or braindump item, or the session ending.
+
+Select an entry to open what it is about, as clicking its notification does: the plan, the document, Claude's plan, a shared file or braindump item while it is still shared, or what the host asks you to read while the request is open. An entry like *Claude Code finished* is only there to read.
+
+The list starts empty when you join: what happened before is in the [timeline](#joining-late), not here. It keeps what happened while you were reconnecting, stays after the host ends the session, and is gone when you leave or close the window. It keeps the newest 100 entries.
+
+Below the list, **Also pop up when** has the same switches as **While you watch a session** in Settings. When notifications are off in Settings, they are shown but can't be changed here.
 
 ### Notifications in the browser
 
-In the web viewer, notifications are off until you turn them on: open the layout button and tick **While this tab is in the background** under **Notifications**. Your browser asks whether the page may show notifications. Once you allow it, choose the same kinds as in the app. The browser remembers your choice, so you are not asked again. They show only while the tab is hidden or the browser is not in front. Clicking one shows the page and opens the plan or document it is about, as in the app, as long as the page is still open. If the browser does not allow notifications, the menu says so; allow them for the page in your browser's site settings and try again.
+In the web viewer, notifications are off until you turn them on: open the bell and tick **While this tab is in the background** under **Notifications**. Your browser asks whether the page may show notifications. Once you allow it, choose the same kinds as in the app. The browser remembers your choice, so you are not asked again. They show only while the tab is hidden or the browser is not in front. Clicking one shows the page and opens the plan or document it is about, as in the app, as long as the page is still open. If the browser does not allow notifications, the bell says so; allow them for the page in your browser's site settings and try again. The bell's list works without them, and is empty again after you reload the page.
 
 ## Read the session
 
