@@ -1,0 +1,40 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 29,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "playwright",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "f29381f8-1917-4c37-be5c-ca3ba59341b6",
+  "session_id": "9fd341fa-b301-42ec-8fb3-dcdbcd63afad",
+  "tool_input": {
+    "fields": [
+      {
+        "name": "Card number",
+        "target": "e10",
+        "type": "textbox",
+        "value": "4242424242424242"
+      },
+      {
+        "name": "Notes",
+        "target": "e12",
+        "type": "textbox",
+        "value": "hello notes"
+      }
+    ]
+  },
+  "tool_name": "mcp__playwright__browser_fill_form",
+  "tool_response": [
+    {
+      "text": "### Ran Playwright code\n```js\nawait page.getByRole('textbox', { name: 'Card number' }).fill('4242424242424242');\nawait page.getByRole('textbox', { name: 'Notes' }).fill('hello notes');\n```",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01WRhZLupmi1RZuYSYcCBQWN",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/9fd341fa-b301-42ec-8fb3-dcdbcd63afad.jsonl"
+}

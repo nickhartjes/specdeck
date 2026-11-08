@@ -1,0 +1,28 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 560,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "playwright",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "f29381f8-1917-4c37-be5c-ca3ba59341b6",
+  "session_id": "9fd341fa-b301-42ec-8fb3-dcdbcd63afad",
+  "tool_input": {
+    "element": "Unlabeled ✕ button",
+    "target": "e14"
+  },
+  "tool_name": "mcp__playwright__browser_click",
+  "tool_response": [
+    {
+      "text": "### Ran Playwright code\n```js\nawait page.getByRole('button', { name: 'âœ•' }).click();\n```\n### Page\n- Page URL: http://127.0.0.1:5179/\n- Page Title: Sign in\n- Console: 1 errors, 0 warnings\n### Snapshot\n- [Snapshot](.playwright-mcp/page-2026-11-08T21-22-57-250Z.yml)",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01QE3Xxdg3zhXDk6D8hEjuBs",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/9fd341fa-b301-42ec-8fb3-dcdbcd63afad.jsonl"
+}

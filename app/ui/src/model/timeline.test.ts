@@ -184,4 +184,15 @@ describe("Claude's browser", () => {
     expect(turns[0]!.items[0]).toMatchObject({ toolName: 'mcp__specdeck__click', target });
     expect(turns[0]!.items[1]).not.toHaveProperty('target');
   });
+
+  it("keeps the elements of another browser's batch", () => {
+    const targets = [{ kind: 'email field', label: 'Email', sensitive: false }, null];
+    const { turns } = buildTimeline([
+      { ...stamp(), kind: 'prompt', promptId: 'p1', text: 'sign in' },
+      { ...stamp(), kind: 'tool-call', promptId: 'p1', toolUseId: 'c', toolName: 'mcp__claude-in-chrome__browser_batch', input: { actions: [] }, targets },
+      { ...stamp(), kind: 'tool-call', promptId: 'p1', toolUseId: 'b', toolName: 'Bash', input: {} },
+    ]);
+    expect(turns[0]!.items[0]).toMatchObject({ targets });
+    expect(turns[0]!.items[1]).not.toHaveProperty('targets');
+  });
 });

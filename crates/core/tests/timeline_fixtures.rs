@@ -18,6 +18,10 @@ fn payloads(session: &str) -> Vec<HookPayload> {
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        // `NN-<event>.json`; a server's `tools.json` sits next to them.
+        .filter(|path| {
+            path.file_name().unwrap().to_string_lossy().starts_with(|c: char| c.is_ascii_digit())
+        })
         .collect();
     files.sort();
     files
@@ -422,4 +426,114 @@ fn browser_steps_name_their_element_and_hide_the_password() {
         .filter(|entry| matches!(entry, Entry::ToolCall { .. } | Entry::ToolResult { .. }))
         .collect();
     assert!(!serde_json::to_string(&tools).unwrap().contains("hunter2-test"));
+}
+
+/// The tool calls and results of a replay, as viewers get them; the prompt and Claude's answer
+/// name the test data, the tool entries must not.
+fn tool_entries(entries: &[Entry]) -> String {
+    let tools: Vec<_> = entries
+        .iter()
+        .filter(|entry| matches!(entry, Entry::ToolCall { .. } | Entry::ToolResult { .. }))
+        .collect();
+    serde_json::to_string(&tools).unwrap()
+}
+
+fn calls<'a>(entries: &'a [Entry], prefix: &str) -> Vec<&'a Entry> {
+    entries
+        .iter()
+        .filter(|entry| {
+            matches!(entry, Entry::ToolCall { tool_name, .. } if tool_name.starts_with(prefix))
+        })
+        .collect()
+}
+
+fn target(kind: &str, label: &str, sensitive: bool) -> Option<Target> {
+    Some(Target { kind: kind.into(), label: Some(label.into()), sensitive })
+}
+
+#[test]
+fn playwright_steps_name_their_element_and_hide_every_typed_text() {
+    let entries = replay("playwright-steps");
+    let calls = calls(&entries, "mcp__playwright__");
+    let acts: Vec<_> = calls
+        .iter()
+        .map(|entry| match entry {
+            Entry::ToolCall { target, targets, .. } => (target.clone(), targets.clone()),
+            _ => unreachable!(),
+        })
+        .collect();
+    // navigate, snapshot, type ×3, fill form, click ✕, click Sign in.
+    assert_eq!(acts.len(), 8);
+    assert_eq!(acts[2].0, target("text field", "Email", false));
+    assert_eq!(acts[3].0, target("text field", "Password", false));
+    assert_eq!(acts[4].0, target("text field", "Code", false));
+    assert_eq!(
+        acts[5].1,
+        Some(vec![
+            target("text field", "Card number", false),
+            target("text field", "Notes", false)
+        ])
+    );
+    // The page was served without a charset; Playwright read its ✕ as Latin-1.
+    assert_eq!(acts[6].0.as_ref().unwrap().kind, "button");
+    assert_eq!(acts[7].0, target("button", "Sign in", false));
+
+    let sent = tool_entries(&entries);
+    for typed in ["test@example.com", "hunter2-test", "123456", "4242424242424242", "hello notes"] {
+        assert!(!sent.contains(typed), "{typed} was sent");
+    }
+}
+
+#[test]
+fn chrome_steps_hide_the_password_and_show_the_email() {
+    let entries = replay("chrome-steps");
+    let targets: Vec<_> = calls(&entries, "mcp__claude-in-chrome__")
+        .iter()
+        .map(|entry| match entry {
+            Entry::ToolCall { target, .. } => target.clone(),
+            _ => unreachable!(),
+        })
+        .collect();
+    // tabs, new tab, navigate, read, click, type, click, type, set ×2, click ✕, click Sign in.
+    assert_eq!(targets.len(), 12);
+    let email = target("email field", "Email", false);
+    let password = target("password field", "Password", true);
+    assert_eq!(targets[4..8], [email.clone(), email, password.clone(), password]);
+    assert_eq!(targets[8], target("text field", "Code", false));
+    assert_eq!(targets[9], target("text field", "Card number", false));
+    assert_eq!(targets[11], target("button", "Sign in", false));
+
+    let sent = tool_entries(&entries);
+    assert!(sent.contains("test@example.com"));
+    assert!(!sent.contains("hunter2-test"));
+}
+
+#[test]
+fn chrome_batch_steps_name_each_action_and_hide_the_password() {
+    let entries = replay("chrome-batch");
+    let batches: Vec<_> = calls(&entries, "mcp__claude-in-chrome__browser_batch")
+        .iter()
+        .map(|entry| match entry {
+            Entry::ToolCall { targets, .. } => targets.clone().unwrap(),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(batches[0], [None, None]);
+    let email = target("email field", "Email", false);
+    let password = target("password field", "Password", true);
+    assert_eq!(
+        batches[1],
+        [
+            email.clone(),
+            email,
+            password.clone(),
+            password,
+            target("text field", "Code", false),
+            target("button", "Sign in", false),
+        ]
+    );
+
+    let sent = tool_entries(&entries);
+    assert!(sent.contains("test@example.com"));
+    assert!(!sent.contains("hunter2-test"));
 }

@@ -1,0 +1,29 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 52,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "playwright",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "f29381f8-1917-4c37-be5c-ca3ba59341b6",
+  "session_id": "9fd341fa-b301-42ec-8fb3-dcdbcd63afad",
+  "tool_input": {
+    "element": "Email field",
+    "target": "e5",
+    "text": "test@example.com"
+  },
+  "tool_name": "mcp__playwright__browser_type",
+  "tool_response": [
+    {
+      "text": "### Ran Playwright code\n```js\nawait page.getByRole('textbox', { name: 'Email' }).fill('test@example.com');\n```",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01K82PGdeb9VqUHW2EX5Q6s1",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/9fd341fa-b301-42ec-8fb3-dcdbcd63afad.jsonl"
+}

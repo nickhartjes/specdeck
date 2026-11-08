@@ -1,0 +1,28 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 542,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "playwright",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "f29381f8-1917-4c37-be5c-ca3ba59341b6",
+  "session_id": "9fd341fa-b301-42ec-8fb3-dcdbcd63afad",
+  "tool_input": {
+    "element": "Sign in button",
+    "target": "e13"
+  },
+  "tool_name": "mcp__playwright__browser_click",
+  "tool_response": [
+    {
+      "text": "### Ran Playwright code\n```js\nawait page.getByRole('button', { name: 'Sign in' }).click();\n```\n### Page\n- Page URL: http://127.0.0.1:5179/\n- Page Title: Sign in\n- Console: 1 errors, 0 warnings\n### Snapshot\n- [Snapshot](.playwright-mcp/page-2026-11-08T21-23-03-062Z.yml)",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01BwzfA8rDH5NHfaJp7yZJXP",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/9fd341fa-b301-42ec-8fb3-dcdbcd63afad.jsonl"
+}

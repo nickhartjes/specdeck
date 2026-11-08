@@ -387,6 +387,7 @@ mod tests {
             tool_name: tool_name.into(),
             input: serde_json::Map::new(),
             target: None,
+            targets: None,
         }
     }
 
