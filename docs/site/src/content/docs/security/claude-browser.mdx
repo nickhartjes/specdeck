@@ -1,0 +1,39 @@
+---
+title: Claude's browser
+description: How the browser SpecDeck gives Claude Code is kept apart from the app and your own browsers.
+---
+
+import ClaudeBrowser from '../../../assets/security/claude-browser.svg';
+
+On macOS, a Claude Code session gets a browser of its own, so Claude can check the web app it builds. [Claude's browser](/specdeck/guide/browser/) in the user guide says how to use it; this page says how it is kept apart. You can turn it off with **Give Claude a browser** in [Settings](/specdeck/guide/settings/), for sessions you start afterwards.
+
+<ClaudeBrowser />
+
+## Only the session's own Claude Code can use it
+
+Claude Code reaches the browser through a small web server that SpecDeck starts for each session. The same server receives the events that build the session's timeline.
+
+- **It listens on `127.0.0.1` only**, on a port the system picks, so nothing on your network can reach it.
+- **Every request needs the session's token.** The token is 32 random bytes, new for every session, and the server refuses any request to `/hooks`, `/status` or `/mcp` without it. Another program on your computer that finds the port still gets nothing.
+- **The token is not written to disk.** Claude Code gets it in its environment, as `SPECDECK_HOOK_TOKEN`. The settings files SpecDeck gives Claude Code, including the MCP configuration that adds the browser, contain `${SPECDECK_HOOK_TOKEN}` instead of the token, and only your account can read them. They are deleted when the session ends.
+
+Commands the agent runs inherit Claude Code's environment, and with it the token. See [Known limits](/specdeck/security/known-limits/#the-hook-token-is-visible-to-the-agents-commands).
+
+## A separate, private browser
+
+- **Hidden.** The browser is a WebKit window that is never shown, never takes the focus, and is not in the Window menu.
+- **Private and empty.** Each session's browser starts without cookies, storage, history or logins, and shares none with your own browsers, with SpecDeck's windows or with another session. It is like a private window that nobody can see.
+- **No way into SpecDeck.** A page in the browser cannot use any of SpecDeck's functions, read its settings or sessions, or type into the agent. The app grants its functions to its own windows by name, and the browser's windows are not among them.
+- **Nothing is kept.** The browser closes when the session ends, and everything it stored goes with it. If SpecDeck restarts, for example to update, the browser is gone and the next tool call starts a new, empty one.
+
+The browser opens only `http` and `https` addresses, and that includes your own computer and your local network, because checking the app on `localhost` is what it is for. Pages Claude opens are input to Claude like any other: a page could hold text meant to steer the agent. Claude Code's own permission rules are your guard against that.
+
+## Claude Code asks first
+
+SpecDeck does not approve the browser tools on your behalf, neither in the settings it gives Claude Code nor in its answers to permission requests. Claude Code treats them like any other MCP tool, under your own permission rules and mode: in the default mode it asks you before it first uses each one; in auto mode it decides itself. In rules, the tools are named `mcp__specdeck__navigate`, `mcp__specdeck__screenshot` and so on.
+
+## What viewers see
+
+Viewers see the browser steps in the timeline, such as *Opened localhost:5173/login in its browser*, and what Claude types into pages, as they see any other tool. Use test accounts, not your own passwords.
+
+**Screenshots** the browser takes are kept in the timeline with the page's address, and everyone in the session sees them, including people who join later. A screenshot can show more than the terminal does. To keep them out, turn off **Show screenshots in the timeline** in [Settings](/specdeck/guide/settings/): sessions you start afterwards then only say that Claude took a screenshot. The same applies to pictures from other MCP tools, such as Playwright MCP.

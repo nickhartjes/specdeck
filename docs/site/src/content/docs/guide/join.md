@@ -21,7 +21,7 @@ A join link also names the host's sharing service. If it is not the one you use,
 - Tick **Use this service from now on** to make it your sharing service in [Settings](/specdeck/guide/settings/).
 - **Cancel** connects nowhere.
 
-The other service cannot read the session, but it sees your network address, so join only through links you trust.
+The other service cannot read the session, but it sees your network address, and whoever runs it could in principle intercept your join (see [The sharing service](/specdeck/security/sharing-service/)). Join only through links you trust.
 
 A code typed on its own always uses your own sharing service. When host and viewer use different services, share the link.
 
@@ -50,6 +50,7 @@ You see the session as in the app: the files, the terminal and documents in tabs
 - **Your name, layout and appearance** stay in this browser only. There is no account. Choose **System**, **Light** or **Dark** in the layout menu in the toolbar; System follows your browser.
 - **The code** is removed from the address bar once the page has read it, and is never sent to the server: it sits after the `#`, which browsers keep to themselves.
 - **Each page joins only sessions on its own sharing service.** An invite for another service gets a link to that service's own page, never a connection from this one.
+- **The page's code comes from the sharing service**, so watching in a browser means trusting whoever runs it. See [The web viewer's code](/specdeck/security/sharing-service/#the-web-viewers-code).
 - **Some keys differ**, because the browser keeps its own:
 
   | To | Press |
