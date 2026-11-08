@@ -43,6 +43,14 @@ kubectl apply -k deploy/k8s/base     # or your overlay
 - Both pods meet the `restricted` Pod Security Standard.
 - To try it on your own machine, `just local-up` deploys the `local` overlay to Colima's k3s.
 
+## Which version runs
+
+From 1.7 on, the server states the release it runs. After a rollout, check it through your Ingress:
+
+```sh
+curl https://specdeck.example.com/web-viewer.json   # prints, for example: {"protocol":6,"version":"1.7.0"}
+```
+
 ## Upgrading from 1.6
 
 In 1.7 the Deployment and Service were renamed from `specdeck-signalling` to `specdeck-server`, and the image to `ghcr.io/nickhartjes/specdeck-server`. Kubernetes cannot rename them in place, so the upgrade creates the new ones next to the old ones; the old ones keep serving until you switch over.
@@ -54,7 +62,7 @@ In 1.7 the Deployment and Service were renamed from `specdeck-signalling` to `sp
    kubectl rollout status deployment/specdeck-server
    ```
 
-2. Point your Ingress's backend at the `specdeck-server` Service (port 8080) instead of `specdeck-signalling`, and apply it. Check that the apps and the web viewer connect.
+2. Point your Ingress's backend at the `specdeck-server` Service (port 8080) instead of `specdeck-signalling`, and apply it. Check that the apps and the web viewer connect, and that `/web-viewer.json` gives the new version.
 3. Remove the old Deployment and Service:
 
    ```sh
