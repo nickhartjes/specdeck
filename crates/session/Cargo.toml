@@ -17,6 +17,7 @@ specdeck-local.workspace = true
 specdeck-protocol.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.23"
 tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "signal"] }
 tracing = "0.1"
 

@@ -16,12 +16,12 @@ use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession};
 use specdeck_core::sharing::{Answer, ServiceState, Sharing, SharingConfig, SharingEvent};
 use specdeck_core::viewer::{
-    CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerPhase, ViewerSession,
+    CONNECT_TIMEOUT, FileError, ViewerConfig, ViewerEvent, ViewerPhase, ViewerSession,
 };
 use specdeck_protocol::AgentId;
 use specdeck_protocol::control::{
     MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant, RefusalReason,
-    SuggestionState,
+    SharedFileInfo, SuggestionState,
 };
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
@@ -1163,4 +1163,185 @@ async fn a_large_screenshot_reaches_viewers_made_smaller() {
         seen.text.contains("got:after")
     })
     .await;
+}
+
+fn is_file_shared(event: &ViewerEvent) -> bool {
+    matches!(event, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::FileShared { .. }))
+}
+
+/// The files a viewer was last told about, once `done` holds for them.
+async fn files_until(
+    events: &mut UnboundedReceiver<ViewerEvent>,
+    seen: &mut Seen,
+    done: impl Fn(&[SharedFileInfo]) -> bool,
+) -> Vec<SharedFileInfo> {
+    let event =
+        until(events, seen, |_, e| matches!(e, ViewerEvent::Files(files) if done(files))).await;
+    let ViewerEvent::Files(files) = event else { unreachable!() };
+    files
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shared_file_reaches_viewers_while_the_terminal_keeps_up() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("ready")).await;
+
+    let log: Vec<u8> = (0..3_000_000u32).map(|n| b'a' + (n % 26) as u8).collect();
+    let info = hosted.session.share_file("nick", "ci-failure.log", log.clone()).unwrap();
+    // The list and the step come on different channels, in either order.
+    let (mut step, mut listed) = (false, Vec::new());
+    while !step || listed.is_empty() {
+        match until(&mut events, &mut seen, |_, e| {
+            is_file_shared(e) || matches!(e, ViewerEvent::Files(f) if !f.is_empty())
+        })
+        .await
+        {
+            ViewerEvent::Files(files) => listed = files,
+            _ => step = true,
+        }
+    }
+    assert_eq!(listed, std::slice::from_ref(&info));
+    assert_eq!(
+        (info.name.as_str(), info.by, info.by_label.as_str()),
+        ("ci-failure.log", 0, "nick")
+    );
+
+    let fetched = viewer.fetch_file(info.file);
+    hosted.session.input(b"during\r").unwrap();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:during")).await;
+    let bytes = tokio::time::timeout(WAIT, fetched).await.expect("no file").unwrap().unwrap();
+    assert!(bytes == log, "the file arrived changed");
+
+    // Removed: gone from the list, and no longer sent.
+    hosted.session.remove_shared_file(info.file).unwrap();
+    files_until(&mut events, &mut seen, |files| files.is_empty()).await;
+    let again = tokio::time::timeout(WAIT, viewer.fetch_file(info.file)).await.unwrap().unwrap();
+    assert_eq!(again, Err(FileError::Gone));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn viewers_share_files_only_when_the_host_allows_it() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut anna_events) = join(&url, &code, "anna");
+    let mut seen_anna = Seen::default();
+    let allowed = until(&mut anna_events, &mut seen_anna, |_, e| {
+        matches!(e, ViewerEvent::FilesAllowed { .. })
+    })
+    .await;
+    assert_eq!(allowed, ViewerEvent::FilesAllowed { files: false }, "off when a session starts");
+    let (bob, mut bob_events) = join(&url, &code, "bob");
+    let mut seen_bob = Seen::default();
+    until(&mut bob_events, &mut seen_bob, |seen, _| seen.welcome.is_some()).await;
+
+    let share = |viewer: &ViewerSession, name: &str, bytes: &[u8]| {
+        viewer.share_file(name.into(), bytes.to_vec())
+    };
+    let outcome = tokio::time::timeout(WAIT, share(&anna, "notes.md", b"# Notes")).await.unwrap();
+    assert_eq!(outcome, Ok(Outcome::Off));
+
+    hosted.session.allow_viewer_files(true);
+    until(&mut anna_events, &mut seen_anna, |_, e| *e == ViewerEvent::FilesAllowed { files: true })
+        .await;
+    let outcome =
+        tokio::time::timeout(WAIT, share(&anna, "../notes.md", b"# Notes")).await.unwrap();
+    assert_eq!(outcome, Ok(Outcome::Received));
+    let files = files_until(&mut bob_events, &mut seen_bob, |files| files.len() == 1).await;
+    assert_eq!((files[0].name.as_str(), files[0].by_label.as_str()), ("notes.md", "anna"));
+    assert_eq!(hosted.session.shared_file(files[0].file).unwrap().bytes.as_ref(), b"# Notes");
+    let fetched = tokio::time::timeout(WAIT, bob.fetch_file(files[0].file)).await.unwrap();
+    assert_eq!(fetched.unwrap().unwrap(), b"# Notes");
+
+    // Refused by size before anything is sent, and by content once it arrived.
+    let big = vec![b'x'; 10 * 1024 * 1024 + 1];
+    let outcome = tokio::time::timeout(WAIT, share(&anna, "big.log", &big)).await.unwrap();
+    assert_eq!(outcome, Ok(Outcome::TooLarge));
+    let binary = b"MZ\0\x90\0\x03";
+    let outcome = tokio::time::timeout(WAIT, share(&anna, "notes.txt", binary)).await.unwrap();
+    assert_eq!(outcome, Ok(Outcome::NotAllowedType));
+
+    // A viewer removes only their own file; the host any.
+    bob.remove_file(files[0].file);
+    let reply = until(&mut bob_events, &mut seen_bob, |_, e| is_reply(e).is_some()).await;
+    assert_eq!(is_reply(&reply), Some(Outcome::Gone));
+    anna.remove_file(files[0].file);
+    files_until(&mut bob_events, &mut seen_bob, |files| files.is_empty()).await;
+    assert!(hosted.session.shared_file(files[0].file).is_none());
+
+    // Turning it off keeps what is shared, and refuses new files.
+    let kept = tokio::time::timeout(WAIT, share(&anna, "kept.txt", b"kept")).await.unwrap();
+    assert_eq!(kept, Ok(Outcome::Received));
+    hosted.session.allow_viewer_files(false);
+    until(&mut anna_events, &mut seen_anna, |_, e| {
+        *e == ViewerEvent::FilesAllowed { files: false }
+    })
+    .await;
+    let outcome = tokio::time::timeout(WAIT, share(&anna, "late.txt", b"late")).await.unwrap();
+    assert_eq!(outcome, Ok(Outcome::Off));
+    assert_eq!(hosted.session.view().shared_files().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_joiner_gets_the_shared_files_and_their_steps() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+    let info = hosted.session.share_file("nick", "wireframe", png.to_vec()).unwrap();
+    assert_eq!(info.name, "wireframe.png");
+
+    let (late, mut events) = join(&url, &code, "carl");
+    let mut seen = Seen::default();
+    let files = files_until(&mut events, &mut seen, |files| files.len() == 1).await;
+    assert_eq!(files[0].media_type, "image/png");
+    let step = until(&mut events, &mut seen, |_, e| is_file_shared(e)).await;
+    let ViewerEvent::Timeline { event, .. } = step else { unreachable!() };
+    let Entry::FileShared { file, by_label, .. } = event.entry else { unreachable!() };
+    assert_eq!((file, by_label.as_str()), (info.file, "nick"));
+    let bytes = tokio::time::timeout(WAIT, late.fetch_file(info.file)).await.unwrap();
+    assert_eq!(bytes.unwrap().unwrap(), png);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_older_viewer_never_hears_of_shared_files() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (_older, mut older) = join_speaking(&url, &code, "anna", MIN_VIEWER_PROTOCOL_VERSION);
+    let mut seen = Seen::default();
+    until(&mut older, &mut seen, |seen, _| seen.text.contains("ready")).await;
+
+    let info = hosted.session.share_file("nick", "a.md", b"# A".to_vec()).unwrap();
+    hosted.session.allow_viewer_files(true);
+    hosted.session.remove_shared_file(info.file).unwrap();
+    hosted.session.share_file("nick", "b.md", b"# B".to_vec()).unwrap();
+    hosted.session.input(b"later\r").unwrap();
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let event = older.recv().await.expect("viewer stopped");
+            assert!(!is_file_shared(&event), "a version 3 viewer got a shared file's step");
+            assert!(
+                !matches!(event, ViewerEvent::Files(_) | ViewerEvent::FilesAllowed { .. }),
+                "a version 3 viewer got {event:?}"
+            );
+            assert_ne!(event, ViewerEvent::Reconnecting, "the older viewer dropped");
+            if let ViewerEvent::Records(records) = &event {
+                for record in records {
+                    if let Record::Output { bytes, .. } = record {
+                        seen.text.push_str(&String::from_utf8_lossy(bytes));
+                    }
+                }
+            }
+            if seen.text.contains("got:later") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the older viewer stopped following");
 }

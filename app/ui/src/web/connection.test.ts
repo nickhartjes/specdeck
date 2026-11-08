@@ -120,6 +120,21 @@ function fakeCore(): FakeCore {
     },
     unansweredRequests: () => core.unanswered,
     unanswered: [],
+    shareFile: (name) => ({ id: 50 + name.length, message: new Uint8Array([3, 50 + name.length]) }),
+    removeFile: (file) => ({ id: 90, message: new Uint8Array([3, 90, file]) }),
+    // Fetches: [5, file] asks; a reply [1] is a chunk, [2] the end, [3] gone.
+    fetchFile: (file) => ({
+      request: () => new Uint8Array([5, file]),
+      onReply: (bytes) => (bytes[0] === 1 ? { progress: 1 } : bytes[0] === 2 ? { done: new Uint8Array([42]) } : bytes[0] === 3 ? { failed: true, gone: true } : {}),
+    }),
+    // Uploads: one chunk [6, upload]; a reply [4] finishes it.
+    uploadFile: (upload) => {
+      let sent = false;
+      return {
+        nextChunks: () => (sent ? [] : ((sent = true), [new Uint8Array([6, upload])])),
+        onReply: (bytes) => (bytes[0] === 4 ? { finished: 'Received' as const } : {}),
+      };
+    },
   };
   return core;
 }
@@ -187,7 +202,7 @@ describe('web viewer connection', () => {
       payload: { type: 'description', kind: 'offer', sdp: 'offer-sdp', mac: 'mac-c1' },
     });
     expect(peer.config.iceServers).toEqual([{ urls: 'turn:turn.example.com:3478?transport=udp', username: 'u', credential: 'c' }]);
-    expect(peer.channels.map((channel) => channel.label)).toEqual(['control', 'stream']);
+    expect(peer.channels.map((channel) => channel.label)).toEqual(['control', 'stream', 'files']);
     expect(peer.remote).toEqual({ type: 'answer', sdp: 'answer-sdp' });
   });
 
@@ -228,6 +243,47 @@ describe('web viewer connection', () => {
     second.peer.channel('control').receive([0]);
     // The fake core never removed them, so both go again; the real one drops answered ones.
     expect(second.peer.channel('control').sent.slice(1)).toEqual([new Uint8Array([3, 1]), new Uint8Array([3, 2])]);
+  });
+
+  it('opens a files channel, fetches one file at a time and shares files after the host is ready', async () => {
+    const core = fakeCore();
+    const file = { file: 7, name: 'a.md', kind: 'markdown', mediaType: 'text/markdown', size: 1, sha256: [], by: 0, byLabel: 'nick', atMs: 1 } as const;
+    core.controls.push(
+      welcome,
+      { type: 'files-allowed', files: true },
+      { type: 'files', files: [{ ...file, sha256: [] }] },
+      { type: 'reply', id: 54, outcome: { Ready: { upload: 3 } } },
+    );
+    const { sockets, peers, events, connection } = setup(core);
+    const { peer } = await reachHost(sockets, peers);
+    expect(peer.channels.map((channel) => channel.label)).toEqual(['control', 'stream', 'files']);
+    const control = peer.channel('control');
+    const files = peer.channel('files');
+    control.open();
+    files.open();
+    control.receive([0]);
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'files-allowed', files: true });
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'shared-files', files: [file] });
+
+    const opened = connection.openFile(7);
+    const missing = connection.openFile(8);
+    expect(files.sent).toEqual([new Uint8Array([5, 7])]);
+    files.receive([1]);
+    expect(events.at(-1)).toEqual({ type: 'file-progress', file: 7, received: 1, size: 1 });
+    files.receive([2]);
+    expect(new Uint8Array(await opened)).toEqual(new Uint8Array([42]));
+    await expect(missing).rejects.toThrow('no longer shared');
+
+    const shared = connection.shareFile('b.md', new Uint8Array([1]));
+    expect(control.sent.at(-1)).toEqual(new Uint8Array([3, 54]));
+    control.receive([0]);
+    expect(files.sent.at(-1)).toEqual(new Uint8Array([6, 3]));
+    files.receive([4]);
+    await expect(shared).resolves.toBe('Received');
+    // Files report back on their own: the suggestions' latest request stays as it was.
+    expect(events.some((event) => event.type === 'request-sent')).toBe(false);
   });
 
   it('says the code is invalid when its room does not exist', async () => {

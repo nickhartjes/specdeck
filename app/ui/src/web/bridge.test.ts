@@ -126,6 +126,27 @@ describe('web bridge', () => {
   });
 });
 
+describe('shared files in the browser', () => {
+  it('saves a copy as a download under the shared name', async () => {
+    const clicked: HTMLAnchorElement[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this);
+    });
+    URL.createObjectURL ??= () => '';
+    URL.revokeObjectURL ??= () => {};
+    const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:shared');
+    expect(await bridge().saveSharedFile('ci-failure.log', new Uint8Array([1, 2]).buffer)).toBe(true);
+    expect(clicked[0]?.download).toBe('ci-failure.log');
+    expect(clicked[0]?.href).toBe('blob:shared');
+    click.mockRestore();
+    create.mockRestore();
+  });
+
+  it('cannot host, so it shares no file as the host', async () => {
+    await expect(bridge().hostShareFile('a.md', new ArrayBuffer(1))).rejects.toThrow('only watch');
+  });
+});
+
 /** The browser's notifications, with the answer the viewer gives when asked. */
 function fakeNotifications(answer: NotificationPermission = 'granted') {
   let permission: NotificationPermission = 'default';

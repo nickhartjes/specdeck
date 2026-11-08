@@ -2,13 +2,14 @@
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import init, { WebViewer, parseJoinLink } from 'specdeck-web-wasm';
+import init, { FileFetch, FileUpload, WebViewer, parseJoinLink } from 'specdeck-web-wasm';
 import { BridgeContext } from '../api/bridge';
 import { applyAppearance } from '../appearance';
 import '../styles.css';
 import '../highlight.css';
+import '../shared-files.css';
 import { storedAppearance, webBridge } from './bridge';
-import type { ControlUpdate, Request, StreamUpdate, ViewerCore } from './connection';
+import type { ControlUpdate, FetchUpdate, Request, StreamUpdate, ViewerCore } from './connection';
 import { WebApp, takeHashCode } from './WebApp';
 
 /** This page's own sharing service: `signal` next to the page, over WebSocket. */
@@ -32,6 +33,19 @@ function core(code: string): ViewerCore {
     admittedOnce: () => viewer.admittedOnce(),
     suggest: (text) => viewer.suggest(text) as Request,
     unansweredRequests: () => viewer.unansweredRequests() as Request[],
+    shareFile: (name, bytes) => viewer.shareFile(name, bytes) as Request,
+    removeFile: (file) => viewer.removeFile(file) as Request,
+    fetchFile: (file, size, sha256) => {
+      const fetch = new FileFetch(file, BigInt(size), sha256);
+      return { request: () => fetch.request(), onReply: (bytes) => fetch.onReply(bytes) as FetchUpdate };
+    },
+    uploadFile: (upload, bytes) => {
+      const sending = new FileUpload(upload, bytes);
+      return {
+        nextChunks: () => sending.nextChunks() as Uint8Array[],
+        onReply: (bytes) => sending.onReply(bytes) as ReturnType<ReturnType<ViewerCore['uploadFile']>['onReply']>,
+      };
+    },
   };
 }
 

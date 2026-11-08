@@ -1,7 +1,7 @@
-//! One WebRTC connection between the host and a viewer, with the two data channels of the
-//! protocol (`control` and `stream`), reported as async events (design decision 6).
+//! One WebRTC connection between the host and a viewer, with the data channels of the protocol
+//! (`control`, `stream` and `files`), reported as async events (design decision 6).
 //!
-//! The viewer offers and opens both channels; the host answers. Remote ICE candidates wait until
+//! The viewer offers and opens the channels; the host answers. Remote ICE candidates wait until
 //! local gathering is complete: checks started before the local relay address exists are sent
 //! without it and can leave a relayed connection stuck.
 
@@ -26,6 +26,8 @@ pub const BUFFERED_LOW: usize = 256 * 1024;
 pub enum Channel {
     Control,
     Stream,
+    /// Shared files' bytes (`shared-files` design decision 1).
+    Files,
 }
 
 impl Channel {
@@ -33,6 +35,7 @@ impl Channel {
         match self {
             Channel::Control => "control",
             Channel::Stream => "stream",
+            Channel::Files => "files",
         }
     }
 
@@ -40,6 +43,7 @@ impl Channel {
         match label {
             "control" => Some(Channel::Control),
             "stream" => Some(Channel::Stream),
+            "files" => Some(Channel::Files),
             _ => None,
         }
     }
@@ -139,7 +143,7 @@ impl PeerConfig {
     }
 }
 
-type Channels = Arc<Mutex<[Option<Box<RtcDataChannel<ChannelHandler>>>; 2]>>;
+type Channels = Arc<Mutex<[Option<Box<RtcDataChannel<ChannelHandler>>>; 3]>>;
 
 pub struct Peer {
     pc: Box<RtcPeerConnection<Handler>>,
@@ -199,13 +203,13 @@ struct Gathering {
 }
 
 impl Peer {
-    /// The viewer's side: creates both channels, which makes the connection produce its offer.
+    /// The viewer's side: creates the channels, which makes the connection produce its offer.
     pub fn offer(
         config: &PeerConfig,
         events: UnboundedSender<PeerEvent>,
     ) -> datachannel::Result<Self> {
         let mut peer = Self::new(config, events.clone(), true)?;
-        for channel in [Channel::Control, Channel::Stream] {
+        for channel in [Channel::Control, Channel::Stream, Channel::Files] {
             let handler = ChannelHandler {
                 channel,
                 events: events.clone(),
@@ -486,7 +490,7 @@ mod tests {
         assert_eq!(candidates.types("10.0.0.1:1", "203.0.113.9:61234").0, CandidateType::Unknown);
     }
 
-    /// Delivers one side's events to the other until both channels are open on both sides.
+    /// Delivers one side's events to the other until every channel is open on both sides.
     async fn connect(
         viewer: &mut Peer,
         viewer_events: &mut UnboundedReceiver<PeerEvent>,
@@ -494,7 +498,7 @@ mod tests {
         host_events: &mut UnboundedReceiver<PeerEvent>,
     ) {
         let mut open = 0;
-        while open < 4 {
+        while open < 6 {
             tokio::select! {
                 Some(event) = viewer_events.recv() => match event {
                     PeerEvent::Description { kind, sdp } => host.set_remote_description(kind, &sdp).unwrap(),
@@ -515,7 +519,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn both_channels_carry_messages_both_ways() {
+    async fn every_channel_carries_messages_both_ways() {
         let (viewer_tx, mut viewer_events) = unbounded_channel();
         let (host_tx, mut host_events) = unbounded_channel();
         let mut viewer = Peer::offer(&loopback(), viewer_tx).unwrap();
@@ -529,9 +533,11 @@ mod tests {
 
         viewer.send(Channel::Control, b"hello").unwrap();
         host.send(Channel::Stream, b"frame").unwrap();
+        viewer.send(Channel::Files, b"fetch").unwrap();
+        host.send(Channel::Files, b"chunk").unwrap();
         let mut got = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while got.len() < 2 {
+        while got.len() < 4 {
             let event = tokio::select! {
                 Some(event) = host_events.recv() => event,
                 Some(event) = viewer_events.recv() => event,
@@ -543,6 +549,8 @@ mod tests {
         }
         assert!(got.contains(&(Channel::Control, b"hello".to_vec())));
         assert!(got.contains(&(Channel::Stream, b"frame".to_vec())));
+        assert!(got.contains(&(Channel::Files, b"fetch".to_vec())));
+        assert!(got.contains(&(Channel::Files, b"chunk".to_vec())));
         assert!(host.buffered_amount(Channel::Stream) < BUFFERED_LOW);
     }
 

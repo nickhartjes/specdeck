@@ -6,6 +6,7 @@
 //! falls behind and catches up later without ever holding up the agent or other viewers.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -13,8 +14,11 @@ use tokio::time::Instant;
 use serde::Serialize;
 use specdeck_protocol::control::{
     self, HostMessage, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
-    REQUESTS_PROTOCOL_VERSION, RefusalReason, Role, Suggestion, SuggestionState, ViewerMessage,
-    ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
+    REQUESTS_PROTOCOL_VERSION, RefusalReason, Role, SHARED_FILES_PROTOCOL_VERSION, Suggestion,
+    SuggestionState, ViewerMessage, ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
+};
+use specdeck_protocol::files::{
+    self, Assembled, Assembly, FILE_CHUNK_BYTES, FilesReply, FilesRequest,
 };
 use specdeck_protocol::frames::{Frame, MAX_FRAME_BYTES, Record, SessionKey};
 use specdeck_protocol::invite::{InviteCode, InviteKeys};
@@ -27,8 +31,9 @@ use tokio::sync::{oneshot, watch};
 
 use crate::diag::{self, LeaveReason};
 use crate::ice::turn_url_with_credentials;
-use crate::peer::{Channel, LinkState, Peer, PeerConfig, PeerEvent};
+use crate::peer::{BUFFERED_LOW, Channel, LinkState, Peer, PeerConfig, PeerEvent};
 use crate::session::SessionView;
+use crate::shared_files::Refusal;
 use crate::signalling_client::{self, SignallingSender};
 
 /// Most viewers a host can allow.
@@ -49,6 +54,13 @@ const REQUEST_BURST: f64 = 3.0;
 
 /// After the burst, one request per this long.
 const REQUEST_REFILL: Duration = Duration::from_secs(10);
+
+/// A viewer's files channel may hold this much before the next chunk waits, well under the
+/// stream channel's mark, so terminal output keeps room on the connection.
+const FILES_HIGH_WATER: usize = BUFFERED_LOW;
+
+/// An upload that gets no chunk for this long is dropped and its room freed.
+const UPLOAD_IDLE: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct SharingConfig {
@@ -279,6 +291,23 @@ struct Admitted {
     /// Frames sent on the stream channel, and their bytes.
     frames_sent: u64,
     bytes_sent: u64,
+    /// The shared file being sent to this viewer, one at a time.
+    fetch: Option<Fetch>,
+    /// The file this viewer is sending, one at a time.
+    upload: Option<Upload>,
+}
+
+struct Fetch {
+    file: u32,
+    offset: u64,
+    /// Held for the transfer, so a removal while it runs cannot change what is sent.
+    bytes: Arc<[u8]>,
+}
+
+struct Upload {
+    id: u32,
+    assembly: Assembly,
+    last: Instant,
 }
 
 struct Host {
@@ -313,6 +342,9 @@ struct Host {
     /// Whether whole code files are shared, as last told to viewers; follows the session's
     /// setting ([`SessionView::whole_files`]).
     whole_files: bool,
+    /// The shared files' version and the viewers' switch, as last told to viewers.
+    files_version: u64,
+    files_allowed: bool,
 }
 
 /// What viewers may send and what they sent: the switches, each viewer's rate limit and the
@@ -364,7 +396,7 @@ impl Requests {
         now: Instant,
     ) -> (Outcome, bool) {
         let kind = request.kind();
-        let ViewerRequest::Suggest { text } = request;
+        let ViewerRequest::Suggest { text } = request else { return (Outcome::Off, false) };
         let bytes = text.len();
         let (outcome, name) = if self.suggestions.iter().any(|s| s.viewer == viewer && s.id == id) {
             (Outcome::Received, "duplicate")
@@ -379,6 +411,11 @@ impl Requests {
         };
         diag::host_viewer_request(viewer, kind, bytes, name);
         (outcome, name == "accepted")
+    }
+
+    /// Takes one from the viewer's rate limit, shared by every kind of request.
+    fn take(&mut self, viewer: u32, now: Instant) -> bool {
+        self.buckets.entry(viewer).or_insert_with(|| Bucket::new(now)).take(now)
     }
 
     /// Records the host's answer; false when the suggestion is not waiting.
@@ -476,6 +513,8 @@ impl Host {
             traffic: diag::Traffic::default(),
             requests,
             whole_files: false,
+            files_version: 0,
+            files_allowed: false,
         }
     }
 
@@ -519,7 +558,10 @@ impl Host {
                 Ok(()) = changes.changed() => {}
                 // Waits before retrying the signalling service; only armed while it is down.
                 _ = tokio::time::sleep_until(next_attempt), if server_rx.is_none() => {}
-                _ = traffic.tick() => self.traffic.report_host(),
+                _ = traffic.tick() => {
+                    self.traffic.report_host();
+                    self.drop_stalled_uploads();
+                }
             }
             if std::mem::take(&mut self.busy) {
                 // A full service refused the connection or a room: leave it, and come back later
@@ -534,6 +576,7 @@ impl Host {
                 let _ = self.events.send(SharingEvent::Unavailable);
             }
             self.sync_whole_files();
+            self.sync_files();
             self.pump_all();
             let retry_in =
                 server_rx.is_none().then(|| next_attempt.saturating_duration_since(Instant::now()));
@@ -764,6 +807,16 @@ impl Host {
                 // A viewer that sends anything malformed is disconnected.
                 Err(_) => self.disconnect(connection, LeaveReason::Malformed),
             },
+            PeerEvent::Message(Channel::Files, bytes) => {
+                let speaks_files = slot
+                    .admitted
+                    .as_ref()
+                    .is_some_and(|admitted| admitted.protocol >= SHARED_FILES_PROTOCOL_VERSION);
+                match files::decode_request(&bytes) {
+                    Ok(request) if speaks_files => self.handle_files(connection, request),
+                    _ => self.disconnect(connection, LeaveReason::Malformed),
+                }
+            }
             // Viewers have nothing to say on the stream channel; anything there is ignored.
             _ => {}
         }
@@ -857,6 +910,8 @@ impl Host {
                     events_sent: 0,
                     frames_sent: 0,
                     bytes_sent: 0,
+                    fetch: None,
+                    upload: None,
                 });
                 let _ = slot.peer.send(Channel::Control, &control::encode(&welcome));
                 let allowed =
@@ -864,6 +919,10 @@ impl Host {
                 send_newer(slot, REQUESTS_PROTOCOL_VERSION, &allowed);
                 let shared = HostMessage::Shared { whole_files: self.whole_files };
                 send_newer(slot, WHOLE_FILES_PROTOCOL_VERSION, &shared);
+                let allowed = HostMessage::FilesAllowed { files: self.view.files_allowed() };
+                send_newer(slot, SHARED_FILES_PROTOCOL_VERSION, &allowed);
+                let list = HostMessage::Files { files: self.view.shared_files() };
+                send_newer(slot, SHARED_FILES_PROTOCOL_VERSION, &list);
                 self.send_mine(identity.id);
                 self.broadcast_participants();
             }
@@ -892,11 +951,17 @@ impl Host {
             // It said it speaks a version without requests.
             return self.disconnect(connection, LeaveReason::Malformed);
         }
-        let from = self
-            .participants()
-            .into_iter()
-            .find(|p| p.id == viewer && p.role == Role::Viewer)
-            .map_or_else(String::new, |p| p.label);
+        if matches!(request, ViewerRequest::ShareFile { .. } | ViewerRequest::RemoveFile { .. }) {
+            if admitted.protocol < SHARED_FILES_PROTOCOL_VERSION {
+                return self.disconnect(connection, LeaveReason::Malformed);
+            }
+            let outcome = self.file_request(connection, viewer, request);
+            if let Some(slot) = self.slots.get_mut(connection) {
+                send_newer(slot, REQUESTS_PROTOCOL_VERSION, &HostMessage::Reply { id, outcome });
+            }
+            return;
+        }
+        let from = self.label(viewer);
         let (outcome, added) = self.requests.receive(viewer, id, request, from, Instant::now());
         if let Some(slot) = self.slots.get_mut(connection) {
             send_newer(slot, REQUESTS_PROTOCOL_VERSION, &HostMessage::Reply { id, outcome });
@@ -904,6 +969,178 @@ impl Host {
         if added {
             self.send_mine(viewer);
             self.publish_suggestions();
+        }
+    }
+
+    /// A viewer's name as the participant list shows it now.
+    fn label(&self, viewer: u32) -> String {
+        self.participants()
+            .into_iter()
+            .find(|p| p.id == viewer && p.role == Role::Viewer)
+            .map_or_else(String::new, |p| p.label)
+    }
+
+    /// Decides on a viewer's file to share or remove (`shared-files` design decision 3). A file
+    /// to share gets room held and an upload id; its bytes follow on the files channel.
+    fn file_request(&mut self, connection: &str, viewer: u32, request: ViewerRequest) -> Outcome {
+        match request {
+            ViewerRequest::RemoveFile { file } => {
+                let outcome = match self.view.remove_shared_file(file, Some(viewer)) {
+                    Ok(_) => {
+                        diag::host_file_removed(viewer);
+                        Outcome::Received
+                    }
+                    Err(_) => Outcome::Gone,
+                };
+                diag::host_viewer_request(viewer, "remove_file", 0, outcome.as_str());
+                outcome
+            }
+            ViewerRequest::ShareFile { name, size, sha256 } => {
+                let busy = self
+                    .slots
+                    .get(connection)
+                    .and_then(|slot| slot.admitted.as_ref())
+                    .is_some_and(|admitted| admitted.upload.is_some());
+                let outcome = if !self.view.files_allowed() {
+                    Outcome::Off
+                } else if busy || !self.requests.take(viewer, Instant::now()) {
+                    Outcome::RateLimited
+                } else {
+                    match self.view.reserve_upload(viewer, name, size, sha256) {
+                        Ok(upload) => {
+                            if let Some(admitted) =
+                                self.slots.get_mut(connection).and_then(|s| s.admitted.as_mut())
+                            {
+                                let assembly = Assembly::new(size, sha256);
+                                admitted.upload =
+                                    Some(Upload { id: upload, assembly, last: Instant::now() });
+                            }
+                            Outcome::Ready { upload }
+                        }
+                        Err(refusal) => refusal_outcome(refusal),
+                    }
+                };
+                diag::host_viewer_request(viewer, "share_file", size as usize, outcome.as_str());
+                if !matches!(outcome, Outcome::Ready { .. }) {
+                    diag::host_file_shared(viewer, "unknown", size, outcome.as_str());
+                }
+                outcome
+            }
+            ViewerRequest::Suggest { .. } => Outcome::Off,
+        }
+    }
+
+    /// A message on a viewer's files channel: a fetch to start or stop, or a chunk of its upload.
+    fn handle_files(&mut self, connection: &str, request: FilesRequest) {
+        let Some(admitted) = self.slots.get_mut(connection).and_then(|s| s.admitted.as_mut())
+        else {
+            return;
+        };
+        let viewer = admitted.id;
+        match request {
+            FilesRequest::Fetch { file, from } => {
+                match self.view.shared_file(file).filter(|shared| from < shared.info.size) {
+                    Some(shared) => {
+                        admitted.fetch = Some(Fetch { file, offset: from, bytes: shared.bytes });
+                    }
+                    None => {
+                        admitted.fetch = None;
+                        self.send_files(connection, &FilesReply::Gone { file });
+                    }
+                }
+            }
+            FilesRequest::Cancel { file } => {
+                if admitted.fetch.as_ref().is_some_and(|fetch| fetch.file == file) {
+                    admitted.fetch = None;
+                }
+            }
+            FilesRequest::Upload { upload, offset, bytes } => {
+                // Chunks of an upload the host dropped meanwhile are still on their way.
+                let Some(current) = admitted.upload.as_mut().filter(|u| u.id == upload) else {
+                    return;
+                };
+                current.last = Instant::now();
+                match current.assembly.add(offset, &bytes) {
+                    Ok(Assembled::Partial) => {
+                        let received = current.assembly.received();
+                        self.send_files(connection, &FilesReply::Ack { upload, received });
+                    }
+                    Ok(Assembled::Done(bytes)) => {
+                        admitted.upload = None;
+                        let size = bytes.len() as u64;
+                        let received = size;
+                        self.send_files(connection, &FilesReply::Ack { upload, received });
+                        let label = self.label(viewer);
+                        let outcome = match self.view.complete_upload(upload, &label, bytes) {
+                            Ok(info) => {
+                                diag::host_file_shared(viewer, info.kind.as_str(), size, "shared");
+                                Outcome::Received
+                            }
+                            Err(refusal) => {
+                                diag::host_file_shared(viewer, "unknown", size, refusal.as_str());
+                                refusal_outcome(refusal)
+                            }
+                        };
+                        self.send_files(connection, &FilesReply::Finished { upload, outcome });
+                    }
+                    Err(files::AssemblyError::BadHash) => {
+                        let size = current.assembly.size();
+                        admitted.upload = None;
+                        self.view.release_upload(upload);
+                        diag::host_file_shared(viewer, "unknown", size, "hash");
+                        let outcome = Outcome::Gone;
+                        self.send_files(connection, &FilesReply::Finished { upload, outcome });
+                    }
+                    // Out of order or past the announced size: not an honest viewer.
+                    Err(_) => self.disconnect(connection, LeaveReason::Malformed),
+                }
+            }
+        }
+    }
+
+    fn send_files(&mut self, connection: &str, reply: &FilesReply) {
+        if let Some(slot) = self.slots.get_mut(connection) {
+            let _ = slot.peer.send(Channel::Files, &files::encode_reply(reply));
+        }
+    }
+
+    /// Drops uploads that stopped arriving and frees their room.
+    fn drop_stalled_uploads(&mut self) {
+        let now = Instant::now();
+        let mut stalled = Vec::new();
+        for (connection, slot) in &mut self.slots {
+            let Some(admitted) = slot.admitted.as_mut() else { continue };
+            if admitted.upload.as_ref().is_some_and(|u| now.duration_since(u.last) >= UPLOAD_IDLE) {
+                let upload = admitted.upload.take().expect("checked above");
+                self.view.release_upload(upload.id);
+                diag::host_file_shared(admitted.id, "unknown", upload.assembly.size(), "stalled");
+                stalled.push((connection.clone(), upload.id));
+            }
+        }
+        for (connection, upload) in stalled {
+            self.send_files(&connection, &FilesReply::Finished { upload, outcome: Outcome::Gone });
+        }
+    }
+
+    /// Tells viewers when the shared files or the viewers' switch changed.
+    fn sync_files(&mut self) {
+        let version = self.view.files_version();
+        if version == self.files_version {
+            return;
+        }
+        self.files_version = version;
+        let allowed = self.view.files_allowed();
+        if allowed != self.files_allowed {
+            self.files_allowed = allowed;
+            diag::host_files_allowed(allowed);
+            let message = HostMessage::FilesAllowed { files: allowed };
+            for slot in self.slots.values_mut() {
+                send_newer(slot, SHARED_FILES_PROTOCOL_VERSION, &message);
+            }
+        }
+        let list = HostMessage::Files { files: self.view.shared_files() };
+        for slot in self.slots.values_mut() {
+            send_newer(slot, SHARED_FILES_PROTOCOL_VERSION, &list);
         }
     }
 
@@ -982,9 +1219,13 @@ impl Host {
         }
     }
 
-    /// Drops a viewer's connection and records why; returns whether it had been admitted.
+    /// Drops a viewer's connection and records why; returns whether it had been admitted. An
+    /// upload still on its way is lost, and its room freed.
     fn drop_slot(&mut self, connection: &str, reason: LeaveReason) -> bool {
         let Some(slot) = self.slots.remove(connection) else { return false };
+        if let Some(upload) = slot.admitted.as_ref().and_then(|a| a.upload.as_ref()) {
+            self.view.release_upload(upload.id);
+        }
         self.record_departure(&slot, reason);
         slot.admitted.is_some()
     }
@@ -1086,7 +1327,8 @@ impl Host {
                     .send(Channel::Control, &control::encode(&HostMessage::Status { status }));
             }
             let before = (admitted.frames_sent, admitted.bytes_sent);
-            let result = pump(&self.view, &self.key, &mut slot.peer, admitted, latest);
+            let result = pump(&self.view, &self.key, &mut slot.peer, admitted, latest)
+                .and_then(|()| pump_files(&self.view, &mut slot.peer, admitted));
             self.traffic.add(admitted.frames_sent - before.0, admitted.bytes_sent - before.1);
             let queued = slot.peer.buffered_amount(Channel::Stream);
             if queued != usize::MAX {
@@ -1165,9 +1407,12 @@ fn pump(
         if sink.queued() >= HIGH_WATER {
             break;
         }
-        // An older viewer cannot decode a code file's text; it sees a gap, which it accepts.
-        if admitted.protocol < WHOLE_FILES_PROTOCOL_VERSION
-            && matches!(event.entry, Entry::FileText { .. })
+        // An older viewer cannot decode a code file's text or a shared file's step; it sees a
+        // gap, which it accepts.
+        if (admitted.protocol < WHOLE_FILES_PROTOCOL_VERSION
+            && matches!(event.entry, Entry::FileText { .. }))
+            || (admitted.protocol < SHARED_FILES_PROTOCOL_VERSION
+                && matches!(event.entry, Entry::FileShared { .. }))
         {
             admitted.event_cursor += 1;
             continue;
@@ -1184,6 +1429,44 @@ fn pump(
         admitted.event_cursor += 1;
     }
     Ok(())
+}
+
+/// Sends the viewer's fetched file in chunks while its files channel has room. A file removed
+/// meanwhile is not sent any further.
+fn pump_files(view: &SessionView, peer: &mut Peer, admitted: &mut Admitted) -> Result<(), String> {
+    let Some(file) = admitted.fetch.as_ref().map(|fetch| fetch.file) else { return Ok(()) };
+    if view.shared_file(file).is_none() {
+        admitted.fetch = None;
+        diag::host_file_sent(admitted.id, 0, "removed");
+        return peer.send(Channel::Files, &files::encode_reply(&FilesReply::Gone { file }));
+    }
+    while let Some(fetch) = admitted.fetch.as_mut() {
+        let queued = peer.buffered_amount(Channel::Files);
+        if queued == usize::MAX || queued >= FILES_HIGH_WATER {
+            break;
+        }
+        let start = fetch.offset as usize;
+        let end = (start + FILE_CHUNK_BYTES).min(fetch.bytes.len());
+        let bytes = fetch.bytes[start..end].to_vec();
+        let chunk = FilesReply::Chunk { file: fetch.file, offset: fetch.offset, bytes };
+        peer.send(Channel::Files, &files::encode_reply(&chunk))?;
+        fetch.offset = end as u64;
+        if end == fetch.bytes.len() {
+            diag::host_file_sent(admitted.id, fetch.offset, "sent");
+            admitted.fetch = None;
+        }
+    }
+    Ok(())
+}
+
+fn refusal_outcome(refusal: Refusal) -> Outcome {
+    match refusal {
+        Refusal::TooLarge => Outcome::TooLarge,
+        Refusal::Full => Outcome::Full,
+        Refusal::NotAllowedType => Outcome::NotAllowedType,
+        Refusal::Gone => Outcome::Gone,
+        Refusal::Off => Outcome::Off,
+    }
 }
 
 /// A viewer's stream channel, as the sender sees it.
@@ -1270,6 +1553,8 @@ mod tests {
             events_sent: 0,
             frames_sent: 0,
             bytes_sent: 0,
+            fetch: None,
+            upload: None,
         }
     }
 

@@ -81,6 +81,32 @@ pub enum Command {
     ShareCode {
         whole_files: bool,
     },
+    /// Whether viewers may share files (`shared-files`).
+    AllowFiles {
+        files: bool,
+    },
+    /// Shares a file the host chose in their window, `data` in base64; answered with
+    /// [`Event::Answer`] carrying the file's `SharedFileInfo`, or why it was refused.
+    ShareFile {
+        id: u64,
+        name: String,
+        data: String,
+    },
+    /// Removes any shared file.
+    RemoveSharedFile {
+        file: u32,
+    },
+    /// Answered with [`Event::Answer`] carrying the file's bytes in base64.
+    ReadSharedFile {
+        id: u64,
+        file: u32,
+    },
+    /// Puts a shared file into `shared/` in the session folder; answered with [`Event::Answer`]
+    /// carrying the path it was written to, relative to the folder.
+    PutSharedFile {
+        id: u64,
+        file: u32,
+    },
     /// The host's answer to a waiting suggestion; a sent one is typed into the agent's prompt.
     AnswerSuggestion {
         viewer_id: u32,
@@ -132,6 +158,15 @@ pub enum Event {
     /// only to an app that started the session with `browser`. The next release must keep
     /// reading it, or translate it in its adapter, for sessions this release started.
     Browser { id: u64, action: BrowserAction },
+    /// The answer to a command with the same `id`: `value` when it worked, `error` in plain
+    /// words when not.
+    Answer {
+        id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// The session has ended; the process exits.
     Ended,
 }
@@ -190,6 +225,20 @@ mod tests {
             serde_json::from_str::<Command>(share).unwrap(),
             Command::ShareCode { whole_files: true }
         );
+        let files = r#"{"type":"allow-files","files":true}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(files).unwrap(),
+            Command::AllowFiles { files: true }
+        );
+        let put = r#"{"type":"put-shared-file","id":4,"file":2}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(put).unwrap(),
+            Command::PutSharedFile { id: 4, file: 2 }
+        );
+        let answer = Event::Answer { id: 4, value: Some("shared/a.md".into()), error: None };
+        let json = serde_json::to_string(&answer).unwrap();
+        assert_eq!(json, r#"{"type":"answer","id":4,"value":"shared/a.md"}"#);
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), answer);
         let notice = Event::Notice { notice: HostNotice::ViewerJoined("Anna".into()) };
         let json = serde_json::to_string(&notice).unwrap();
         assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), notice);

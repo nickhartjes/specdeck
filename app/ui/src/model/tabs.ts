@@ -1,13 +1,13 @@
 // The tabs in the middle of the session window (`session-window` spec: Tabs in the middle,
-// Preview tabs): the terminal, and the documents, diffs and screenshots a participant opens, with
-// at most one preview tab that the next file opened replaces.
+// Preview tabs): the terminal, and the documents, diffs, screenshots and shared files a
+// participant opens, with at most one preview tab that the next file opened replaces.
 
-export type TabKind = 'terminal' | 'document' | 'diff' | 'image';
+export type TabKind = 'terminal' | 'document' | 'diff' | 'image' | 'shared';
 
 export interface OpenTab {
   id: string;
   kind: TabKind;
-  /** The file, for a document or diff tab; the tool call, for a screenshot. */
+  /** The file, for a document or diff tab; the tool call, for a screenshot; the file's id, for a shared file. */
   path?: string;
   /** What the tab is called when that is not the file's name, such as a screenshot's page. */
   title?: string;
