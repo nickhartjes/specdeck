@@ -16,7 +16,7 @@ mod tray;
 mod updates;
 mod viewer;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -67,7 +67,7 @@ struct AppState {
     /// Every hosted and watched session, and the window that shows each.
     sessions: Mutex<Sessions<SessionClient, ViewerRuntime>>,
     /// The hosted sessions as the tray shows them, in the order they started.
-    tray: Mutex<BTreeMap<SessionId, tray::Entry>>,
+    tray: tray::Entries,
     /// Which session each notification was about, for a click on it.
     notices: Mutex<notify::Notices>,
     /// The session windows show the desktop through them (macOS vibrancy, Windows 11 Mica).
@@ -717,25 +717,28 @@ fn folder_name(folder: &Path) -> String {
 
 /// Puts hosted session `id` in the tray, brings it up to date, or with `None` takes it out.
 fn update_tray(app: &AppHandle, id: SessionId, entry: Option<tray::Entry>) {
-    {
-        let state = app.state::<AppState>();
-        let mut entries = state.tray.lock().unwrap();
-        match entry {
-            Some(entry) => drop(entries.insert(id, entry)),
-            None => drop(entries.remove(&id)),
-        }
-        // Under the lock, so two sessions changing at once cannot show an older list last.
-        let entries: Vec<_> = entries.values().cloned().collect::<Vec<_>>();
-        let _ = tray::refresh(app, &entries);
-    }
+    app.state::<AppState>().tray.set(id, entry);
+    refresh_tray(app);
     running_changed(app);
+}
+
+/// Shows the tray's entries, on the main thread without waiting for it: building the menu waits
+/// on the main thread, which may be waiting on a lock this thread holds (issue #74). Each refresh
+/// reads the list when it runs, and they run there one after another, so the newest list shows
+/// last.
+fn refresh_tray(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let entries = handle.state::<AppState>().tray.list();
+        let _ = tray::refresh(&handle, &entries);
+    });
 }
 
 /// The hosted sessions without a window, for the start screen (`running-sessions-on-start`).
 fn running_list(app: &AppHandle) -> Vec<running::RunningSession> {
     let state = app.state::<AppState>();
     // One lock at a time: the tray's entries first, then the sessions.
-    let entries = state.tray.lock().unwrap().clone();
+    let entries = state.tray.by_session();
     let sessions = state.sessions.lock().unwrap();
     running::list(&entries, &sessions)
 }
@@ -789,14 +792,10 @@ async fn end_running_session(app: AppHandle, id: SessionId) -> Result<(), String
 
 /// A hosted session's summary changed; ignored once the session has left the tray.
 fn update_tray_summary(app: &AppHandle, id: SessionId, summary: Summary) {
-    let entry = {
-        let state = app.state::<AppState>();
-        let mut entries = state.tray.lock().unwrap();
-        let Some(entry) = entries.get_mut(&id) else { return };
-        entry.summary = summary;
-        entry.clone()
-    };
-    update_tray(app, id, Some(entry));
+    if app.state::<AppState>().tray.set_summary(id, summary) {
+        refresh_tray(app);
+        running_changed(app);
+    }
 }
 
 #[tauri::command]
@@ -1985,7 +1984,7 @@ pub fn run() {
                 services: Services::from_environment(),
                 environment,
                 sessions: Mutex::default(),
-                tray: Mutex::default(),
+                tray: tray::Entries::default(),
                 notices: Mutex::default(),
                 translucent: AtomicBool::new(false),
                 join_links: Mutex::default(),
@@ -2210,7 +2209,7 @@ mod tests {
             },
             environment,
             sessions: Mutex::default(),
-            tray: Mutex::default(),
+            tray: tray::Entries::default(),
             notices: Mutex::default(),
             translucent: AtomicBool::new(false),
             join_links: Mutex::default(),

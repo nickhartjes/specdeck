@@ -3,6 +3,9 @@
 //! and ending it, also while the window is closed. One icon serves every hosted session
 //! (`multiple-windows` design decision 6): one session gets a flat menu, several a submenu each.
 
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::{AgentId, AgentStatus};
 use tauri::image::Image;
@@ -60,6 +63,42 @@ pub struct Entry {
     /// False for a session an older SpecDeck started, which this one can only end
     /// (`session-processes` design decision 3).
     pub controllable: bool,
+}
+
+/// The hosted sessions as the tray shows them, in the order they started.
+///
+/// The lock never leaves these methods: showing the entries waits on the main thread, which may
+/// itself wait on this lock, so it must never be held there (issue #74).
+#[derive(Default)]
+pub struct Entries(Mutex<BTreeMap<SessionId, Entry>>);
+
+impl Entries {
+    /// Puts session `id` in, brings it up to date, or with `None` takes it out.
+    pub fn set(&self, id: SessionId, entry: Option<Entry>) {
+        let mut entries = self.0.lock().unwrap();
+        match entry {
+            Some(entry) => drop(entries.insert(id, entry)),
+            None => drop(entries.remove(&id)),
+        }
+    }
+
+    /// Brings session `id`'s summary up to date; false once it has left the tray.
+    pub fn set_summary(&self, id: SessionId, summary: Summary) -> bool {
+        let mut entries = self.0.lock().unwrap();
+        let Some(entry) = entries.get_mut(&id) else { return false };
+        entry.summary = summary;
+        true
+    }
+
+    /// The entries by session.
+    pub fn by_session(&self) -> BTreeMap<SessionId, Entry> {
+        self.0.lock().unwrap().clone()
+    }
+
+    /// The entries in the order they started, to show.
+    pub fn list(&self) -> Vec<Entry> {
+        self.0.lock().unwrap().values().cloned().collect()
+    }
 }
 
 /// The first line of the menu: what the agent is doing.
@@ -214,6 +253,81 @@ mod tests {
         Summary { status, viewers, code: None, sharing }
     }
 
+    fn entry(id: SessionId, folder: &str) -> Entry {
+        Entry {
+            id,
+            folder: folder.into(),
+            agent: AgentId::ClaudeCode,
+            summary: summary(AgentStatus::Working, 2, SharingState::Ready),
+            controllable: true,
+        }
+    }
+
+    /// Issue #74: a reattached session's summary is being shown, and showing it waits on the main
+    /// thread, while the main thread (`setup`, through `running_list`) asks for the entries. The
+    /// refresh holds no lock while it waits, so the main thread gets them.
+    #[test]
+    fn the_entries_can_be_read_while_a_refresh_waits_on_the_main_thread() {
+        use std::sync::{Arc, mpsc};
+        use std::time::Duration;
+
+        let entries = Arc::new(Entries::default());
+        entries.set(1, Some(entry(1, "shop")));
+        let (waiting_tx, waiting) = mpsc::channel();
+        let (main_tx, main) = mpsc::channel::<()>();
+        let refreshing = entries.clone();
+        let refresh = std::thread::spawn(move || {
+            assert!(
+                refreshing.set_summary(1, summary(AgentStatus::Waiting, 1, SharingState::Ready))
+            );
+            let shown = refreshing.list();
+            // Building the menu: waits until the main thread runs it.
+            waiting_tx.send(()).unwrap();
+            main.recv().unwrap();
+            shown
+        });
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        // The main thread, mid-refresh: this would wait forever if the refresh held the lock.
+        let (read_tx, read) = mpsc::channel();
+        let reading = entries.clone();
+        std::thread::spawn(move || read_tx.send(reading.by_session()).unwrap());
+        let listed = read.recv_timeout(Duration::from_secs(5)).expect("the entries stayed locked");
+        assert_eq!(listed[&1].summary.status, AgentStatus::Waiting);
+        main_tx.send(()).unwrap();
+        assert_eq!(refresh.join().unwrap().len(), 1);
+    }
+
+    /// Refreshes run on the main thread one after another, each with the list as it is then, so
+    /// the last one shows the newest list whatever order the changes came in.
+    #[test]
+    fn the_last_refresh_shows_the_newest_list() {
+        use std::sync::{Arc, mpsc};
+
+        let entries = Arc::new(Entries::default());
+        let (main_tx, main) = mpsc::channel::<Box<dyn FnOnce() -> Vec<Entry> + Send>>();
+        let changes: Vec<_> = [(1, "shop"), (2, "api"), (3, "docs")]
+            .into_iter()
+            .map(|(id, folder)| {
+                let (entries, main_tx) = (entries.clone(), main_tx.clone());
+                std::thread::spawn(move || {
+                    entries.set(id, Some(entry(id, folder)));
+                    let shown = entries.clone();
+                    main_tx.send(Box::new(move || shown.list())).unwrap();
+                })
+            })
+            .collect();
+        for change in changes {
+            change.join().unwrap();
+        }
+        entries.set(2, None);
+        let shown = entries.clone();
+        main_tx.send(Box::new(move || shown.list())).unwrap();
+        drop(main_tx);
+        let last = main.into_iter().map(|refresh| refresh()).last().unwrap();
+        let folders: Vec<_> = last.iter().map(|entry| entry.folder.as_str()).collect();
+        assert_eq!(folders, ["shop", "docs"]);
+    }
+
     #[test]
     fn says_what_the_agent_does_and_who_watches() {
         let waiting = summary(AgentStatus::Waiting, 3, SharingState::Ready);
@@ -257,13 +371,6 @@ mod tests {
 
     #[test]
     fn the_tooltip_names_one_session_or_counts_several() {
-        let entry = |id, folder: &str| Entry {
-            id,
-            folder: folder.into(),
-            agent: AgentId::ClaudeCode,
-            summary: summary(AgentStatus::Working, 2, SharingState::Ready),
-            controllable: true,
-        };
         assert_eq!(tooltip(&[entry(1, "shop")]), "SpecDeck: hosting shop · 2 viewers");
         assert_eq!(tooltip(&[entry(1, "shop"), entry(2, "api")]), "SpecDeck: hosting 2 sessions");
     }
