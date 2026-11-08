@@ -325,6 +325,12 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
       open(target) {
         if (target.kind === "document") {
           if (written.documents.has(target.path)) openDocument(target.path);
+        } else if (target.kind === "shared") {
+          // Only while it is still shared or in the braindump (`notification-bell`).
+          const file =
+            props.shared?.files.find((f) => f.file === target.file) ??
+            props.shared?.braindump?.items.find((item) => item.info.file === target.file)?.info;
+          if (file) openShared(file.file, file.name);
         } else if (planIn(model, target.toolUseId)) {
           show(
             openTab(tabs, "plan", target.toolUseId, {

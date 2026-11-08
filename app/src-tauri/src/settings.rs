@@ -67,11 +67,26 @@ pub struct ViewerNotifications {
     pub reads: bool,
     /// The host starts a vote, or a new round of one.
     pub estimates: bool,
+    /// Someone else shares a file (`notification-bell`); off by default, like the two below.
+    pub files: bool,
+    /// The host shares a link.
+    pub links: bool,
+    /// Someone else adds to the braindump.
+    pub braindump: bool,
 }
 
 impl Default for ViewerNotifications {
     fn default() -> Self {
-        Self { plans: true, documents: true, finished: false, reads: true, estimates: true }
+        Self {
+            plans: true,
+            documents: true,
+            finished: false,
+            reads: true,
+            estimates: true,
+            files: false,
+            links: false,
+            braindump: false,
+        }
     }
 }
 
@@ -84,6 +99,9 @@ pub enum ViewerNotificationKind {
     Finished,
     Reads,
     Estimates,
+    Files,
+    Links,
+    Braindump,
 }
 
 impl ViewerNotificationKind {
@@ -94,6 +112,9 @@ impl ViewerNotificationKind {
             Self::Finished => "finished",
             Self::Reads => "reads",
             Self::Estimates => "estimates",
+            Self::Files => "files",
+            Self::Links => "links",
+            Self::Braindump => "braindump",
         }
     }
 }
@@ -106,6 +127,9 @@ impl ViewerNotifications {
             ViewerNotificationKind::Finished => self.finished,
             ViewerNotificationKind::Reads => self.reads,
             ViewerNotificationKind::Estimates => self.estimates,
+            ViewerNotificationKind::Files => self.files,
+            ViewerNotificationKind::Links => self.links,
+            ViewerNotificationKind::Braindump => self.braindump,
         }
     }
 }
@@ -464,7 +488,10 @@ mod tests {
                 documents: true,
                 finished: true,
                 reads: true,
-                estimates: true
+                estimates: true,
+                files: false,
+                links: false,
+                braindump: false
             }
         );
 
@@ -476,10 +503,20 @@ mod tests {
         assert!(!kinds.plans && kinds.documents && kinds.finished);
         assert!(kinds.allows(ViewerNotificationKind::Reads));
         assert!(kinds.allows(ViewerNotificationKind::Estimates));
+        // Shared files, links and the braindump came later still, and load as off.
+        assert!(!kinds.allows(ViewerNotificationKind::Files));
+        assert!(!kinds.allows(ViewerNotificationKind::Links));
+        assert!(!kinds.allows(ViewerNotificationKind::Braindump));
+
+        // Only some of the three: the others keep their default.
+        std::fs::write(&path, br#"{"viewerNotifications":{"links":true,"reads":false}}"#).unwrap();
+        let kinds = Settings::load(&path).viewer_notifications;
+        assert!(kinds.links && !kinds.files && !kinds.braindump && !kinds.reads && kinds.plans);
 
         let mut settings = Settings::default();
         settings.viewer_notifications.documents = false;
         settings.viewer_notifications.estimates = false;
+        settings.viewer_notifications.braindump = true;
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path), settings);
     }

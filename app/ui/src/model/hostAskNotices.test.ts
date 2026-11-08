@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ReadView, VoteView } from '../api/types';
 import { createHostAskNotices } from './hostAskNotices';
+import type { ListNotice } from './noticeList';
 import type { ViewerNotice } from './viewerNotices';
 import { DEFAULT_VIEWER_NOTIFICATIONS } from './viewerNotices';
 
@@ -9,9 +10,10 @@ const vote = (id: number, round: number): VoteView => ({ id, round, task: 'A sec
 
 function setup(switches = DEFAULT_VIEWER_NOTIFICATIONS) {
   const shown: ViewerNotice[] = [];
-  const notices = createHostAskNotices({ switches, notify: (notice) => shown.push(notice) });
+  const recorded: ListNotice[] = [];
+  const notices = createHostAskNotices({ switches, notify: (notice) => shown.push(notice), record: (notice) => recorded.push(notice) });
   notices.joined();
-  return { notices, shown };
+  return { notices, shown, recorded };
 }
 
 describe('the host’s asks', () => {
@@ -60,5 +62,29 @@ describe('the host’s asks', () => {
     notices.setSwitches({ ...DEFAULT_VIEWER_NOTIFICATIONS, reads: false });
     notices.read(read(1), 'Nick');
     expect(shown).toEqual([]);
+  });
+
+  it('record every new ask for the list, also of a kind turned off', () => {
+    const { notices, shown, recorded } = setup({ ...DEFAULT_VIEWER_NOTIFICATIONS, reads: false, estimates: false });
+    notices.status();
+    notices.read(read(1), 'Nick');
+    notices.read(read(1), 'Nick');
+    notices.vote(vote(2, 1), 'Nick');
+    expect(shown).toEqual([]);
+    expect(recorded).toEqual([
+      { kind: 'reads', title: 'Nick asks you to read', body: 'design.md', open: { kind: 'read', id: 1 } },
+      { kind: 'estimates', title: 'Nick asks for an estimate', body: '' },
+    ]);
+  });
+
+  it('record nothing that was open on joining, or comes again after a reconnect', () => {
+    const { notices, recorded } = setup();
+    notices.read(read(1), 'Nick');
+    notices.vote(vote(2, 1), 'Nick');
+    notices.status();
+    notices.joined();
+    notices.read(read(1), 'Nick');
+    notices.status();
+    expect(recorded).toEqual([]);
   });
 });

@@ -36,6 +36,11 @@ describe('host screen', () => {
     expect(screen.getByLabelText('Invite code')).toHaveTextContent('7K2M-9QXH-4TPA');
   });
 
+  it('has no bell: it is for viewers', async () => {
+    await setup();
+    expect(screen.queryByRole('button', { name: /^Notifications/ })).not.toBeInTheDocument();
+  });
+
   it('streams the session to its terminal and passes typing to the agent', async () => {
     const { bridge } = await setup();
     await waitFor(() => expect(terminal.handle.write).toHaveBeenCalled());

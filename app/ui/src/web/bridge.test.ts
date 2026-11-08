@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ViewerCore } from './connection';
 import { NOTIFICATIONS_BLOCKED, STORAGE_KEYS, openSharedLink, recordLink, storedAppearance, webBridge, type BrowserNotifications, type WebBridgeOptions } from './bridge';
 import { choose } from '../model/layout';
+import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 
 const SERVICE = 'wss://specdeck.example.com/signal';
 
@@ -218,7 +219,7 @@ describe('notifications in the browser', () => {
     const page = bridge({ storage, notifications: browser.platform });
     const profile = await page.setNotifications(true);
     expect(profile.notifications).toBe(true);
-    expect(profile.viewerNotifications).toEqual({ plans: true, documents: true, finished: false, reads: true, estimates: true });
+    expect(profile.viewerNotifications).toEqual(DEFAULT_VIEWER_NOTIFICATIONS);
     expect(browser.asked).toBe(1);
     await page.viewerNotify('plans', 'Plan add-login is ready for review', 'Claude Code wrote proposal.');
     expect(browser.shown).toEqual([['Plan add-login is ready for review', 'Claude Code wrote proposal.']]);
@@ -236,7 +237,7 @@ describe('notifications in the browser', () => {
     const stop = page.onNoticeOpen(opened);
     await page.viewerNotify('documents', 'README.md changed', '', { kind: 'document', path: 'README.md' });
     await page.viewerNotify('finished', 'Claude Code finished', '');
-    await page.setViewerNotifications({ plans: true, documents: true, finished: true, reads: true, estimates: true });
+    await page.setViewerNotifications({ ...DEFAULT_VIEWER_NOTIFICATIONS, finished: true });
     await page.viewerNotify('finished', 'Claude Code finished', '');
     browser.clicks.forEach((click) => click());
     expect(opened.mock.calls).toEqual([[{ kind: 'document', path: 'README.md' }]]);
@@ -255,15 +256,24 @@ describe('notifications in the browser', () => {
     browser.away = true;
     await page.viewerNotify('finished', 'Claude Code finished', '');
     expect(browser.shown).toEqual([]);
-    await page.setViewerNotifications({ plans: true, documents: true, finished: true, reads: true, estimates: true });
+    await page.setViewerNotifications({ ...DEFAULT_VIEWER_NOTIFICATIONS, finished: true });
     await page.viewerNotify('finished', 'Claude Code finished', '');
     expect(browser.shown).toEqual([['Claude Code finished', '']]);
   });
 
   it('keep the kinds in the browser', async () => {
     const storage = memoryStorage();
-    await bridge({ storage, notifications: null }).setViewerNotifications({ plans: false, documents: true, finished: true, reads: true, estimates: true });
-    expect((await bridge({ storage, notifications: null }).getProfile()).viewerNotifications).toEqual({ plans: false, documents: true, finished: true, reads: true, estimates: true });
+    const kinds = { ...DEFAULT_VIEWER_NOTIFICATIONS, plans: false, finished: true, links: true };
+    await bridge({ storage, notifications: null }).setViewerNotifications(kinds);
+    expect((await bridge({ storage, notifications: null }).getProfile()).viewerNotifications).toEqual(kinds);
+  });
+
+  it('load kinds a page stored before them as their defaults', async () => {
+    const storage = memoryStorage();
+    storage.setItem(STORAGE_KEYS.viewerNotifications, JSON.stringify({ plans: false, documents: true, finished: true, reads: true, estimates: true }));
+    const kinds = (await bridge({ storage, notifications: null }).getProfile()).viewerNotifications;
+    expect(kinds).toEqual({ ...DEFAULT_VIEWER_NOTIFICATIONS, plans: false, finished: true });
+    expect([kinds.files, kinds.links, kinds.braindump]).toEqual([false, false, false]);
   });
 
   it('stay off when the browser refuses, or has none', async () => {
