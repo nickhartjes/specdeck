@@ -176,7 +176,7 @@ describe('shared files in the browser', () => {
 /** The browser's notifications, with the answer the viewer gives when asked. */
 function fakeNotifications(answer: NotificationPermission = 'granted') {
   let permission: NotificationPermission = 'default';
-  const state = { away: true, shown: [] as [string, string][], asked: 0 };
+  const state = { away: true, shown: [] as [string, string][], clicks: [] as (() => void)[], asked: 0 };
   const platform: BrowserNotifications = {
     permission: () => permission,
     request: async () => {
@@ -184,7 +184,10 @@ function fakeNotifications(answer: NotificationPermission = 'granted') {
       permission = answer;
       return answer;
     },
-    show: (title, body) => void state.shown.push([title, body]),
+    show: (title, body, onClick) => {
+      state.shown.push([title, body]);
+      state.clicks.push(onClick);
+    },
     away: () => state.away,
   };
   return Object.assign(state, { platform, setPermission: (next: NotificationPermission) => void (permission = next) });
@@ -214,6 +217,24 @@ describe('notifications in the browser', () => {
     const later = bridge({ storage, notifications: browser.platform });
     expect((await later.getProfile()).notifications).toBe(true);
     expect(browser.asked).toBe(1);
+  });
+
+  it('open what a clicked notification is about', async () => {
+    const browser = fakeNotifications();
+    const page = bridge({ notifications: browser.platform });
+    await page.setNotifications(true);
+    const opened = vi.fn();
+    const stop = page.onNoticeOpen(opened);
+    await page.viewerNotify('documents', 'README.md changed', '', { kind: 'document', path: 'README.md' });
+    await page.viewerNotify('finished', 'Claude Code finished', '');
+    await page.setViewerNotifications({ plans: true, documents: true, finished: true });
+    await page.viewerNotify('finished', 'Claude Code finished', '');
+    browser.clicks.forEach((click) => click());
+    expect(opened.mock.calls).toEqual([[{ kind: 'document', path: 'README.md' }]]);
+    // A page that stopped listening opens nothing.
+    stop();
+    browser.clicks[0]!();
+    expect(opened).toHaveBeenCalledTimes(1);
   });
 
   it('stay quiet while the page is in front, and for kinds turned off', async () => {

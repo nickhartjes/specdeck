@@ -43,7 +43,32 @@ describe('viewer notifications', () => {
       kind: 'plans',
       title: 'Plan add-login is ready for review',
       body: 'Claude Code wrote proposal.',
+      open: null,
     });
+  });
+
+  it('says what a click opens', async () => {
+    await tauriBridge.viewerNotify('documents', 'README.md changed', 'Claude Code changed it.', { kind: 'document', path: 'README.md' });
+    expect(tauri.invoke).toHaveBeenCalledWith('viewer_notify', {
+      kind: 'documents',
+      title: 'README.md changed',
+      body: 'Claude Code changed it.',
+      open: { kind: 'document', path: 'README.md' },
+    });
+  });
+
+  it('passes what a clicked notification opens, until stopped', async () => {
+    tauri.listen.mockClear();
+    tauri.listen.mockResolvedValue(tauri.unlisten);
+    const handler = vi.fn();
+    const stop = tauriBridge.onNoticeOpen(handler);
+    expect(tauri.listen).toHaveBeenCalledWith('notice-open', expect.any(Function));
+    const deliver = tauri.listen.mock.calls[0]![1] as (event: { payload: unknown }) => void;
+    deliver({ payload: { kind: 'plan-mode', toolUseId: 'toolu_1' } });
+    expect(handler).toHaveBeenCalledWith({ kind: 'plan-mode', toolUseId: 'toolu_1' });
+    stop();
+    await vi.waitFor(() => expect(tauri.unlisten).toHaveBeenCalled());
+    tauri.listen.mockClear();
   });
 });
 

@@ -1,13 +1,14 @@
 // The tabs in the middle of the session window (`session-window` spec: Tabs in the middle,
 // Preview tabs): the terminal, and the documents, diffs, screenshots and shared files a
-// participant opens, with at most one preview tab that the next file opened replaces.
+// participant opens, and a plan the agent presented for approval (`notification-open` design
+// decision 5), with at most one preview tab that the next file opened replaces.
 
-export type TabKind = 'terminal' | 'document' | 'diff' | 'image' | 'shared';
+export type TabKind = 'terminal' | 'document' | 'diff' | 'image' | 'shared' | 'plan';
 
 export interface OpenTab {
   id: string;
   kind: TabKind;
-  /** The file, for a document or diff tab; the tool call, for a screenshot; the file's id, for a shared file. */
+  /** The file, for a document or diff tab; the tool call, for a screenshot or a plan; the file's id, for a shared file. */
   path?: string;
   /** What the tab is called when that is not the file's name, such as a screenshot's page. */
   title?: string;

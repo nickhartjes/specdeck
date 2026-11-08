@@ -9,13 +9,14 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { ArrowDown, FileDiff, FileText, Image, Share2, SquareTerminal, X } from "lucide-react";
-import type { TimelineEvent, TerminalSnapshot } from "../api/types";
+import { ArrowDown, ClipboardList, FileDiff, FileText, Image, Share2, SquareTerminal, X } from "lucide-react";
+import type { NoticeOpen, TimelineEvent, TerminalSnapshot } from "../api/types";
 import { Divider } from "../components/Divider";
 import { DiffTab, type CodeView } from "../components/DiffTab";
 import { DocumentTab } from "../components/DocumentTab";
 import { ScreenshotTab, screenshotTitle } from "../components/Screenshot";
 import { FilesPanel, isDocument } from "../components/FilesPanel";
+import { PlanTab } from "../components/PlanTab";
 import { SearchBar } from "../components/SearchBar";
 import { SharedFileTab, type SharedFiles } from "../components/SharedFiles";
 import { shareSteps } from "../model/sharedFiles";
@@ -60,6 +61,11 @@ export interface WorkspaceHandle {
   /** Terminal data from the session, as received over the bridge. */
   terminalData(data: ArrayBuffer): void;
   resetTerminal(): void;
+  /**
+   * Opens what a clicked notification is about, if this window has it (`notification-open`
+   * design decision 4).
+   */
+  open(target: NoticeOpen): void;
 }
 
 interface Props {
@@ -213,15 +219,6 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
         .map((turn) => turn.promptId);
     }, [model, term]);
 
-    useImperativeHandle(ref, () => ({
-      terminalData(data) {
-        terminal.current?.write(decodeTerminalStream(data));
-      },
-      resetTerminal() {
-        terminal.current?.reset();
-      },
-    }));
-
     // Opening something on a narrow window shows it.
     const show = useCallback(
       (next: Tabs) => {
@@ -258,6 +255,27 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
         show(openTab(tabs, "document", path, { keep })),
       [show, tabs],
     );
+
+    useImperativeHandle(ref, () => ({
+      terminalData(data) {
+        terminal.current?.write(decodeTerminalStream(data));
+      },
+      resetTerminal() {
+        terminal.current?.reset();
+      },
+      open(target) {
+        if (target.kind === "document") {
+          if (written.documents.has(target.path)) openDocument(target.path);
+        } else if (planIn(model, target.toolUseId)) {
+          show(
+            openTab(tabs, "plan", target.toolUseId, {
+              title: `${props.agentName}'s plan`,
+            }),
+          );
+        }
+      },
+    }));
+
     const openChange = useCallback(
       (path: string, toolUseId: string) =>
         show(openTab(tabs, "diff", path, { focus: toolUseId })),
@@ -618,6 +636,11 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                         progress={props.sharedProgress?.get(Number(tab.path))}
                         onKeep={() => keep(tab.id)}
                       />
+                    ) : tab.kind === "plan" ? (
+                      <PlanTab
+                        item={planIn(model, tab.path!)}
+                        title={tab.title ?? `${props.agentName}'s plan`}
+                      />
                     ) : tab.kind === "image" ? (
                       <ScreenshotTab
                         screenshot={screenshotIn(model, tab.path!)}
@@ -814,17 +837,30 @@ const TAB_ICONS = {
   diff: FileDiff,
   image: Image,
   shared: Share2,
+  plan: ClipboardList,
 };
 
-/** The screenshot of tool call `toolUseId`, if the timeline has one. */
-function screenshotIn(model: TimelineModel, toolUseId: string) {
+/** Tool call `toolUseId`, if the timeline has it. */
+function toolIn(model: TimelineModel, toolUseId: string): ToolItem | null {
   for (const turn of model.turns) {
     const item = turn.items.find(
       (entry) => entry.kind === "tool" && entry.id === toolUseId,
     );
-    if (item?.kind === "tool") return screenshotOf(item);
+    if (item?.kind === "tool") return item;
   }
   return null;
+}
+
+/** The screenshot of tool call `toolUseId`, if the timeline has one. */
+function screenshotIn(model: TimelineModel, toolUseId: string) {
+  const item = toolIn(model, toolUseId);
+  return item && screenshotOf(item);
+}
+
+/** The plan the agent presented with tool call `toolUseId`, if the timeline has it. */
+function planIn(model: TimelineModel, toolUseId: string): ToolItem | null {
+  const item = toolIn(model, toolUseId);
+  return item?.toolName === "ExitPlanMode" ? item : null;
 }
 
 /** The tabs in the middle, like an editor's: a preview in italics, the terminal tab never closed. */

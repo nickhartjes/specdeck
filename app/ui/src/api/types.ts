@@ -78,6 +78,9 @@ export type ViewerNotificationKind = 'plans' | 'documents' | 'finished';
 
 export type ViewerNotifications = Record<ViewerNotificationKind, boolean>;
 
+/** What a click on a viewer's notification opens: a document, or a plan the agent presented in plan mode. */
+export type NoticeOpen = { kind: 'document'; path: string } | { kind: 'plan-mode'; toolUseId: string };
+
 export interface Profile {
   username: string | null;
   recentFolders: RecentFolder[];

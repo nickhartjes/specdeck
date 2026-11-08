@@ -198,11 +198,13 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
     () =>
       createViewerNotices({
         switches: DEFAULT_VIEWER_NOTIFICATIONS,
-        notify: ({ kind, title, body }) => void bridge.viewerNotify(kind, title, body).catch(() => {}),
+        notify: ({ kind, title, body, open }) => void bridge.viewerNotify(kind, title, body, open).catch(() => {}),
       }),
     [bridge],
   );
   useEffect(() => () => notices.dispose(), [notices]);
+  // A click on one of them opens what it is about here (`notification-open` design decision 4).
+  useEffect(() => bridge.onNoticeOpen((open) => workspace.current?.open(open)), [bridge]);
   const onEvent = (event: ViewEvent) => {
     dispatch(event);
     if (event.type === 'joined' || event.type === 'status') {
