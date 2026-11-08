@@ -96,7 +96,7 @@ While a session is hosted, the app SHALL show one icon in the macOS menu bar or 
 - **THEN** the icon remains and its menu lists only `shop`
 
 ### Requirement: Notifications
-The app SHALL send OS notifications for events that need attention while the window of the session concerned is not focused: to the host when a viewer joins or leaves and when the agent waits for the host's input (for agents whose events the app captures, and for agents and terminal programs that report a request for the host), and to a viewer when the session ends. The user SHALL be able to turn them off.
+The app SHALL send OS notifications for events that need attention while the window of the session concerned is not focused: to the host when a viewer joins or leaves and when the agent waits for the host's input (for agents whose events the app captures, and for agents and terminal programs that report a request for the host), and to a viewer when the session ends and for the kinds of viewer notification they turned on (see `viewer-notifications`). The user SHALL be able to turn them all off with one switch.
 
 #### Scenario: Agent waits for the host
 - **WHEN** Claude Code finishes a turn or asks for permission while the host's window is in the background
@@ -117,6 +117,18 @@ The app SHALL send OS notifications for events that need attention while the win
 #### Scenario: Another window focused
 - **WHEN** the agent in the `api` session waits for the host while the host works in the `shop` session's window
 - **THEN** the host gets a notification naming `api`, and clicking it brings the `api` window to the front
+
+#### Scenario: Viewer called in for a plan
+- **WHEN** a viewer's window is in the background and Claude proposes a change in the session they watch
+- **THEN** the viewer gets a notification that the plan is ready for review, and clicking it brings that session's window to the front
+
+#### Scenario: Viewer's window in front
+- **WHEN** Claude changes a document while the viewer's window of that session has focus
+- **THEN** the viewer gets no notification
+
+#### Scenario: Main switch off for a viewer
+- **WHEN** a viewer turned notifications off in settings, with plans still checked
+- **THEN** a plan ready for review gives no notification
 
 ### Requirement: Appearance
 The app SHALL use the appearance the user chose (see Choose the appearance); under System it SHALL follow the OS light or dark appearance and switch live when it changes. Window chrome, dialogs and menus SHALL be the platform's own; content SHALL use the type shipped with the app. The terminal SHALL be dark in every appearance and draw ordinary text in the platform's own monospace font. The bundled Nerd Font symbol font SHALL be used only for characters the platform's fonts do not draw.

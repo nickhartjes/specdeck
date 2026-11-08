@@ -7,11 +7,15 @@ Lets viewers send things to the host, such as prompt suggestions, while the host
 ## Requirements
 
 ### Requirement: Host allows each kind of request
-The host SHALL be able to turn each kind of viewer request on or off for the session at any time. Every kind SHALL be on when a session starts, except where it cannot be used, such as prompt suggestions in a terminal session. A request of a kind that is off SHALL NOT reach the host's window, and the viewer SHALL be told it is off.
+The host SHALL be able to turn each kind of viewer request on or off for the session at any time. Prompt suggestions SHALL be on when a session starts, except where they cannot be used, such as in a terminal session. Sharing files SHALL be off when a session starts, in every session. A request of a kind that is off SHALL NOT reach the host's window, and the viewer SHALL be told it is off.
 
 #### Scenario: On when the session starts
 - **WHEN** the host starts an agent session
 - **THEN** prompt suggestions are on, and every viewer whose app can send requests can suggest a prompt
+
+#### Scenario: Sharing files off when the session starts
+- **WHEN** the host starts any session
+- **THEN** viewers cannot share files until the host turns sharing files on
 
 #### Scenario: Host turns suggestions off
 - **WHEN** the host turns prompt suggestions off

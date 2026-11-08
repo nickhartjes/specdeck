@@ -64,7 +64,7 @@ A browser viewer SHALL verify the host and every piece of session data as the ap
 - **THEN** the page discards it and requests it again
 
 ### Requirement: Name and settings stay in the browser
-The web viewer SHALL ask for the viewer's name on their first join and SHALL keep it, their layout and their appearance only in that browser, with no account. When the browser cannot keep them, the page SHALL still work and ask again next time.
+The web viewer SHALL ask for the viewer's name on their first join and SHALL keep it, their layout, their appearance and their notification choices only in that browser, with no account. When the browser cannot keep them, the page SHALL still work and ask again next time.
 
 #### Scenario: Second visit
 - **WHEN** a viewer who joined before opens the web viewer again in the same browser
@@ -77,6 +77,10 @@ The web viewer SHALL ask for the viewer's name on their first join and SHALL kee
 #### Scenario: Appearance not kept
 - **WHEN** the browser keeps nothing and a viewer chooses Dark
 - **THEN** the page is dark until it is closed, and the next visit starts at System
+
+#### Scenario: Notification choices kept
+- **WHEN** a browser viewer turned notifications on and turned on the agent finished, and later opens the web viewer again in the same browser, which still allows notifications
+- **THEN** notifications are on with the agent finished on, without being asked again
 
 ### Requirement: Choose the appearance in the browser
 The web viewer SHALL offer the same appearance choice as the app, System, Light or Dark, with System as the default, which follows the browser's light or dark preference. A change SHALL apply at once, without reloading the page. The terminal SHALL stay dark in every appearance.
@@ -144,3 +148,37 @@ The web viewer SHALL show link cards and let a viewer send a link to the host as
 #### Scenario: Send a link from the browser
 - **WHEN** viewers' links are allowed and a browser viewer sends a link
 - **THEN** the host sees it waiting as from any other viewer, and the browser viewer sees what became of it
+
+### Requirement: Notifications in the browser
+The web viewer SHALL offer the same kinds of viewer notification as the app, under the same rules (see `viewer-notifications`), as the browser's notifications. They SHALL be off until the viewer turns them on in the layout menu, which SHALL ask the browser's permission at that moment. They SHALL be shown only while the page is hidden or the browser window is not focused. Clicking one SHALL bring the page to the front.
+
+#### Scenario: Turn them on
+- **WHEN** a browser viewer turns on notifications in the layout menu
+- **THEN** the browser asks for permission, and once it is given, plans and documents are on and the agent finished is off
+
+#### Scenario: Off by default
+- **WHEN** a viewer opens the web viewer for the first time and Claude proposes a change while the tab is hidden
+- **THEN** no notification is shown, and the browser never asked for permission
+
+#### Scenario: Tab hidden
+- **WHEN** a browser viewer turned notifications on, switched to another tab, and Claude proposes a change
+- **THEN** the browser shows a notification that the plan is ready for review, and clicking it shows the session's tab
+
+#### Scenario: Page in front
+- **WHEN** a browser viewer turned notifications on and Claude changes a document while the page is in front
+- **THEN** no notification is shown
+
+#### Scenario: Permission denied
+- **WHEN** the browser refuses permission, or cannot show notifications
+- **THEN** the layout menu says that this browser does not allow notifications, and the switches stay off
+
+### Requirement: Shared files in the browser
+A viewer in the web viewer SHALL see, open and save shared files as a viewer in the app does, and SHALL be able to share files under the same rules and limits, by choosing or dropping them. Saving a copy SHALL download the file under its shared name.
+
+#### Scenario: Open a shared image in the browser
+- **WHEN** the host shares `wireframe.png` and a viewer in the browser opens it
+- **THEN** the image shows in a tab, as in the app
+
+#### Scenario: Share from the browser
+- **WHEN** the host allows viewers to share files and a viewer in the browser drops a log on the *Shared* tab
+- **THEN** everyone sees it as shared by that viewer
