@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { HostSuggestion } from '../api/types';
 import { suggestionStateText } from './SuggestPanel';
+import { PLAIN_TEXT } from './fields';
 
 interface Props {
   agentName: string;
@@ -60,6 +61,7 @@ function Waiting({ suggestion, onAnswer }: { suggestion: HostSuggestion; onAnswe
         <span className="suggestion-text selectable">{suggestion.text}</span>
       ) : (
         <textarea
+          {...PLAIN_TEXT}
           className="field"
           rows={4}
           aria-label={`Edit ${label}`}

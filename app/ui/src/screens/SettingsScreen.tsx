@@ -4,6 +4,7 @@ import { VIEWER_NOTIFICATION_KINDS } from '../model/viewerNotices';
 import { errorMessage, useBridge } from '../api/bridge';
 import type { Profile, ServiceCheck } from '../api/types';
 import { APPEARANCES } from '../appearance';
+import { PLAIN_TEXT } from '../components/fields';
 import { serviceName } from '../model/code';
 
 /** The settings window: changes apply at once, as is usual for app settings. */
@@ -47,6 +48,7 @@ export function SettingsScreen() {
         <label htmlFor="settings-name">Your name</label>
         <div>
           <input
+            {...PLAIN_TEXT}
             id="settings-name"
             className="field"
             maxLength={64}
@@ -307,11 +309,11 @@ function SharingService({ profile, onProfile }: { profile: Profile; onProfile: (
       <label htmlFor="settings-service">Sharing service</label>
       <div>
         <input
+          {...PLAIN_TEXT}
           id="settings-service"
           className="field"
           placeholder={serviceName(profile.builtInService)}
           autoComplete="off"
-          spellCheck={false}
           disabled={locked}
           value={value}
           onChange={(event) => {

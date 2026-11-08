@@ -70,7 +70,7 @@ export function FilesPanel({ files, timelineSupported, agentName, terminal = fal
                 onTab(next[0]);
               }}
             >
-              {name}
+              <span className="label">{name}</span>
               {count !== null && <span className="count">{count}</span>}
             </button>
           ))}

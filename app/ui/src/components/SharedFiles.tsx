@@ -8,6 +8,7 @@ import { AddDialog } from './AddDialog';
 import { CodeLines } from './CodeLines';
 import { GiveDialog } from './GiveDialog';
 import { Markdown } from './Markdown';
+import { PLAIN_TEXT } from './fields';
 
 /** Text longer than this is shown without highlighting, to keep the window responsive. */
 const MAX_HIGHLIGHTED_LINES = 50_000;
@@ -417,7 +418,7 @@ function NoteEditor({ text, onChange, onCancel, onSave }: { text: string; onChan
   const tooLong = bytes > MAX_NOTE_BYTES;
   return (
     <div className="note-editor">
-      <textarea className="field" aria-label="Note" value={text} onChange={(event) => onChange(event.target.value)} autoFocus />
+      <textarea {...PLAIN_TEXT} className="field" aria-label="Note" value={text} onChange={(event) => onChange(event.target.value)} autoFocus />
       <div className="actions">
         <span className={`field-hint${tooLong ? ' error-text' : ''}`}>{formatSize(bytes)} of 32 KB</span>
         <span className="spacer" />

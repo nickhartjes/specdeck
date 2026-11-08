@@ -3,6 +3,7 @@ import { errorMessage } from '../api/bridge';
 import type { CardSet, TimelineEvent } from '../api/types';
 import { CARD_SETS, cardsOf, cardLabel, lastCardSet, lastPrompt, MAX_TASK_CHARS, openTasks, rememberCardSet } from '../model/asks';
 import { buildDocuments } from '../model/documents';
+import { PLAIN_TEXT } from './fields';
 
 /** The open tasks of the current plan's `tasks.md`, newest text; none without a plan. */
 export function planTasks(timeline: TimelineEvent[]): string[] {
@@ -91,6 +92,7 @@ export function EstimateDialog({ timeline, onStart, onClose }: Props) {
           <label>
             Task
             <textarea
+              {...PLAIN_TEXT}
               ref={input}
               className="field"
               rows={3}
