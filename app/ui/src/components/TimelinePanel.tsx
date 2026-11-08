@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, Share2, X } from 'lucide-react';
 import type { ShareStep } from '../model/sharedFiles';
-import type { LinkItem, TimelineModel, ToolItem, Turn } from '../model/timeline';
+import type { AskItem, LinkItem, TimelineModel, ToolItem, Turn } from '../model/timeline';
 import { SHOWN_IN_PART, toolSummary } from '../model/timeline';
-import { liveLine, screenshotOf, summarize, type Step, type SummaryEntry } from '../model/steps';
+import { liveLine, named, screenshotOf, summarize, typedTextHidden, type Step, type SummaryEntry } from '../model/steps';
 import type { Steps, TimelineEvent } from '../api/types';
 import { eventsBefore, missedTurns, outcomeOf, soFar, turnFacts, type SoFar } from '../model/catchUp';
 import { DiffView } from './DiffView';
@@ -12,6 +12,7 @@ import { Markdown } from './Markdown';
 import { asksTheHost, interactionBody, PermissionBadge } from './HostInteractions';
 import { ScreenshotThumbnail } from './Screenshot';
 import { LinkCard } from './LinkCard';
+import { AskCard } from './AskCard';
 import { CatchUpCard } from './CatchUpCard';
 import { PromptPicker } from './PromptPicker';
 
@@ -137,8 +138,10 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
 
   const linkCards = (links: LinkItem[]) =>
     links.map((link) => <LinkCard key={link.id} link={link} onRemove={onRemoveLink} />);
+  const askCards = (asks: AskItem[]) => asks.map((ask) => <AskCard key={ask.id} item={ask} />);
 
-  // Without a timeline the note stays, and the session's links are listed below it.
+  // Without a timeline the note stays, and the session's links, read requests and estimates
+  // are listed below it.
   if (!timelineSupported) {
     return (
       <div ref={list}>
@@ -162,6 +165,11 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
         {model.links.length > 0 && (
           <section aria-label="Shared links" className="links-early">
             {linkCards(model.links)}
+          </section>
+        )}
+        {model.asks.length > 0 && (
+          <section aria-label="Read requests and estimates" className="links-early">
+            {askCards(model.asks)}
           </section>
         )}
       </div>
@@ -208,6 +216,11 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
       {model.earlyLinks.length > 0 && (
         <section aria-label="Links shared before the first prompt" className="links-early">
           {linkCards(model.earlyLinks)}
+        </section>
+      )}
+      {model.earlyAsks.length > 0 && (
+        <section aria-label="Read requests and estimates before the first prompt" className="links-early">
+          {askCards(model.earlyAsks)}
         </section>
       )}
       {model.unavailable && (
@@ -436,6 +449,8 @@ function TurnBody({ turn, folded, outcome, hidden, onUnfold, summary, latest, on
           </p>
         ) : item.kind === 'link' ? (
           <LinkCard key={item.id} link={item} onRemove={onRemoveLink} />
+        ) : item.kind === 'ask' ? (
+          <AskCard key={item.id} item={item} />
         ) : (
           <ToolView key={item.id} item={item} showChanges={latest} onSelect={onSelect} onOpenScreenshot={onOpenScreenshot} />
         ),
@@ -471,6 +486,8 @@ function ToolView({ item, showChanges, onSelect, onOpenScreenshot }: { item: Too
         <div className="tool-body">
           {item.error && <div className="error-text selectable">{item.error}</div>}
           {item.truncated && <p className="hint">{SHOWN_IN_PART}</p>}
+          {item.target && <p className="hint">On {item.target.label ? `${named(item.target)}, ${item.target.kind}` : named(item.target)}</p>}
+          {typedTextHidden(item) && <p className="hint">Text hidden</p>}
           {item.changes.length > 0
             ? item.changes.map((change, i) => <DiffView key={i} change={change} />)
             : (interactionBody(item) ?? <pre className="tool-input selectable">{JSON.stringify(item.input, null, 2)}</pre>)}

@@ -150,7 +150,7 @@ The web viewer SHALL show link cards and let a viewer send a link to the host as
 - **THEN** the host sees it waiting as from any other viewer, and the browser viewer sees what became of it
 
 ### Requirement: Notifications in the browser
-The web viewer SHALL offer the same kinds of viewer notification as the app, under the same rules (see `viewer-notifications`), as the browser's notifications. They SHALL be off until the viewer turns them on in the layout menu, which SHALL ask the browser's permission at that moment. They SHALL be shown only while the page is hidden or the browser window is not focused. Clicking one SHALL bring the page to the front.
+The web viewer SHALL offer the same kinds of viewer notification as the app, under the same rules (see `viewer-notifications`), as the browser's notifications. They SHALL be off until the viewer turns them on in the layout menu, which SHALL ask the browser's permission at that moment. They SHALL be shown only while the page is hidden or the browser window is not focused. Clicking one SHALL bring the page to the front and open what it is about, as in the app.
 
 #### Scenario: Turn them on
 - **WHEN** a browser viewer turns on notifications in the layout menu
@@ -162,7 +162,7 @@ The web viewer SHALL offer the same kinds of viewer notification as the app, und
 
 #### Scenario: Tab hidden
 - **WHEN** a browser viewer turned notifications on, switched to another tab, and Claude proposes a change
-- **THEN** the browser shows a notification that the plan is ready for review, and clicking it shows the session's tab
+- **THEN** the browser shows a notification that the plan is ready for review, and clicking it shows the session's tab with the plan's proposal open
 
 #### Scenario: Page in front
 - **WHEN** a browser viewer turned notifications on and Claude changes a document while the page is in front
@@ -171,6 +171,10 @@ The web viewer SHALL offer the same kinds of viewer notification as the app, und
 #### Scenario: Permission denied
 - **WHEN** the browser refuses permission, or cannot show notifications
 - **THEN** the layout menu says that this browser does not allow notifications, and the switches stay off
+
+#### Scenario: Page closed
+- **WHEN** a browser viewer closed the page, and then clicks a notification it showed
+- **THEN** nothing opens
 
 ### Requirement: Shared files in the browser
 A viewer in the web viewer SHALL see, open and save shared files as a viewer in the app does, and SHALL be able to share files under the same rules and limits, by choosing or dropping them. Saving a copy SHALL download the file under its shared name.
@@ -182,3 +186,14 @@ A viewer in the web viewer SHALL see, open and save shared files as a viewer in 
 #### Scenario: Share from the browser
 - **WHEN** the host allows viewers to share files and a viewer in the browser drops a log on the *Shared* tab
 - **THEN** everyone sees it as shared by that viewer
+
+### Requirement: Read requests and estimates in the browser
+The web viewer SHALL show read requests and votes, let a viewer answer and vote, open what the host asked to read, including the changes in the last prompt, and show their timeline entries, as the app does.
+
+#### Scenario: Vote from the browser
+- **WHEN** the host starts a vote and a browser viewer votes M
+- **THEN** the host sees the browser viewer as voted, and after the reveal everyone sees their M
+
+#### Scenario: Question from the browser
+- **WHEN** a browser viewer answers a read request with a question
+- **THEN** the host sees the question as from any other viewer

@@ -100,8 +100,9 @@ describe('notifications in the layout menu', () => {
     await userEvent.click(main);
     expect(bridge.setNotifications).toHaveBeenCalledWith(true);
     expect(await screen.findByRole('checkbox', { name: 'A plan is ready for review' })).toBeChecked();
-    await userEvent.click(screen.getByRole('checkbox', { name: 'The agent finished' }));
-    expect(bridge.setViewerNotifications).toHaveBeenCalledWith({ plans: true, documents: true, finished: true });
+    expect(screen.getByRole('checkbox', { name: 'The host asks you to read' })).toBeChecked();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'The host asks for an estimate' }));
+    expect(bridge.setViewerNotifications).toHaveBeenCalledWith({ plans: true, documents: true, finished: false, reads: true, estimates: false });
   });
 
   it('say so when the browser does not allow them', async () => {

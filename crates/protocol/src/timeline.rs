@@ -164,6 +164,10 @@ pub enum Entry {
         tool_use_id: String,
         tool_name: String,
         input: Map<String, Value>,
+        /// The element a click or typing in Claude's browser acts on, from Claude's last read
+        /// of the page; older apps ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<Target>,
     },
     ToolResult {
         prompt_id: String,
@@ -236,6 +240,31 @@ pub enum Entry {
     /// The host removed the link `id`; its `Link` entry no longer carries the address.
     LinkRemoved {
         id: u32,
+    },
+    /// A read request closed (`read-and-estimate`): what was read, how many of those who could
+    /// answer were ready or had a question, and whether the time was up. No names, no question
+    /// texts. Protocol version 6: never sent to older viewers, which cannot decode it.
+    ReadDone {
+        id: u32,
+        target: crate::asks::ReadTarget,
+        /// What the request named the target, such as a file's name.
+        label: String,
+        ready: u16,
+        questions: u16,
+        of: u16,
+        time_up: bool,
+    },
+    /// The host kept an estimate: the task, the cards, the kept card, the lowest and highest
+    /// value card voted (`None` when every vote was ? or ☕) and the number of votes. No names
+    /// or single votes. Protocol version 6: never sent to older viewers.
+    Estimated {
+        id: u32,
+        task: String,
+        cards: crate::asks::CardSet,
+        kept: crate::asks::Card,
+        low: Option<crate::asks::Card>,
+        high: Option<crate::asks::Card>,
+        votes: u16,
     },
     /// An OpenSpec change the agent works on; each one replaces the previous for that change.
     Plan {
@@ -398,6 +427,19 @@ pub enum ToolOutcome {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         left_out: Option<LeftOut>,
     },
+}
+
+/// An element of a page in Claude's browser, as Claude's last read of the page described it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Target {
+    /// What it is, as the browser says it: `button`, `link`, `email field`, a role.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// A password field or the like, whose typed text is never sent.
+    #[serde(default)]
+    pub sensitive: bool,
 }
 
 /// An image as it is sent: base64 data of `media_type`, `width` by `height` pixels.
@@ -579,9 +621,9 @@ mod tests {
 
     #[test]
     fn an_unknown_kind_cannot_be_decoded() {
-        // Why `FileText` is held back from version 3 viewers, and `Link` and `LinkRemoved` from
-        // version 4: their apps decode every event into `TimelineEvent`, and a kind they do not
-        // know fails the whole frame.
+        // Why `FileText` is held back from version 3 viewers, `Link` and `LinkRemoved` from
+        // version 4, and `ReadDone` and `Estimated` from version 5: their apps decode every event
+        // into `TimelineEvent`, and a kind they do not know fails the whole frame.
         let json = serde_json::json!({
             "outputSeq": 1, "at": 2, "kind": "no-such-kind", "promptId": "p"
         });
@@ -610,6 +652,47 @@ mod tests {
             serde_json::from_value::<Entry>(gone).unwrap(),
             Entry::Link { url: None, title: None, session_only: false, .. }
         ));
+    }
+
+    #[test]
+    fn read_requests_and_estimates() {
+        use crate::asks::{Card, CardSet, ReadTarget};
+        let read = Entry::ReadDone {
+            id: 1,
+            target: ReadTarget::Document { path: "openspec/changes/x/design.md".into() },
+            label: "design.md".into(),
+            ready: 2,
+            questions: 1,
+            of: 3,
+            time_up: true,
+        };
+        let json = serde_json::json!({
+            "kind": "read-done", "id": 1,
+            "target": { "document": { "path": "openspec/changes/x/design.md" } },
+            "label": "design.md", "ready": 2, "questions": 1, "of": 3, "timeUp": true
+        });
+        assert_eq!(serde_json::to_value(&read).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), read);
+        let estimated = Entry::Estimated {
+            id: 2,
+            task: "Show unreachable".into(),
+            cards: CardSet::StoryPoints,
+            kept: Card::Value(3),
+            low: Some(Card::Value(2)),
+            high: None,
+            votes: 3,
+        };
+        let json = serde_json::json!({
+            "kind": "estimated", "id": 2, "task": "Show unreachable", "cards": "story-points",
+            "kept": { "value": 3 }, "low": { "value": 2 }, "high": null, "votes": 3
+        });
+        assert_eq!(serde_json::to_value(&estimated).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), estimated);
+        // Nothing in them is large, so fitting never changes them.
+        for entry in [read, estimated] {
+            let event = TimelineEvent { output_seq: 1, at: 2, entry, truncated: false };
+            assert_eq!(fit(event.clone(), MAX_EVENT_JSON_BYTES), event);
+        }
     }
 
     #[test]
@@ -754,6 +837,52 @@ mod tests {
     }
 
     #[test]
+    fn tool_calls_carry_the_browser_element_they_act_on() {
+        let entry = Entry::ToolCall {
+            prompt_id: "p".into(),
+            tool_use_id: "t".into(),
+            tool_name: "mcp__specdeck__click".into(),
+            input: serde_json::json!({ "element": 3 }).as_object().unwrap().clone(),
+            target: Some(Target {
+                kind: "button".into(),
+                label: Some("Sign in".into()),
+                sensitive: false,
+            }),
+        };
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "tool-call", "promptId": "p", "toolUseId": "t",
+                "toolName": "mcp__specdeck__click", "input": { "element": 3 },
+                "target": { "kind": "button", "label": "Sign in", "sensitive": false }
+            })
+        );
+        assert_eq!(serde_json::from_value::<Entry>(json.clone()).unwrap(), entry);
+
+        // Without a target, as from an older host.
+        let mut plain = json.clone();
+        plain.as_object_mut().unwrap().remove("target");
+        let Entry::ToolCall { target, .. } = serde_json::from_value::<Entry>(plain).unwrap() else {
+            panic!()
+        };
+        assert_eq!(target, None);
+
+        // An older app, whose tool call has no target, still reads the entry.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+        enum Older {
+            ToolCall {
+                #[allow(dead_code)]
+                tool_name: String,
+                #[allow(dead_code)]
+                input: Map<String, Value>,
+            },
+        }
+        assert!(matches!(serde_json::from_value::<Older>(json).unwrap(), Older::ToolCall { .. }));
+    }
+
+    #[test]
     fn message_final_field_is_named_final() {
         let entry = Entry::Message {
             prompt_id: "p".into(),
@@ -871,6 +1000,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                target: None,
             },
         ];
         for entry in entries {

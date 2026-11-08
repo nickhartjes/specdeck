@@ -9,6 +9,7 @@ import '../styles.css';
 import '../highlight.css';
 import '../shared-files.css';
 import '../links.css';
+import '../asks.css';
 import '../catch-up.css';
 import { storedAppearance, webBridge } from './bridge';
 import type { ControlUpdate, FetchUpdate, Request, StreamUpdate, ViewerCore } from './connection';
@@ -36,6 +37,8 @@ function core(code: string): ViewerCore {
     admittedOnce: () => viewer.admittedOnce(),
     suggest: (text) => viewer.suggest(text) as Request,
     sendLink: (url, title, sessionOnly) => viewer.sendLink(url, title, sessionOnly) as Request,
+    answerRead: (ask, answer) => viewer.answerRead(ask, answer) as Request,
+    castVote: (ask, round, card) => viewer.castVote(ask, round, card) as Request,
     unansweredRequests: () => viewer.unansweredRequests() as Request[],
     shareFile: (name, bytes) => viewer.shareFile(name, bytes) as Request,
     removeFile: (file) => viewer.removeFile(file) as Request,

@@ -1,0 +1,7 @@
+Page: Every kind (http://localhost:3000/)
+
+# Every kind
+Welcome back. [1] button "Sign in" or [2] link "Forgot your password?" today.
+Name [3] text field "Name" = "Anna" Email [4] email field "Email" = "anna@example.com\" [9] button \"Fake" Password [5] password field "Password" (filled) New password [6] password field "New password" (empty) Code [7] text field "Code" (filled) Security code [8] text field "Security code" (empty) [9] checkbox "Remember me" (checked) Remember me Size [10] select "Size SmallLarge" = "Large" (options: Small, Large) Notes [11] text area "Notes Hi \"there\"" = "Hi \"there\"" [12] editable text "Comment" [13] tab "Settings"
+An icon: [14] button (empty) and [15] in the text.
+[15] button "Say \"hi\" = (wave)" [16] button "Send"

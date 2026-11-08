@@ -1,6 +1,6 @@
 // Runs axe over every screen and dialog: labels, roles, names and ARIA use. Colour contrast is
 // left out, because jsdom does not lay out or paint.
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
@@ -86,6 +86,42 @@ describe('accessibility', () => {
     await screen.findByRole('group', { name: 'Link: excalidraw.com' });
     expect(await violations()).toEqual([]);
   });
+
+  it('asks: the dialogs and both banners on the host screen', async () => {
+    app('host');
+    await screen.findByText('7K2M-9QXH-4TPA');
+    await userEvent.click(screen.getByRole('button', { name: 'Ask to read' }));
+    expect(await violations()).toEqual([]);
+    await userEvent.click(screen.getAllByRole('radio')[0]!);
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ask to read' }));
+    await screen.findByRole('region', { name: /You asked everyone to read/ });
+    await userEvent.click(screen.getByRole('button', { name: 'Estimate' }));
+    expect(await violations()).toEqual([]);
+    await userEvent.type(screen.getByLabelText('Task'), 'Show unreachable');
+    await userEvent.click(screen.getByRole('button', { name: 'Start the vote' }));
+    await screen.findByRole('region', { name: 'How big is it?' });
+    expect(await violations()).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: '5' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reveal the votes' }));
+    await screen.findByRole('list', { name: 'Votes' });
+    expect(await violations()).toEqual([]);
+  });
+
+  for (const ask of ['read', 'vote']) {
+    it(`viewer screen with the host's ${ask === 'read' ? 'read request' : 'vote'}`, async () => {
+      window.history.pushState({}, '', `/?ask=${ask}`);
+      try {
+        app('start');
+        await userEvent.type(await screen.findByLabelText('Invite code'), '7K2M9QXH4TPA');
+        await userEvent.click(screen.getByRole('button', { name: /Join/ }));
+        await screen.findByRole('region', { name: ask === 'read' ? /The host asks you to read/ : 'How big is it?' }, { timeout: 2000 });
+        if (ask === 'read') await userEvent.click(screen.getByRole('button', { name: /I have a question/ }));
+        expect(await violations()).toEqual([]);
+      } finally {
+        window.history.pushState({}, '', '/');
+      }
+    });
+  }
 
   it('viewer screen, joined', async () => {
     app('start');

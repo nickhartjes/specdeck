@@ -1,0 +1,8 @@
+{
+  "cwd": "/workspace/project",
+  "hook_event_name": "SessionEnd",
+  "prompt_id": "f8f341cb-8d57-4efe-8e46-b9da7f227b13",
+  "reason": "other",
+  "session_id": "244b377e-5ea7-433f-9476-601eb8aff67e",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/244b377e-5ea7-433f-9476-601eb8aff67e.jsonl"
+}

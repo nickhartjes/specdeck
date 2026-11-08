@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use datachannel::ConnectionState;
 use serde::Serialize;
+use specdeck_protocol::asks::{Answer, Card, ReadAnswer, ReadView, VoteView};
 use specdeck_protocol::control::{
     self, Outcome as ReplyOutcome, Participant, RefusalReason, SentLink, SharedFileInfo,
     Suggestion, ViewerMessage, ViewerRequest,
@@ -108,6 +109,15 @@ pub enum ViewerEvent {
     },
     /// This viewer's links and what became of each.
     Links(Vec<SentLink>),
+    /// The host's open read request as this viewer sees it; `None` once it closed.
+    ReadRequest(Option<ReadView>),
+    /// The host's open vote as this viewer sees it; `None` once it closed.
+    Vote(Option<VoteView>),
+    /// An answer or vote was numbered and will be sent, now or once connected; its `Reply`
+    /// carries this id.
+    AnswerSent {
+        id: u32,
+    },
     /// The connection dropped; the viewer is reconnecting.
     Reconnecting,
     /// Not admitted; final.
@@ -267,6 +277,19 @@ impl ViewerSession {
     /// normalized form `check_link` gives, or the host disconnects this viewer.
     pub fn send_link(&self, url: String, title: Option<String>, session_only: bool) {
         let request = ViewerRequest::ShareLink { url, title, session_only };
+        let _ = self.control.send(Control::Request(request));
+    }
+
+    /// Answers the host's read request `ask`. A question's text must pass
+    /// [`specdeck_protocol::asks::valid_question`], or the host disconnects this viewer.
+    pub fn answer_read(&self, ask: u32, answer: ReadAnswer) {
+        let request = ViewerRequest::Answer(Answer::Read { ask, answer });
+        let _ = self.control.send(Control::Request(request));
+    }
+
+    /// Votes in round `round` of the host's vote `ask`; `None` takes the vote back.
+    pub fn cast_vote(&self, ask: u32, round: u16, card: Option<Card>) {
+        let request = ViewerRequest::Answer(Answer::Vote { ask, round, card });
         let _ = self.control.send(Control::Request(request));
     }
 
@@ -714,6 +737,8 @@ impl Viewer {
             ControlUpdate::Shared { whole_files } => ViewerEvent::Shared { whole_files },
             ControlUpdate::LinksAllowed { links } => ViewerEvent::LinksAllowed { links },
             ControlUpdate::Links(mine) => ViewerEvent::Links(mine),
+            ControlUpdate::ReadRequest(open) => ViewerEvent::ReadRequest(open),
+            ControlUpdate::Vote(open) => ViewerEvent::Vote(open),
             ControlUpdate::Refused(reason) => {
                 return Some(Outcome::Final(ViewerEvent::Refused(reason)));
             }
@@ -731,14 +756,18 @@ impl Viewer {
             ViewerRequest::Suggest { text } => text.len(),
             ViewerRequest::ShareLink { url, .. } => url.len(),
             ViewerRequest::ShareFile { size, .. } => *size as usize,
-            ViewerRequest::RemoveFile { .. } => 0,
+            ViewerRequest::RemoveFile { .. } | ViewerRequest::Answer(_) => 0,
         };
         diag::viewer_request_sent(kind, bytes);
         let suggestion = matches!(request, ViewerRequest::Suggest { .. });
+        let answer = matches!(request, ViewerRequest::Answer(_));
         let (id, message) = self.state.send_request(request);
-        // The window follows its latest suggestion by this id; files report back on their own.
+        // The window follows its latest suggestion and answer by these ids; files report back on
+        // their own.
         if suggestion {
             let _ = self.events.send(ViewerEvent::RequestSent { id });
+        } else if answer {
+            let _ = self.events.send(ViewerEvent::AnswerSent { id });
         }
         message
     }

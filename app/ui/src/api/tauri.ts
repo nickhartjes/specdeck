@@ -7,7 +7,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exportFileName } from '../model/diagnostics';
 import type { Bridge } from './bridge';
 import type { MenuCommand } from '../menu/menu';
-import type { AgentVersion, Appearance, DiagnosticsStatus, HostEvent, JoinLink, Profile, RunningSession, ServiceCheck, SharedFileInfo, UpdateState, ViewEvent } from './types';
+import type { AgentVersion, Appearance, DiagnosticsStatus, HostEvent, JoinLink, NoticeOpen, Profile, RunningSession, ServiceCheck, SharedFileInfo, UpdateState, ViewEvent } from './types';
 
 function channel<T>(handler: (message: T) => void): Channel<T> {
   const ch = new Channel<T>();
@@ -41,7 +41,12 @@ export const tauriBridge: Bridge = {
   setUsername: (username) => invoke<Profile>('set_username', { username }),
   setNotifications: (enabled) => invoke<Profile>('set_notifications', { enabled }),
   setViewerNotifications: (kinds) => invoke<Profile>('set_viewer_notifications', { kinds }),
-  viewerNotify: (kind, title, body) => invoke('viewer_notify', { kind, title, body }),
+  viewerNotify: (kind, title, body, open) => invoke('viewer_notify', { kind, title, body, open: open ?? null }),
+  onNoticeOpen: (handler) => {
+    // Sent to the window of the clicked notification's session (`notification-open` design decision 2).
+    const stop = getCurrentWebviewWindow().listen<NoticeOpen>('notice-open', (event) => handler(event.payload));
+    return () => void stop.then((unlisten) => unlisten());
+  },
   setCheckUpdates: (enabled) => invoke<Profile>('set_check_updates', { enabled }),
   setScreenReader: (enabled) => invoke<Profile>('set_screen_reader', { enabled }),
   setVerboseLogging: (enabled) => invoke<Profile>('set_verbose_logging', { enabled }),
@@ -96,6 +101,14 @@ export const tauriBridge: Bridge = {
   hostAnswerLink: (viewerId, id, share) => invoke('host_answer_link', { viewerId, id, share }),
   hostRemoveLink: (id) => invoke('host_remove_link', { id }),
   hostAllowLinks: (on) => invoke('host_allow_links', { on }),
+  hostAskToRead: (target, label, limitS) => invoke('host_ask_to_read', { target, label, limitS }),
+  hostEndRead: () => invoke('host_end_read'),
+  hostStartVote: (task, cards) => invoke('host_start_vote', { task, cards }),
+  hostCastVote: (card) => invoke('host_cast_vote', { card }),
+  hostRevealVotes: () => invoke('host_reveal_votes'),
+  hostVoteAgain: () => invoke('host_vote_again'),
+  hostStopVote: () => invoke('host_stop_vote'),
+  hostKeepEstimate: (card) => invoke('host_keep_estimate', { card }),
   hostClose: () => invoke('host_close'),
   joinSession: (code, server, terminal, events) =>
     invoke('join_session', { code, server, terminal: bytesChannel(terminal), events: channel<ViewEvent>(events) }),
@@ -107,6 +120,8 @@ export const tauriBridge: Bridge = {
   saveSharedFile: (name, bytes) => invoke<boolean>('save_shared_file', bytes, { headers: fileHeaders(name) }),
   sendLink: (url, title, sessionOnly) => invoke('send_link', { url, title, sessionOnly }),
   openLink: (id) => invoke('open_shared_link', { id }),
+  answerRead: (ask, answer) => invoke('answer_read', { ask, answer }),
+  castVote: (ask, round, card) => invoke('cast_vote', { ask, round, card }),
   takeJoinLink: () => invoke<JoinLink | null>('take_join_link'),
   takeStartCommand: () => invoke<MenuCommand | null>('take_start_command'),
   setSessionTitle: (name) => invoke('set_session_title', { name }),

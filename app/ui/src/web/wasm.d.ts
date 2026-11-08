@@ -15,6 +15,8 @@ declare module 'specdeck-web-wasm' {
     onStream(bytes: Uint8Array): unknown;
     suggest(text: string): unknown;
     sendLink(url: string, title: string | null | undefined, sessionOnly: boolean): unknown;
+    answerRead(ask: number, answer: unknown): unknown;
+    castVote(ask: number, round: number, card: unknown): unknown;
     unansweredRequests(): unknown;
     shareFile(name: string, bytes: Uint8Array): unknown;
     removeFile(file: number): unknown;

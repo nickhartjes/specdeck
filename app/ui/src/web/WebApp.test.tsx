@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderWith } from '../test/helpers';
@@ -73,6 +73,39 @@ describe('web viewer page', () => {
     await screen.findByLabelText('Invite code');
     expect(screen.queryByRole('button', { name: /host/i })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Watch in this browser']);
+  });
+});
+
+describe('the host’s asks in the browser', () => {
+  it('answers a read request with a question and votes', async () => {
+    const { bridge, joinSession } = setup('7K2M-9QXH-4TPA');
+    let emit: (event: ViewEvent) => void = () => {};
+    joinSession.mockImplementation(async (_code, _server, _terminal, events) => {
+      emit = events;
+    });
+    const answerRead = vi.spyOn(bridge, 'answerRead').mockResolvedValue();
+    const castVote = vi.spyOn(bridge, 'castVote').mockResolvedValue();
+    await userEvent.type(await screen.findByLabelText('Your name'), 'anna');
+    await userEvent.click(screen.getByRole('button', { name: 'Watch in this browser' }));
+    await waitFor(() => expect(joinSession).toHaveBeenCalled());
+    act(() => {
+      emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 80, rows: 24 });
+      emit({ type: 'participants', participants: [{ id: 0, username: 'Nick', role: 'Host', label: 'Nick' }, { id: 2, username: 'anna', role: 'Viewer', label: 'anna' }] });
+      emit({ type: 'status', status: 'waiting' });
+      emit({
+        type: 'read-request',
+        open: { id: 1, target: { document: { path: 'design.md' } }, label: 'design.md', limitS: 0, leftMs: null, people: [[2, 'reading']], mine: 'reading', questions: [] },
+      });
+      emit({ type: 'vote', open: { id: 2, round: 1, task: 'Show unreachable', cards: 't-shirt', voted: [], mine: null, revealed: null, older: [] } });
+    });
+    const read = screen.getByRole('region', { name: /The host asks you to read design.md/ });
+    expect(read).toHaveTextContent('No time limit');
+    await userEvent.click(within(read).getByRole('button', { name: /I have a question/ }));
+    await userEvent.type(within(read).getByLabelText(/Your question/), 'Why?');
+    await userEvent.click(within(read).getByRole('button', { name: 'Send' }));
+    expect(answerRead).toHaveBeenCalledWith(1, { question: { text: 'Why?' } });
+    await userEvent.click(within(screen.getByRole('region', { name: 'How big is it?' })).getByRole('button', { name: 'L' }));
+    expect(castVote).toHaveBeenCalledWith(2, 1, { value: 3 });
   });
 });
 

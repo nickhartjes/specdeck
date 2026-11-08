@@ -12,6 +12,7 @@ use serde::Deserialize;
 use specdeck_core::browser::{BrowserHandler, BrowserResult};
 use specdeck_local::{Compat, Frame, Frozen, Protocol, compat};
 use specdeck_protocol::AgentId;
+use specdeck_protocol::asks::{Card, CardSet, ReadTarget};
 use specdeck_session::messages::{Command, Event, LinkAnswer, SuggestionAnswer};
 use specdeck_session::runtime::{HostNotice, Summary};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -245,6 +246,40 @@ impl SessionClient {
 
     pub fn allow_links(&self, on: bool) {
         self.send(&Command::AllowLinks { links: on });
+    }
+
+    /// Asks everyone to read `target`; the session refuses it with a `failed` event when one is
+    /// open or the target is not in the session.
+    pub fn ask_to_read(&self, target: ReadTarget, label: String, limit_s: u16) {
+        self.send(&Command::AskToRead { target, label, limit_s });
+    }
+
+    pub fn end_read(&self) {
+        self.send(&Command::EndRead);
+    }
+
+    pub fn start_vote(&self, task: String, cards: CardSet) {
+        self.send(&Command::StartVote { task, cards });
+    }
+
+    pub fn cast_vote(&self, card: Option<Card>) {
+        self.send(&Command::CastVote { card });
+    }
+
+    pub fn reveal_votes(&self) {
+        self.send(&Command::RevealVotes);
+    }
+
+    pub fn vote_again(&self) {
+        self.send(&Command::VoteAgain);
+    }
+
+    pub fn stop_vote(&self) {
+        self.send(&Command::StopVote);
+    }
+
+    pub fn keep_estimate(&self, card: Card) {
+        self.send(&Command::KeepEstimate { card });
     }
 
     /// The address of a link shared in this session, to open.

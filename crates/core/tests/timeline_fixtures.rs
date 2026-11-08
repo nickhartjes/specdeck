@@ -7,7 +7,7 @@ use specdeck_core::hooks::{HOOK_EVENTS, HookPayload};
 use specdeck_core::session_folder::SessionFolder;
 use specdeck_core::timeline::TimelineBuilder;
 use specdeck_protocol::timeline::{
-    Answer, DiffHunk, Entry, FileChangeKind, LeftOut, Permission, ToolOutcome, ToolStatus,
+    Answer, DiffHunk, Entry, FileChangeKind, LeftOut, Permission, Target, ToolOutcome, ToolStatus,
 };
 
 /// The payloads of one recorded session, in order, without events the engine does not register.
@@ -389,4 +389,37 @@ fn browser_session_with_screenshots_turned_off() {
             },
         ]
     );
+}
+
+#[test]
+fn browser_steps_name_their_element_and_hide_the_password() {
+    let entries = replay("browser-steps");
+    let calls: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::ToolCall { tool_name, input, target, .. }
+                if tool_name.starts_with("mcp__specdeck__") =>
+            {
+                Some((tool_name.as_str(), input, target.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let target = |kind: &str, label: &str, sensitive: bool| {
+        Some(Target { kind: kind.into(), label: Some(label.into()), sensitive })
+    };
+    let (_, email, email_target) = &calls[2];
+    assert_eq!(*email_target, target("email field", "Email", false));
+    assert_eq!(email["text"], "test@example.com");
+    let (_, password, password_target) = &calls[3];
+    assert_eq!(*password_target, target("password field", "Password", true));
+    assert!(!password.contains_key("text"));
+    assert_eq!(calls[4].2, target("button", "Sign in", false));
+
+    // The prompt and Claude's answer name the test password; no tool entry does.
+    let tools: Vec<_> = entries
+        .iter()
+        .filter(|entry| matches!(entry, Entry::ToolCall { .. } | Entry::ToolResult { .. }))
+        .collect();
+    assert!(!serde_json::to_string(&tools).unwrap().contains("hunter2-test"));
 }

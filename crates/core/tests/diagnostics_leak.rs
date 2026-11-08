@@ -13,9 +13,10 @@ use std::time::Duration;
 use specdeck_core::environment::Environment;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession};
-use specdeck_core::sharing::{Answer, Sharing, SharingConfig, SharingEvent};
+use specdeck_core::sharing::{Answer, AskCommand, Sharing, SharingConfig, SharingEvent};
 use specdeck_core::viewer::{CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession};
 use specdeck_protocol::AgentId;
+use specdeck_protocol::asks::{Card, CardSet, ReadAnswer, ReadTarget};
 use specdeck_protocol::control::{Outcome, PROTOCOL_VERSION};
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::timeline::Entry;
@@ -42,6 +43,9 @@ const LINK_PATH_MARKER: &str = "marker-link-path";
 const LINK_KEY_MARKER: &str = "Marker-Link-Key";
 const LINK_TITLE_MARKER: &str = "Marker-Link-Title";
 const LINK_SITE_MARKER: &str = "marker-link-site.example";
+const READ_LABEL_MARKER: &str = "Marker-Read-Label";
+const QUESTION_MARKER: &str = "Marker-Question-Text";
+const TASK_MARKER: &str = "Marker-Task-Text";
 
 /// A fake Claude Code: prints the output marker, and on the line "go" reports a prompt, a tool
 /// call and a written code file holding the other markers through its hooks. Then echoes lines.
@@ -262,6 +266,63 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     .await;
     sharing.allow_links(false);
     until(&mut events, &mut text, |_, e| *e == ViewerEvent::LinksAllowed { links: false }).await;
+
+    // The host asks to read the code file, the viewer asks a question; a vote, revealed and
+    // kept; and an answer after the request closed.
+    let read = AskCommand::Read {
+        target: ReadTarget::Code { path: CODE_PATH_MARKER.into() },
+        label: READ_LABEL_MARKER.into(),
+        limit_s: 120,
+    };
+    assert_eq!(sharing.ask(read).await.unwrap(), Ok(()));
+    let ask = std::sync::Mutex::new(0);
+    until(&mut events, &mut text, |_, e| match e {
+        ViewerEvent::ReadRequest(Some(view)) => {
+            *ask.lock().unwrap() = view.id;
+            true
+        }
+        _ => false,
+    })
+    .await;
+    let read_id = *ask.lock().unwrap();
+    viewer.answer_read(read_id, ReadAnswer::Question { text: Some(QUESTION_MARKER.into()) });
+    until(&mut events, &mut text, |_, e| {
+        matches!(e, ViewerEvent::ReadRequest(Some(view)) if view.mine != ReadAnswer::Reading)
+    })
+    .await;
+    assert_eq!(sharing.ask(AskCommand::EndRead).await.unwrap(), Ok(()));
+    viewer.answer_read(read_id, ReadAnswer::Ready);
+    until(&mut events, &mut text, |_, e| {
+        matches!(e, ViewerEvent::Reply { outcome: Outcome::Gone, .. })
+    })
+    .await;
+    let vote = AskCommand::StartVote { task: TASK_MARKER.into(), cards: CardSet::TShirt };
+    assert_eq!(sharing.ask(vote).await.unwrap(), Ok(()));
+    until(&mut events, &mut text, |_, e| match e {
+        ViewerEvent::Vote(Some(view)) => {
+            *ask.lock().unwrap() = view.id;
+            true
+        }
+        _ => false,
+    })
+    .await;
+    viewer.cast_vote(*ask.lock().unwrap(), 1, Some(Card::Value(4)));
+    until(
+        &mut events,
+        &mut text,
+        |_, e| matches!(e, ViewerEvent::Vote(Some(view)) if view.mine.is_some()),
+    )
+    .await;
+    assert_eq!(sharing.ask(AskCommand::CastVote(Some(Card::Value(1)))).await.unwrap(), Ok(()));
+    assert_eq!(sharing.ask(AskCommand::Reveal).await.unwrap(), Ok(()));
+    assert_eq!(sharing.ask(AskCommand::VoteAgain).await.unwrap(), Ok(()));
+    assert_eq!(sharing.ask(AskCommand::CastVote(Some(Card::Value(3)))).await.unwrap(), Ok(()));
+    assert_eq!(sharing.ask(AskCommand::Reveal).await.unwrap(), Ok(()));
+    assert_eq!(sharing.ask(AskCommand::Keep(Card::Value(3))).await.unwrap(), Ok(()));
+    until(&mut events, &mut text, |_, e| {
+        matches!(e, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::Estimated { .. }))
+    })
+    .await;
     // Past a traffic report, so verbose events are in.
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     viewer.leave();
@@ -286,6 +347,12 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "host.link_shared",
         "host.link_removed",
         "host.links_allowed",
+        "host.ask_read_opened",
+        "host.ask_read_closed",
+        "host.ask_vote_opened",
+        "host.ask_vote_round",
+        "host.ask_vote_closed",
+        "host.ask_answer_refused",
         "viewer.request_sent",
         "viewer.request_reply",
         "host.file_shared",
@@ -320,6 +387,10 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         LINK_KEY_MARKER,
         LINK_TITLE_MARKER,
         LINK_SITE_MARKER,
+        READ_LABEL_MARKER,
+        QUESTION_MARKER,
+        TASK_MARKER,
+        "XL",
         TURN_SECRET,
         code.as_str(),
         "127.0.0.1",
@@ -342,4 +413,11 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         .filter(|(_, _, value)| !plain(value))
         .collect();
     assert!(unplain.is_empty(), "values that are not plain: {unplain:?}");
+
+    // The asks are recorded with their counts.
+    let closed = capture.named("host.ask_read_closed");
+    assert_eq!(closed[0].field("questions"), Some("1"));
+    assert_eq!(closed[0].field("of"), Some("1"));
+    let kept = capture.named("host.ask_vote_closed");
+    assert_eq!((kept[0].field("kept"), kept[0].field("votes")), (Some("true"), Some("1")));
 }

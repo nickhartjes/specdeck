@@ -172,3 +172,16 @@ describe('shared links', () => {
     expect(turnText(model.turns[0]!)).not.toContain('SECRET');
   });
 });
+
+describe("Claude's browser", () => {
+  it('keeps the element a click acts on', () => {
+    const target = { kind: 'button', label: 'Sign in', sensitive: false };
+    const { turns } = buildTimeline([
+      { ...stamp(), kind: 'prompt', promptId: 'p1', text: 'sign in' },
+      { ...stamp(), kind: 'tool-call', promptId: 'p1', toolUseId: 'c', toolName: 'mcp__specdeck__click', input: { element: 3 }, target },
+      { ...stamp(), kind: 'tool-call', promptId: 'p1', toolUseId: 'b', toolName: 'Bash', input: {} },
+    ]);
+    expect(turns[0]!.items[0]).toMatchObject({ toolName: 'mcp__specdeck__click', target });
+    expect(turns[0]!.items[1]).not.toHaveProperty('target');
+  });
+});

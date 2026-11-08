@@ -1,8 +1,8 @@
 // What the agent did for a prompt, in plain words (viewer-views design decision 6): each tool call,
 // or each run of reads or file changes, becomes one step line that opens to its technical detail.
 
-import type { Screenshot } from '../api/types';
-import type { LinkItem, NoticeItem, TextItem, ToolItem, ToolStatus, Turn } from './timeline';
+import type { Screenshot, Target } from '../api/types';
+import type { AskItem, LinkItem, NoticeItem, TextItem, ToolItem, ToolStatus, Turn } from './timeline';
 
 /** `denied`: the host did not allow it, or rejected the plan it presented. */
 export type Outcome = 'running' | 'succeeded' | 'failed' | 'not-run' | 'denied';
@@ -23,7 +23,7 @@ export interface Step {
   screenshot?: ToolItem;
 }
 
-export type SummaryEntry = Step | TextItem | NoticeItem | LinkItem;
+export type SummaryEntry = Step | TextItem | NoticeItem | LinkItem | AskItem;
 
 const SHELL = new Set(['Bash', 'PowerShell']);
 const READS = new Set(['Read', 'Glob', 'Grep', 'LS']);
@@ -87,6 +87,21 @@ function address(url: string): string {
   return bare.length > 60 ? `${bare.slice(0, 59)}…` : bare;
 }
 
+/** Most characters of an element's label in a step. */
+const MAX_LABEL = 40;
+
+/** An element as a step names it (`browser-steps` design decision 4): “Sign in”, or a button. */
+export function named(target: Target): string {
+  const label = target.label?.trim();
+  if (label) return `“${label.length > MAX_LABEL ? `${label.slice(0, MAX_LABEL - 1).trimEnd()}…` : label}”`;
+  return `${/^[aeiou]/.test(target.kind) ? 'an' : 'a'} ${target.kind}`;
+}
+
+/** Typing in Claude's browser whose text the session left out: a sensitive or unknown field. */
+export function typedTextHidden(tool: ToolItem): boolean {
+  return tool.toolName === `${BROWSER}type` && !('text' in tool.input);
+}
+
 /** What one browser call did, past and -ing. */
 function browserAction(tool: ToolItem): [string, string] {
   switch (tool.toolName.slice(BROWSER.length)) {
@@ -96,10 +111,18 @@ function browserAction(tool: ToolItem): [string, string] {
     }
     case 'read_page':
       return ['read the page', 'reading the page'];
-    case 'click':
-      return ['clicked on the page', 'clicking on the page'];
-    case 'type':
+    case 'click': {
+      const what = tool.target ? named(tool.target) : 'on the page';
+      return [`clicked ${what}`, `clicking ${what}`];
+    }
+    case 'type': {
+      const { target } = tool;
+      if (target?.sensitive) return [`filled in ${named(target)}`, `filling in ${named(target)}`];
+      if (target) return [`typed into ${named(target)}`, `typing into ${named(target)}`];
+      // The session hid the text of a field it didn't know; an older host sent it.
+      if (typedTextHidden(tool)) return ['filled in a field', 'filling in a field'];
       return ['typed on the page', 'typing on the page'];
+    }
     case 'press': {
       const key = text(tool, 'key') || 'a key';
       return [`pressed ${key}`, `pressing ${key}`];

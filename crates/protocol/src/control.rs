@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+use crate::asks::{Answer, ReadView, VoteView, valid_answer};
 use crate::links::{check_link, valid_title};
 use crate::{AgentId, AgentStatus};
 
@@ -13,12 +14,14 @@ use crate::{AgentId, AgentStatus};
 /// answers to them (`Allowed`, `Reply`, `Suggestions`); version 4 the whole text of code files
 /// (the `FileText` timeline entry), the host's setting for it (`Shared`) and shared files (the
 /// `files` channel, `FileShared`, `Files`, `FilesAllowed`, `ShareFile` and `RemoveFile`); version
-/// 5 shared links (the `Link` and `LinkRemoved` entries, `ShareLink`, `LinksAllowed` and `Links`).
-pub const PROTOCOL_VERSION: u32 = 5;
+/// 5 shared links (the `Link` and `LinkRemoved` entries, `ShareLink`, `LinksAllowed` and `Links`);
+/// version 6 the host's asks (the `ReadDone` and `Estimated` entries, `Answer`, `ReadRequest` and
+/// `Vote`).
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// The oldest viewer protocol a host admits. Older viewers watch only: the host never sends them
 /// a message their version cannot read.
-pub const MIN_VIEWER_PROTOCOL_VERSION: u32 = 4;
+pub const MIN_VIEWER_PROTOCOL_VERSION: u32 = 5;
 
 /// The first protocol version that can send requests to the host.
 pub const REQUESTS_PROTOCOL_VERSION: u32 = 3;
@@ -35,6 +38,10 @@ pub const MAX_FILE_NAME_BYTES: usize = 255;
 /// The first protocol version that reads and shares links: `Link`, `LinkRemoved`, `ShareLink`,
 /// `LinksAllowed` and `Links`.
 pub const LINKS_PROTOCOL_VERSION: u32 = 5;
+
+/// The first protocol version with the host's asks: `ReadDone`, `Estimated`, `Answer`,
+/// `ReadRequest` and `Vote`.
+pub const ASKS_PROTOCOL_VERSION: u32 = 6;
 
 /// Longest username accepted, in characters.
 pub const MAX_USERNAME_CHARS: usize = 64;
@@ -82,6 +89,8 @@ pub enum ViewerRequest {
     /// A link for everyone in the session, which only the host can share (version 5). `url` is
     /// in the normalized form [`check_link`] gives.
     ShareLink { url: String, title: Option<String>, session_only: bool },
+    /// An answer to the host's read request or a vote (version 6), checked by [`valid_answer`].
+    Answer(Answer),
 }
 
 impl ViewerRequest {
@@ -92,6 +101,7 @@ impl ViewerRequest {
             ViewerRequest::ShareFile { .. } => "share_file",
             ViewerRequest::RemoveFile { .. } => "remove_file",
             ViewerRequest::ShareLink { .. } => "share_link",
+            ViewerRequest::Answer(_) => "answer",
         }
     }
 }
@@ -164,6 +174,16 @@ pub enum HostMessage {
     /// [`MAX_LINKS_LISTED`] (version 5): on admission and on every change; only to that viewer.
     Links {
         mine: Vec<SentLink>,
+    },
+    /// The open read request as this viewer sees it, or `None` once it closed (version 6): on
+    /// admission and on every change.
+    ReadRequest {
+        open: Option<ReadView>,
+    },
+    /// The open vote as this viewer sees it, or `None` once it closed (version 6): on admission
+    /// and on every change. No value but the viewer's own before the reveal.
+    Vote {
+        open: Option<VoteView>,
     },
 }
 
@@ -354,6 +374,8 @@ pub enum DecodeError {
     InvalidFileName,
     #[error("link must be a normalized web address others can reach, with a valid title")]
     InvalidLink,
+    #[error("answer must have a question of at most 280 characters and a card of a set")]
+    InvalidAnswer,
 }
 
 pub fn encode<T: Serialize>(message: &T) -> Vec<u8> {
@@ -389,6 +411,11 @@ pub fn decode_viewer(bytes: &[u8]) -> Result<ViewerMessage, DecodeError> {
                 return Err(DecodeError::InvalidLink);
             }
         }
+        ViewerMessage::Send { request: ViewerRequest::Answer(answer), .. } => {
+            if !valid_answer(answer) {
+                return Err(DecodeError::InvalidAnswer);
+            }
+        }
         ViewerMessage::Send { request: ViewerRequest::ShareFile { name, .. }, .. } => {
             if name.is_empty() || name.len() > MAX_FILE_NAME_BYTES {
                 return Err(DecodeError::InvalidFileName);
@@ -420,6 +447,7 @@ fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asks::{Card, CardSet, ReadAnswer, ReadState, ReadTarget};
 
     fn suggest(id: u32, text: &str) -> ViewerMessage {
         ViewerMessage::Send { id, request: ViewerRequest::Suggest { text: text.into() } }
@@ -443,6 +471,14 @@ mod tests {
         }
     }
 
+    fn answer(answer: Answer) -> ViewerMessage {
+        ViewerMessage::Send { id: 7, request: ViewerRequest::Answer(answer) }
+    }
+
+    fn question(text: &str) -> Answer {
+        Answer::Read { ask: 1, answer: ReadAnswer::Question { text: Some(text.into()) } }
+    }
+
     fn hello(username: &str) -> ViewerMessage {
         ViewerMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -464,6 +500,11 @@ mod tests {
             ViewerMessage::Send { id: 6, request: ViewerRequest::RemoveFile { file: 2 } },
             share_link("https://excalidraw.com/#room=a,b", Some("Draw")),
             share_link("http://192.168.1.20:8080/", None),
+            answer(Answer::Read { ask: 1, answer: ReadAnswer::Ready }),
+            answer(question("Why not reuse the bucket?")),
+            answer(Answer::Read { ask: 1, answer: ReadAnswer::Question { text: None } }),
+            answer(Answer::Vote { ask: 2, round: 3, card: Some(Card::Value(5)) }),
+            answer(Answer::Vote { ask: 2, round: 3, card: None }),
         ] {
             assert_eq!(decode_viewer(&encode(&message)), Ok(message));
         }
@@ -543,6 +584,32 @@ mod tests {
                     },
                 ],
             },
+            HostMessage::ReadRequest {
+                open: Some(ReadView {
+                    id: 1,
+                    target: ReadTarget::Changes { from_seq: 4, to_seq: 9 },
+                    label: "The changes in the last prompt".into(),
+                    limit_s: 120,
+                    left_ms: Some(119_000),
+                    people: vec![(1, ReadState::Reading), (2, ReadState::OlderApp)],
+                    mine: ReadAnswer::Reading,
+                    questions: vec![],
+                }),
+            },
+            HostMessage::ReadRequest { open: None },
+            HostMessage::Vote {
+                open: Some(VoteView {
+                    id: 2,
+                    round: 1,
+                    task: "Estimate me".into(),
+                    cards: CardSet::StoryPoints,
+                    voted: vec![0, 1],
+                    mine: Some(Card::Unsure),
+                    revealed: None,
+                    older: vec![2],
+                }),
+            },
+            HostMessage::Vote { open: None },
         ];
         for message in messages {
             assert_eq!(decode_host(&encode(&message)), Ok(message));
@@ -590,6 +657,30 @@ mod tests {
         assert_eq!(encode(&HostMessage::LinksAllowed { links: true }), [11, 1]);
         assert_eq!(encode(&HostMessage::Links { mine: vec![] }), [12, 0]);
         assert_eq!(encode(&share_link("https://a.b/", None))[..3], [3, 1, 3]);
+        // The asks come after every version 5 message, and `Answer` after `ShareLink`.
+        assert_eq!(encode(&HostMessage::ReadRequest { open: None }), [13, 0]);
+        assert_eq!(encode(&HostMessage::Vote { open: None }), [14, 0]);
+        assert_eq!(
+            encode(&answer(Answer::Read { ask: 1, answer: ReadAnswer::Ready }))[..5],
+            [3, 7, 4, 0, 1]
+        );
+    }
+
+    #[test]
+    fn answers_are_validated() {
+        assert!(decode_viewer(&encode(&answer(question(&"é".repeat(280))))).is_ok());
+        assert_eq!(
+            decode_viewer(&encode(&answer(question(&"a".repeat(281))))),
+            Err(DecodeError::InvalidAnswer)
+        );
+        assert_eq!(
+            decode_viewer(&encode(&answer(question("enter\r")))),
+            Err(DecodeError::InvalidAnswer)
+        );
+        let bad_card = Answer::Vote { ask: 2, round: 1, card: Some(Card::Value(6)) };
+        assert_eq!(decode_viewer(&encode(&answer(bad_card))), Err(DecodeError::InvalidAnswer));
+        // The longest question in four-byte characters still fits in a request.
+        assert!(encode(&answer(question(&"😀".repeat(280)))).len() <= MAX_REQUEST_BYTES);
     }
 
     #[test]
@@ -694,14 +785,18 @@ mod tests {
 
     #[test]
     fn version_check_names_the_side_that_must_update() {
-        assert_eq!(check_version(4, 5, 4), Ok(()));
-        assert_eq!(check_version(4, 5, 5), Ok(()));
-        assert_eq!(check_version(4, 5, 3), Err(RefusalReason::ViewerOutdated));
-        assert_eq!(check_version(4, 5, 6), Err(RefusalReason::HostOutdated));
+        assert_eq!(check_version(5, 6, 5), Ok(()));
+        assert_eq!(check_version(5, 6, 6), Ok(()));
+        assert_eq!(check_version(5, 6, 4), Err(RefusalReason::ViewerOutdated));
+        assert_eq!(check_version(5, 6, 7), Err(RefusalReason::HostOutdated));
         assert_eq!(
-            check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 4),
+            check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 5),
             Ok(()),
             "the previous release's viewers are admitted"
+        );
+        assert_eq!(
+            check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 4),
+            Err(RefusalReason::ViewerOutdated)
         );
         assert_eq!(
             check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION),

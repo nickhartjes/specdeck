@@ -7,9 +7,11 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use specdeck_protocol::timeline::{
-    Answer, DiffHunk, Entry, FileChangeKind, Permission, TimelineEvent, ToolOutcome, ToolStatus,
+    Answer, DiffHunk, Entry, FileChangeKind, Permission, Target, TimelineEvent, ToolOutcome,
+    ToolStatus,
 };
 
+use crate::browser_targets::{self, Targets};
 use crate::documents::{self, DocumentText};
 use crate::hooks::HookPayload;
 use crate::screenshots;
@@ -178,6 +180,8 @@ pub struct TimelineBuilder {
     requested_notice: bool,
     /// Images from MCP tools are kept; off when the host turned screenshots off.
     screenshots: bool,
+    /// The elements of Claude's last read of a page in its browser.
+    targets: Targets,
 }
 
 impl TimelineBuilder {
@@ -188,6 +192,7 @@ impl TimelineBuilder {
             background_helpers: HashMap::new(),
             requested_notice: false,
             screenshots: true,
+            targets: Targets::default(),
         }
     }
 
@@ -223,6 +228,8 @@ impl TimelineBuilder {
                 vec![Entry::Message { prompt_id, message_id, text: delta, r#final }]
             }
             Payload::PreToolUse(call) => {
+                self.targets.before(&call.tool_name);
+                let target = self.targets.of(&call.tool_name, &call.tool_input);
                 self.open_calls.push(OpenCall {
                     tool_use_id: call.tool_use_id.clone(),
                     prompt_id: call.prompt_id.clone(),
@@ -232,16 +239,19 @@ impl TimelineBuilder {
                     awaiting_permission: false,
                     noticed: false,
                 });
-                let input = self.shared_input(&call.tool_name, call.tool_input);
+                let mut input = self.shared_input(&call.tool_name, call.tool_input);
+                browser_targets::hide_typed(&call.tool_name, &mut input, target.as_ref());
                 vec![Entry::ToolCall {
                     prompt_id: call.prompt_id,
                     tool_use_id: call.tool_use_id,
                     tool_name: call.tool_name,
                     input,
+                    target,
                 }]
             }
             Payload::PostToolUse { call, tool_response } => {
                 let permission = self.close_call(&call.tool_use_id);
+                self.targets.after(&call.tool_name, &tool_response);
                 let outcome = match call.tool_name.as_str() {
                     QUESTION_TOOL => answers(&tool_response, &call.tool_input),
                     PLAN_TOOL => Some(ToolOutcome::PlanDecision { approved: true }),
@@ -375,7 +385,8 @@ impl TimelineBuilder {
             }
             PLAN_TOOL => "Claude has a plan for you to review".into(),
             name if name.starts_with(BROWSER_TOOLS) => {
-                browser_permission_text(&name[BROWSER_TOOLS.len()..], input)
+                let target = self.targets.of(name, input);
+                browser_permission_text(&name[BROWSER_TOOLS.len()..], input, target.as_ref())
             }
             _ => {
                 let summary = SUMMARY_FIELDS.iter().find_map(|field| {
@@ -548,7 +559,11 @@ fn added_file(content: &str) -> DiffHunk {
 /// is not a permission decision.
 /// What Claude wants to do in its browser, in plain words (`agent-browser`, *Browser steps in
 /// plain words*).
-fn browser_permission_text(tool: &str, input: &Map<String, Value>) -> String {
+fn browser_permission_text(
+    tool: &str,
+    input: &Map<String, Value>,
+    target: Option<&Target>,
+) -> String {
     let field = |key: &str| input.get(key).and_then(Value::as_str).unwrap_or_default();
     match tool {
         "navigate" => {
@@ -560,8 +575,22 @@ fn browser_permission_text(tool: &str, input: &Map<String, Value>) -> String {
             format!("Claude wants to open {address} in its browser")
         }
         "read_page" => "Claude wants to read the page in its browser".into(),
-        "click" => "Claude wants to click on the page in its browser".into(),
-        "type" => "Claude wants to type on the page in its browser".into(),
+        "click" => match target {
+            Some(target) => {
+                format!("Claude wants to click {} in its browser", browser_targets::named(target))
+            }
+            None => "Claude wants to click on the page in its browser".into(),
+        },
+        "type" => match target {
+            Some(target) if target.sensitive => {
+                format!("Claude wants to fill in {} in its browser", browser_targets::named(target))
+            }
+            Some(target) => format!(
+                "Claude wants to type into {} in its browser",
+                browser_targets::named(target)
+            ),
+            None => "Claude wants to type on the page in its browser".into(),
+        },
         "press" => match field("key") {
             "" => "Claude wants to press a key in its browser".into(),
             key => format!("Claude wants to press {} in its browser", cut(key, 40)),
@@ -1188,6 +1217,111 @@ mod tests {
             "Claude has a plan for you to review"
         );
         assert_eq!(text("Task", json!({ "prompt": "go" })), "Claude wants to use Task");
+    }
+
+    /// A builder that has read the page of `browser_targets`' fixture in Claude's browser.
+    fn after_reading_a_page() -> TimelineBuilder {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        let page = include_str!("../tests/fixtures/browser/read-page.txt");
+        let response = serde_json::json!({ "tool_response": [{ "type": "text", "text": page }] });
+        builder
+            .handle(call("PreToolUse", "mcp__specdeck__read_page", "r", serde_json::json!({})))
+            .unwrap();
+        builder.handle(call("PostToolUse", "mcp__specdeck__read_page", "r", response)).unwrap();
+        builder
+    }
+
+    fn browser_call(builder: &mut TimelineBuilder, tool: &str, input: Value) -> Vec<Entry> {
+        let tool = format!("mcp__specdeck__{tool}");
+        builder
+            .handle(call("PreToolUse", &tool, "t", serde_json::json!({ "tool_input": input })))
+            .unwrap()
+    }
+
+    #[test]
+    fn browser_clicks_and_typing_carry_their_element_and_hide_sensitive_text() {
+        use serde_json::json;
+        let target = |entries: &[Entry]| match &entries[0] {
+            Entry::ToolCall { target, .. } => target.clone(),
+            other => panic!("{other:?}"),
+        };
+        let typed = |entries: &[Entry]| match &entries[0] {
+            Entry::ToolCall { input, .. } => input.get("text").cloned(),
+            other => panic!("{other:?}"),
+        };
+        let mut builder = after_reading_a_page();
+
+        let click = browser_call(&mut builder, "click", json!({ "element": 1 }));
+        assert_eq!(
+            target(&click),
+            Some(Target { kind: "button".into(), label: Some("Sign in".into()), sensitive: false })
+        );
+
+        let email =
+            browser_call(&mut builder, "type", json!({ "element": 4, "text": "anna@example.com" }));
+        assert_eq!(target(&email).unwrap().label.as_deref(), Some("Email"));
+        assert_eq!(typed(&email), Some(json!("anna@example.com")));
+
+        // A password and a one-time code are in no entry the session sends.
+        for (element, secret) in [(5, "hunter2-secret"), (7, "424242")] {
+            let entries =
+                browser_call(&mut builder, "type", json!({ "element": element, "text": secret }));
+            assert!(target(&entries).unwrap().sensitive);
+            assert_eq!(typed(&entries), None);
+            let response = json!({ "tool_response": [{ "type": "text", "text": "Typed into [5] password field \"Password\" (filled)." }] });
+            let result =
+                builder.handle(call("PostToolUse", "mcp__specdeck__type", "t", response)).unwrap();
+            let sent = serde_json::to_string(&[entries, result].concat()).unwrap();
+            assert!(!sent.contains(secret), "{sent}");
+        }
+
+        // A number the last read didn't give: no element, and its text is hidden too.
+        let unknown = browser_call(&mut builder, "type", json!({ "element": 99, "text": "hi" }));
+        assert_eq!((target(&unknown), typed(&unknown)), (None, None));
+
+        // After a navigation, the old numbers are unknown.
+        browser_call(&mut builder, "navigate", json!({ "url": "http://localhost:5173/" }));
+        let stale = browser_call(&mut builder, "click", json!({ "element": 1 }));
+        assert_eq!(target(&stale), None);
+
+        // Claude Code's own tools are as before.
+        let bash = builder
+            .handle(call(
+                "PreToolUse",
+                "Bash",
+                "b",
+                json!({ "tool_input": { "command": "ls", "text": "x" } }),
+            ))
+            .unwrap();
+        assert_eq!((target(&bash), typed(&bash)), (None, Some(json!("x"))));
+    }
+
+    #[test]
+    fn a_browser_permission_request_names_the_element() {
+        use serde_json::json;
+        let text = |tool: &str, input: Value| {
+            let mut builder = after_reading_a_page();
+            let tool = format!("mcp__specdeck__{tool}");
+            messages(builder.handle(permission_request(&tool, input)).unwrap()).remove(0)
+        };
+        assert_eq!(
+            text("click", json!({ "element": 1 })),
+            "Claude wants to click “Sign in” in its browser"
+        );
+        assert_eq!(
+            text("click", json!({ "element": 14 })),
+            "Claude wants to click a button in its browser"
+        );
+        assert_eq!(
+            text("type", json!({ "element": 4, "text": "anna@example.com" })),
+            "Claude wants to type into “Email” in its browser"
+        );
+        let password = text("type", json!({ "element": 5, "text": "hunter2-secret" }));
+        assert_eq!(password, "Claude wants to fill in “Password” in its browser");
+        assert_eq!(
+            text("type", json!({ "element": 99, "text": "hunter2-secret" })),
+            "Claude wants to type on the page in its browser"
+        );
     }
 
     #[test]
