@@ -55,7 +55,7 @@ Run pnpm and openspec through `mise exec node@24.22.2 -- …`, `pnpm install --o
 
 - [x] 8.1 Full checks: `cargo test --offline --workspace -- --test-threads=3`, `cargo clippy --offline --workspace`, and in `app/ui` `pnpm typecheck` and `pnpm test`. Verify all pass.
 - [ ] 8.2 Installer size: build the DMG in CI or with `just bundle`, and verify it grows by less than 0.1 MB from 16.3 MB.
-- [ ] 8.3 By hand in `just local-dev`: host a Claude Code session and join from the viewer app and a browser. With *Only the changes*, the whole file is unavailable and explained. Turn on *Changed files, whole*: after an edit both viewers switch to the whole file with the change marked, and a `.env` edit and a symlink to a file outside show no whole text. Switch a plan document to *Source*. Check light and dark. Verify each by observation, and record any issue as a task.
+- [x] 8.3 By hand in `just local-dev`: host a Claude Code session and join from the viewer app and a browser. With *Only the changes*, the whole file is unavailable and explained. Turn on *Changed files, whole*: after an edit both viewers switch to the whole file with the change marked, and a `.env` edit and a symlink to a file outside show no whole text. Switch a plan document to *Source*. Check light and dark. Verify each by observation, and record any issue as a task.
 - [x] 8.4 `mise exec node@24.22.2 -- openspec validate files-documents-and-code --strict` passes.
 
 ## Workflow follow-up

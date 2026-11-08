@@ -111,9 +111,16 @@ export function useBridge(): Bridge {
   return bridge;
 }
 
+/** Tauri's answer to a command the app doesn't have: the window is newer than the app running it. */
+const UNKNOWN_COMMAND = /^command \S+ not found$/;
+
 /** Error text from a failed command, for showing to the user. */
 export function errorMessage(error: unknown): string {
-  if (typeof error === 'string') return error;
-  if (error instanceof Error) return error.message;
-  return 'Something went wrong.';
+  const text = typeof error === 'string' ? error : error instanceof Error ? error.message : null;
+  if (text === null) return 'Something went wrong.';
+  if (UNKNOWN_COMMAND.test(text)) {
+    console.warn(text);
+    return 'This window is newer than the SpecDeck app running it. Quit SpecDeck and open it again.';
+  }
+  return text;
 }
