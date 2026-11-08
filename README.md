@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/nickhartjes/specdeck)](https://github.com/nickhartjes/specdeck/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-SpecDeck lets one person (the **host**) run a coding agent (Claude Code, OpenCode, omp, Codex, Grok or pi) on their computer while teammates (the **viewers**) follow along from anywhere. Viewers see the terminal and, for Claude Code, a timeline of prompts, answers, tool calls and file diffs. They join with an invite code and are read-only: only the host types into the agent, on the host's own login.
+SpecDeck lets one person (the **host**) run a coding agent (Claude Code, OpenCode, omp, Codex, Grok or pi) on their computer while teammates (the **viewers**) follow along from anywhere. Viewers see the terminal and, for Claude Code, a timeline of prompts, answers, tool calls and file diffs. They join with an invite code. Viewers can take part: suggest prompts, share files and links, add notes to a braindump for the agent, confirm they've read something, and estimate together. But only the host types into the agent, on the host's own login, and nothing a viewer sends reaches the agent unless the host passes it on. On macOS, Claude Code also gets a browser of its own to check the app it is building.
 
 SpecDeck is a native app built on Tauri 2 with a Rust session engine.
 
@@ -50,6 +50,9 @@ Releases built before the signing certificates are in place are unsigned, so the
 |---|---|
 | [`crates/protocol`](crates/protocol) | Wire protocol shared by hosts and viewers: messages, frames, signing, invite codes (no I/O) |
 | [`crates/core`](crates/core) | Session engine: runs the agent in a pty, output log, timeline, WebRTC connections |
+| [`crates/session`](crates/session) | A hosted session as a process of its own (`specdeck-session`), so it outlives the app: the agent's terminal, hooks, sharing and the viewers' connections |
+| [`crates/local`](crates/local) | Local protocol between the app and its session processes |
+| [`crates/diag`](crates/diag) | Diagnostic log, written by the app and by session processes; never records content |
 | [`crates/server`](crates/server) | The sharing service (`specdeck-server`): matchmaking and TURN credentials; serves the web viewer when built with `web-viewer` |
 | [`crates/web`](crates/web) | The viewer logic of `crates/protocol` as WebAssembly, for the web viewer |
 | [`app/src-tauri`](app/src-tauri) | Tauri shell: windows, menus, tray, commands |
