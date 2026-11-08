@@ -36,6 +36,12 @@ describe('timeline model', () => {
     expect(turn.response).toBe('I wrote notes.txt and changed it.');
   });
 
+  it('keeps when the reply came', () => {
+    const turn = buildTimeline(editSession).turns[0]!;
+    expect(turn.respondedAt).toBe(editSession.at(-1)!.at);
+    expect(buildTimeline(editSession.slice(0, -1)).turns[0]!.respondedAt).toBeNull();
+  });
+
   it('pairs tool calls with their results', () => {
     const tools = buildTimeline(editSession).turns[0]!.items.filter((item) => item.kind === 'tool');
     expect(tools.map((tool) => tool.status)).toEqual(['succeeded', 'succeeded', 'not-run', 'succeeded']);
@@ -164,5 +170,18 @@ describe('shared links', () => {
       { ...stamp(), kind: 'link', id: 1, url: 'https://excalidraw.com/#room=a,SECRET', title: 'Draw', by: 'Nick', sessionOnly: true },
     ]);
     expect(turnText(model.turns[0]!)).not.toContain('SECRET');
+  });
+});
+
+describe("Claude's browser", () => {
+  it('keeps the element a click acts on', () => {
+    const target = { kind: 'button', label: 'Sign in', sensitive: false };
+    const { turns } = buildTimeline([
+      { ...stamp(), kind: 'prompt', promptId: 'p1', text: 'sign in' },
+      { ...stamp(), kind: 'tool-call', promptId: 'p1', toolUseId: 'c', toolName: 'mcp__specdeck__click', input: { element: 3 }, target },
+      { ...stamp(), kind: 'tool-call', promptId: 'p1', toolUseId: 'b', toolName: 'Bash', input: {} },
+    ]);
+    expect(turns[0]!.items[0]).toMatchObject({ toolName: 'mcp__specdeck__click', target });
+    expect(turns[0]!.items[1]).not.toHaveProperty('target');
   });
 });

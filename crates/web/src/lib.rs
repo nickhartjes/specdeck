@@ -6,6 +6,7 @@
 //! the app's terminal stream format (`app/ui/src/terminal/stream.ts`).
 
 use serde::Serialize;
+use specdeck_protocol::asks::{Answer, Card, ReadAnswer, ReadView, VoteView, valid_question};
 use specdeck_protocol::control::{
     self, BraindumpItemInfo, MAX_FILE_NAME_BYTES, MAX_NOTE_BYTES, Outcome, PROTOCOL_VERSION,
     Participant, RefusalReason, SentLink, SharedFileInfo, Suggestion, ViewerMessage, ViewerRequest,
@@ -75,6 +76,12 @@ enum Control {
     },
     Links {
         mine: Vec<SentLink>,
+    },
+    ReadRequest {
+        open: Option<ReadView>,
+    },
+    Vote {
+        open: Option<VoteView>,
     },
     Braindump {
         items: Vec<BraindumpItemInfo>,
@@ -271,6 +278,43 @@ impl WebViewer {
         Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
     }
 
+    /// An answer to the host's read request `ask`: `{ id, message }`, as
+    /// [`suggest`](Self::suggest). `answer` is `"reading"`, `"ready"` or
+    /// `{ question: { text } }`; a question the host would refuse is refused here.
+    #[wasm_bindgen(js_name = answerRead)]
+    pub fn answer_read(&mut self, ask: u32, answer: JsValue) -> Result<JsValue, JsError> {
+        let answer: ReadAnswer =
+            serde_wasm_bindgen::from_value(answer).map_err(|_| JsError::new("Not an answer."))?;
+        let answer = match answer {
+            ReadAnswer::Question { text } => {
+                let text = text.map(|t| t.replace("\r\n", "\n").trim().to_owned());
+                let text = text.filter(|t| !t.is_empty());
+                if text.as_deref().is_some_and(|t| !valid_question(t)) {
+                    return Err(JsError::new("A question is at most 280 characters of text."));
+                }
+                ReadAnswer::Question { text }
+            }
+            answer => answer,
+        };
+        let request = ViewerRequest::Answer(Answer::Read { ask, answer });
+        let (id, message) = self.state.send_request(request);
+        Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
+    }
+
+    /// A vote in round `round` of the host's vote `ask`: `{ id, message }`. `card` is
+    /// `{ value }`, `"unsure"` or `"break"`, or `null` to take the vote back.
+    #[wasm_bindgen(js_name = castVote)]
+    pub fn cast_vote(&mut self, ask: u32, round: u16, card: JsValue) -> Result<JsValue, JsError> {
+        let card: Option<Card> =
+            serde_wasm_bindgen::from_value(card).map_err(|_| JsError::new("Not a card."))?;
+        if card.is_some_and(|card| matches!(card, Card::Value(i) if usize::from(i) >= specdeck_protocol::asks::MAX_SET_CARDS)) {
+            return Err(JsError::new("Not a card."));
+        }
+        let request = ViewerRequest::Answer(Answer::Vote { ask, round, card });
+        let (id, message) = self.state.send_request(request);
+        Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
+    }
+
     /// Removes a file this viewer shared: `{ id, message }`.
     #[wasm_bindgen(js_name = removeFile)]
     pub fn remove_file(&mut self, file: u32) -> JsValue {
@@ -298,7 +342,7 @@ impl WebViewer {
 
     /// What a message on the control channel means: `{ type: "welcome" | "participants" |
     /// "status" | "refused" | "ended" | "allowed" | "reply" | "suggestions" | "shared" |
-    /// "links-allowed" | "links" | "braindump" | "retry", ... }`.
+    /// "links-allowed" | "links" | "read-request" | "vote" | "braindump" | "retry", ... }`.
     #[wasm_bindgen(js_name = onControl)]
     pub fn on_control(&mut self, bytes: &[u8]) -> JsValue {
         to_js(&match self.state.on_control(bytes) {
@@ -322,6 +366,8 @@ impl WebViewer {
             ControlUpdate::Files(files) => Control::Files { files },
             ControlUpdate::LinksAllowed { links } => Control::LinksAllowed { links },
             ControlUpdate::Links(mine) => Control::Links { mine },
+            ControlUpdate::ReadRequest(open) => Control::ReadRequest { open },
+            ControlUpdate::Vote(open) => Control::Vote { open },
             ControlUpdate::Braindump(items) => Control::Braindump { items },
             ControlUpdate::Retry => Control::Retry,
         })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Screenshot } from '../api/types';
+import type { Screenshot, Target } from '../api/types';
 import { liveLine, planChangeOf, screenshotOf, summarize, type Step } from './steps';
 import type { FileChange, ToolItem, ToolStatus, Turn } from './timeline';
 
@@ -14,7 +14,7 @@ function change(path: string, kind: FileChange['change'] = 'edited'): FileChange
 }
 
 function turn(items: Turn['items']): Turn {
-  return { promptId: 'p', prompt: 'do it', at: 0, outputSeq: 0, items, response: null, tokens: null, revision: 0 };
+  return { promptId: 'p', prompt: 'do it', at: 0, outputSeq: 0, items, response: null, respondedAt: null, tokens: null, revision: 0 };
 }
 
 const steps = (items: Turn['items'], seenChanges = new Set<string>()) =>
@@ -128,6 +128,53 @@ describe("Claude's browser", () => {
 
   it('keeps other MCP tools as they are', () => {
     expect(steps([tool('mcp__github__create_issue', {})])[0]!.label).toBe('Used mcp__github__create_issue');
+  });
+
+  describe('names what Claude clicked and typed into', () => {
+    const on = (name: string, input: Record<string, unknown>, target?: Target, status?: ToolStatus): ToolItem => ({
+      ...browser(name, input, status),
+      ...(target && { target }),
+    });
+    const button: Target = { kind: 'button', label: 'Sign in', sensitive: false };
+    const email: Target = { kind: 'email field', label: 'Email', sensitive: false };
+    const password: Target = { kind: 'password field', label: 'Password', sensitive: true };
+    const one = (item: ToolItem) => steps([item])[0]!;
+
+    it('by label, by kind, or not at all', () => {
+      expect(one(on('click', { element: 3 }, button)).label).toBe('Clicked “Sign in” in its browser');
+      expect(one(on('click', { element: 3 }, { kind: 'button', sensitive: false })).label).toBe('Clicked a button in its browser');
+      expect(one(on('click', { element: 3 })).label).toBe('Clicked on the page in its browser');
+      expect(one(on('type', { element: 1, text: 'anna@example.com' }, email)).label).toBe('Typed into “Email” in its browser');
+      expect(one(on('type', { element: 1, text: 'x' }, { kind: 'email field', sensitive: false })).label).toBe(
+        'Typed into an email field in its browser',
+      );
+      expect(one(on('type', { element: 2 }, password)).label).toBe('Filled in “Password” in its browser');
+      expect(one(on('type', { element: 2 }, { kind: 'password field', sensitive: true })).label).toBe(
+        'Filled in a password field in its browser',
+      );
+      // A field the session didn't know: its text was hidden.
+      expect(one(on('type', { element: 9 })).label).toBe('Filled in a field in its browser');
+      // An older host sends no element, and the text.
+      expect(one(on('type', { element: 9, text: 'x' })).label).toBe('Typed on the page in its browser');
+    });
+
+    it('while it runs', () => {
+      expect(one(on('click', { element: 3 }, button, 'running')).live).toBe('clicking “Sign in” in its browser');
+      expect(one(on('type', { element: 2 }, password, 'running')).live).toBe('filling in “Password” in its browser');
+    });
+
+    it('in a run, with long labels cut', () => {
+      const [step] = steps([
+        browser('navigate', { url: 'http://localhost:5173/login' }),
+        on('type', { element: 1, text: 'anna@example.com' }, email),
+        on('type', { element: 2 }, password),
+        on('click', { element: 3 }, button),
+        on('click', { element: 4 }, { kind: 'link', label: 'Read the terms and conditions of this shop before you order', sensitive: false }),
+      ]);
+      expect(step!.label).toBe(
+        'Used its browser: opened localhost:5173/login, typed into “Email”, filled in “Password”, clicked “Sign in”, clicked “Read the terms and conditions of this s…”',
+      );
+    });
   });
 });
 

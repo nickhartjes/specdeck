@@ -19,9 +19,10 @@ use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{GiveError, HostConfig, HostSession, SessionEvent};
 use specdeck_core::shared_files::{PutError, Refusal};
 use specdeck_core::sharing::{
-    Answer, HostLink, HostSuggestion, MAX_VIEWERS, Sharing, SharingConfig, SharingEvent,
-    SharingStatus,
+    Answer, AskCommand, HostAsks, HostLink, HostSuggestion, MAX_VIEWERS, Sharing, SharingConfig,
+    SharingEvent, SharingStatus,
 };
+use specdeck_protocol::asks::{ReadView, VoteView};
 use specdeck_protocol::control::{
     BraindumpItemInfo, Participant, Role, SentLinkState, SharedFileInfo,
 };
@@ -89,6 +90,11 @@ pub enum HostEvent {
         links_allowed: bool,
         /// Every link viewers sent in the session, oldest first.
         viewer_links: Vec<HostLink>,
+        /// The host can ask to read and estimate; absent from sessions of the release before
+        /// `read-and-estimate`.
+        asks_possible: bool,
+        /// The open read request and vote, as the host sees them; boxed to keep the event small.
+        asks: Box<HostAsks>,
     },
     Sharing {
         state: SharingState,
@@ -135,6 +141,11 @@ pub enum HostEvent {
     /// Every link viewers sent in the session, oldest first, on every change.
     ViewerLinks {
         links: Vec<HostLink>,
+    },
+    /// The open read request and vote, as the host sees them, on every change.
+    Asks {
+        read: Option<ReadView>,
+        vote: Option<VoteView>,
     },
 }
 
@@ -237,6 +248,10 @@ struct Ui {
     suggestions: Vec<HostSuggestion>,
     links_allowed: bool,
     viewer_links: Vec<HostLink>,
+    /// The asks as last heard, and when: a window that attaches later gets the time left from
+    /// then.
+    asks: HostAsks,
+    asks_at: std::time::Instant,
     events: Option<EventSink>,
     observer: Observer,
     last_summary: Option<Summary>,
@@ -354,6 +369,8 @@ impl HostRuntime {
             suggestions: Vec::new(),
             links_allowed: true,
             viewer_links: Vec::new(),
+            asks: HostAsks::default(),
+            asks_at: std::time::Instant::now(),
             events: None,
             observer,
             last_summary: None,
@@ -441,6 +458,13 @@ impl HostRuntime {
                             let mut ui = shared.lock().unwrap();
                             ui.viewer_links = links.clone();
                             ui.send(HostEvent::ViewerLinks { links });
+                        }
+                        Some(SharingEvent::Asks(asks)) => {
+                            let mut ui = shared.lock().unwrap();
+                            let asks = *asks;
+                            ui.asks = asks.clone();
+                            ui.asks_at = std::time::Instant::now();
+                            ui.send(HostEvent::Asks { read: asks.read, vote: asks.vote });
                         }
                         Some(SharingEvent::Suggestions(suggestions)) => {
                             let mut ui = shared.lock().unwrap();
@@ -530,6 +554,8 @@ impl HostRuntime {
                 links_possible: true,
                 links_allowed: ui.links_allowed,
                 viewer_links: ui.viewer_links.clone(),
+                asks_possible: true,
+                asks: Box::new(asks_now(&ui.asks, ui.asks_at.elapsed())),
             };
             ui.events = Some(events);
             ui.send(snapshot);
@@ -810,6 +836,14 @@ impl HostRuntime {
         self.sharing.allow_links(on);
     }
 
+    /// Asks everyone to read or estimate, or acts on an open ask; refused in plain words.
+    pub async fn ask(&self, command: AskCommand) -> Result<(), String> {
+        match self.sharing.ask(command).await {
+            Ok(result) => result.map_err(|refusal| refusal.message().to_owned()),
+            Err(_) => Err("The session has ended.".into()),
+        }
+    }
+
     /// Ends sharing and the agent. The session's files are deleted when the runtime is dropped,
     /// right after the app lets go of the ended session.
     pub fn close(&self) {
@@ -817,6 +851,15 @@ impl HostRuntime {
         self.sharing.close();
         self.session.stop();
     }
+}
+
+/// The asks as heard `elapsed` ago, with the read request's time left counted down since.
+fn asks_now(asks: &HostAsks, elapsed: std::time::Duration) -> HostAsks {
+    let mut asks = asks.clone();
+    if let Some(read) = &mut asks.read {
+        read.left_ms = read.left_ms.map(|left| left.saturating_sub(elapsed.as_millis() as u64));
+    }
+    asks
 }
 
 /// Why a file was not shared, as the host's window shows it.
@@ -866,6 +909,26 @@ mod tests {
         assert_eq!(typed_prompt("one\r\ntwo\nthree"), "one\ntwo\nthree");
         assert_eq!(typed_prompt("go\r\u{1b}[2J"), "go[2J");
         assert_eq!(typed_prompt("tab\there"), "tab\there");
+    }
+
+    #[test]
+    fn a_later_window_gets_the_time_left_from_now() {
+        use specdeck_protocol::asks::{ReadAnswer, ReadTarget};
+        let read = ReadView {
+            id: 1,
+            target: ReadTarget::Shared { file: 1 },
+            label: "notes.md".into(),
+            limit_s: 120,
+            left_ms: Some(100_000),
+            people: vec![],
+            mine: ReadAnswer::Reading,
+            questions: vec![],
+        };
+        let asks = HostAsks { read: Some(read), vote: None };
+        let later = asks_now(&asks, std::time::Duration::from_secs(30));
+        assert_eq!(later.read.unwrap().left_ms, Some(70_000));
+        let past = asks_now(&asks, std::time::Duration::from_secs(300));
+        assert_eq!(past.read.unwrap().left_ms, Some(0));
     }
 
     #[test]

@@ -692,7 +692,8 @@ async fn set_viewer_notifications(
 }
 
 /// Notifies a viewer about the session its window watches (`viewer-notifications` design
-/// decision 4), unless they turned that kind off; the rest is up to `notify`.
+/// decision 4), unless they turned that kind off; the rest is up to `notify`. A click opens
+/// `open` in the window (`notification-open` design decision 2).
 #[tauri::command]
 async fn viewer_notify(
     app: AppHandle,
@@ -701,6 +702,7 @@ async fn viewer_notify(
     kind: settings::ViewerNotificationKind,
     title: String,
     body: String,
+    open: Option<notify::NoticeOpen>,
 ) -> Result<(), String> {
     let id = match state.sessions.lock().unwrap().of_window(window.label()) {
         Some((id, Session::Viewer(_))) => id,
@@ -711,7 +713,8 @@ async fn viewer_notify(
         "kind-off"
     } else {
         let (title, body) = notify::viewer_text(&title, &body);
-        if try_notify(&app, id, &title, &body) { "shown" } else { "held" }
+        let open = open.and_then(notify::NoticeOpen::checked);
+        if try_notify(&app, id, &title, &body, open) { "shown" } else { "held" }
     };
     tracing::info!(kind = kind.name(), outcome, "viewer.notified");
     Ok(())
@@ -726,11 +729,17 @@ async fn check_sharing_service(service: String) -> Result<ServiceCheck, String> 
 /// Shows a notification about session `id`, if the user wants them and the session's window is
 /// not in front. With several sessions open, the title says which one.
 fn notify(app: &AppHandle, id: SessionId, title: &str, body: &str) {
-    try_notify(app, id, title, body);
+    try_notify(app, id, title, body, None);
 }
 
-/// As `notify`, saying whether the notification was shown.
-fn try_notify(app: &AppHandle, id: SessionId, title: &str, body: &str) -> bool {
+/// As `notify`, with what a click opens, saying whether the notification was shown.
+fn try_notify(
+    app: &AppHandle,
+    id: SessionId,
+    title: &str,
+    body: &str,
+    open: Option<notify::NoticeOpen>,
+) -> bool {
     let state = app.state::<AppState>();
     let enabled = state.settings.lock().unwrap().notifications;
     let (window, title) = {
@@ -738,7 +747,7 @@ fn try_notify(app: &AppHandle, id: SessionId, title: &str, body: &str) -> bool {
         let title = notify::title(title, sessions.name(id), sessions.count());
         (sessions.window_of(id).map(str::to_owned), title)
     };
-    notify::notify(app, &state.notices, id, window.as_deref(), enabled, &title, body)
+    notify::notify(app, &state.notices, id, window.as_deref(), enabled, &title, body, open)
 }
 
 #[tauri::command]
@@ -1365,6 +1374,107 @@ async fn host_allow_links(
     on: bool,
 ) -> Result<(), String> {
     with_host(&state, &window, |host| host.allow_links(on))
+}
+
+/// Asks everyone in the session to read something (`read-and-estimate`).
+#[tauri::command]
+async fn host_ask_to_read(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    target: specdeck_protocol::asks::ReadTarget,
+    label: String,
+    limit_s: u16,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.ask_to_read(target, label, limit_s))
+}
+
+/// Goes on: closes the open read request.
+#[tauri::command]
+async fn host_end_read(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    with_host(&state, &window, |host| host.end_read())
+}
+
+/// Asks everyone how big `task` is.
+#[tauri::command]
+async fn host_start_vote(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    task: String,
+    cards: specdeck_protocol::asks::CardSet,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.start_vote(task, cards))
+}
+
+/// The host's own vote; none takes it back.
+#[tauri::command]
+async fn host_cast_vote(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    card: Option<specdeck_protocol::asks::Card>,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.cast_vote(card))
+}
+
+#[tauri::command]
+async fn host_reveal_votes(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.reveal_votes())
+}
+
+#[tauri::command]
+async fn host_vote_again(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    with_host(&state, &window, |host| host.vote_again())
+}
+
+#[tauri::command]
+async fn host_stop_vote(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    with_host(&state, &window, |host| host.stop_vote())
+}
+
+/// Closes the vote keeping `card`.
+#[tauri::command]
+async fn host_keep_estimate(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    card: specdeck_protocol::asks::Card,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.keep_estimate(card))
+}
+
+/// Answers the host's read request in the session this window watches.
+#[tauri::command]
+async fn answer_read(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    ask: u32,
+    answer: specdeck_protocol::asks::ReadAnswer,
+) -> Result<(), String> {
+    let session = state.sessions.lock().unwrap().of_window(window.label());
+    match session {
+        Some((_, Session::Viewer(viewer))) => viewer.answer_read(ask, answer),
+        _ => Err("This window does not watch a session.".into()),
+    }
+}
+
+/// Votes in the host's vote in the session this window watches.
+#[tauri::command]
+async fn cast_vote(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    ask: u32,
+    round: u16,
+    card: Option<specdeck_protocol::asks::Card>,
+) -> Result<(), String> {
+    let session = state.sessions.lock().unwrap().of_window(window.label());
+    match session {
+        Some((_, Session::Viewer(viewer))) => {
+            viewer.cast_vote(ask, round, card);
+            Ok(())
+        }
+        _ => Err("This window does not watch a session.".into()),
+    }
 }
 
 /// Sends the host of the session this window watches a link to share.
@@ -2375,18 +2485,34 @@ pub fn run() {
                     open_link(&links, url.as_str());
                 }
             });
-            // A click on a notification brings its session's window to the front.
+            // A click on a notification brings its session's window to the front, and opens
+            // there what a viewer's notification is about.
             let handle = app.handle().clone();
             let _ = app.notification().on_action(move |performed| {
                 let clicked = performed.notification().map(|notification| notification.id());
                 let state = handle.state::<AppState>();
-                let session = state.notices.lock().unwrap().clicked(clicked);
+                let notice = state.notices.lock().unwrap().clicked(clicked);
                 let running =
-                    session.filter(|id| state.sessions.lock().unwrap().get(*id).is_some());
-                match running {
-                    Some(id) => show_session(&handle, id),
-                    None => drop(focus_or_open(&handle)),
-                }
+                    notice.filter(|(id, _)| state.sessions.lock().unwrap().get(*id).is_some());
+                let opened = match running {
+                    Some((id, open)) => {
+                        show_session(&handle, id);
+                        let window =
+                            state.sessions.lock().unwrap().window_of(id).map(str::to_owned);
+                        match (open, window) {
+                            (Some(open), Some(window)) => {
+                                handle.emit_to(&window, "notice-open", open).is_ok()
+                            }
+                            _ => false,
+                        }
+                    }
+                    None => {
+                        drop(focus_or_open(&handle));
+                        false
+                    }
+                };
+                // Whether something was opened, never what.
+                tracing::info!(opened, "notice.clicked");
             });
             Ok(())
         })
@@ -2480,6 +2606,16 @@ pub fn run() {
             host_answer_link,
             host_remove_link,
             host_allow_links,
+            host_ask_to_read,
+            host_end_read,
+            host_start_vote,
+            host_cast_vote,
+            host_reveal_votes,
+            host_vote_again,
+            host_stop_vote,
+            host_keep_estimate,
+            answer_read,
+            cast_vote,
             send_link,
             open_shared_link,
             host_close,

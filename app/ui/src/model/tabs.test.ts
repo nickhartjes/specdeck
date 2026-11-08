@@ -75,4 +75,16 @@ describe('screenshot tabs', () => {
     expect(tabs.list[1]!.preview).toBe(false);
     expect(tabs.list[1]!.title).toBe('Screenshot');
   });
+
+  it('opens a plan in the preview tab, and selects it when already open', () => {
+    let tabs = openTab(noTabs(true), 'document', 'README.md');
+    tabs = openTab(tabs, 'plan', 'toolu_1', { title: "Claude Code's plan" });
+    expect(ids(tabs)).toEqual([TERMINAL, 'plan:toolu_1']);
+    expect(tabs.list[1]).toMatchObject({ kind: 'plan', title: "Claude Code's plan", preview: true });
+    tabs = keepTab(selectTab(tabs, TERMINAL), 'plan:toolu_1');
+    tabs = openTab(tabs, 'plan', 'toolu_1', { title: "Claude Code's plan" });
+    expect(ids(tabs)).toEqual([TERMINAL, 'plan:toolu_1']);
+    expect(tabs.active).toBe('plan:toolu_1');
+    expect(tabs.list[1]!.preview).toBe(false);
+  });
 });

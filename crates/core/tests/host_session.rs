@@ -7,8 +7,11 @@ use std::time::Duration;
 
 use specdeck_core::environment::Environment;
 use specdeck_core::output_log::Record;
+use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{GiveError, HostConfig, HostSession, SessionEvent};
 use specdeck_core::shared_files::{PutError, Refusal};
+use specdeck_core::sharing::{AskCommand, Sharing, SharingConfig};
+use specdeck_protocol::asks::{Card, CardSet, ReadTarget};
 use specdeck_protocol::links::LinkRefusal;
 use specdeck_protocol::timeline::Entry;
 use specdeck_protocol::{AgentId, AgentStatus};
@@ -934,5 +937,99 @@ async fn links_are_shared_in_any_session_and_removing_one_drops_its_address() {
     let second =
         session.timeline().iter().position(|e| matches!(e.entry, Entry::Link { id: 2, .. }));
     assert!(first < second);
+    session.close();
+}
+
+#[tokio::test]
+async fn read_requests_and_estimates_land_in_the_timeline_of_a_terminal_session() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    fake_agent(bin.path(), "myshell", r#"echo ready; read line; echo "got:$line"; read wait"#);
+    let mut env = env(bin.path());
+    env.set("SHELL", bin.path().join("myshell"));
+    let (session, mut events) =
+        HostSession::start(config(AgentId::Terminal, bin.path(), data.path()), &env).await.unwrap();
+    wait_for_output(&session, &mut events, "ready").await;
+    // No service to reach: the asks work without viewers.
+    let (sharing, _sharing_events) = Sharing::start(
+        session.view(),
+        SharingConfig {
+            signalling_url: "ws://127.0.0.1:9/signal".into(),
+            username: "Nick".into(),
+            peer: PeerConfig { bind_address: Some("127.0.0.1".into()), ..PeerConfig::default() },
+            viewer_limit: 20,
+        },
+    );
+    let ask = |command| sharing.ask(command);
+
+    assert_eq!(session.share_link("https://example.com/one", None, "Nick", false), Ok(1));
+    let notes = session.share_file("Nick", "notes.md", b"# Notes\n".to_vec()).unwrap();
+    let target = ReadTarget::Shared { file: notes.file };
+    let read = AskCommand::Read { target: target.clone(), label: "notes.md".into(), limit_s: 300 };
+    assert_eq!(ask(read).await.unwrap(), Ok(()));
+    assert_eq!(ask(AskCommand::EndRead).await.unwrap(), Ok(()));
+    // Only shared files can be read in a session without file changes.
+    let code = AskCommand::Read {
+        target: ReadTarget::Code { path: "src/a.rs".into() },
+        label: "a.rs".into(),
+        limit_s: 0,
+    };
+    assert_eq!(ask(code).await.unwrap(), Err(specdeck_core::asks::AskRefusal::Target));
+
+    let vote =
+        || AskCommand::StartVote { task: "Show unreachable".into(), cards: CardSet::StoryPoints };
+    assert_eq!(ask(vote()).await.unwrap(), Ok(()));
+    assert_eq!(ask(AskCommand::CastVote(Some(Card::Value(2)))).await.unwrap(), Ok(()));
+    assert_eq!(ask(AskCommand::Reveal).await.unwrap(), Ok(()));
+    assert_eq!(ask(AskCommand::Keep(Card::Value(3))).await.unwrap(), Ok(()));
+    // A stopped vote adds nothing.
+    assert_eq!(ask(vote()).await.unwrap(), Ok(()));
+    assert_eq!(ask(AskCommand::StopVote).await.unwrap(), Ok(()));
+    assert_eq!(session.share_link("https://example.com/two", None, "Nick", false), Ok(2));
+    next_matching(
+        &mut events,
+        |e| matches!(e, SessionEvent::Timeline(t) if matches!(t.entry, Entry::Link { id: 2, .. })),
+    )
+    .await;
+
+    let entries: Vec<Entry> = session
+        .timeline()
+        .into_iter()
+        .map(|e| e.entry)
+        .filter(|e| {
+            matches!(e, Entry::Link { .. } | Entry::ReadDone { .. } | Entry::Estimated { .. })
+        })
+        .collect();
+    assert_eq!(entries.len(), 4, "{entries:?}");
+    assert!(matches!(entries[0], Entry::Link { id: 1, .. }));
+    assert_eq!(
+        entries[1],
+        Entry::ReadDone {
+            id: 1,
+            target,
+            label: "notes.md".into(),
+            ready: 0,
+            questions: 0,
+            of: 0,
+            time_up: false
+        }
+    );
+    assert_eq!(
+        entries[2],
+        Entry::Estimated {
+            id: 2,
+            task: "Show unreachable".into(),
+            cards: CardSet::StoryPoints,
+            kept: Card::Value(3),
+            low: Some(Card::Value(2)),
+            high: Some(Card::Value(2)),
+            votes: 1,
+        }
+    );
+    assert!(matches!(entries[3], Entry::Link { id: 2, .. }));
+    // No names in them.
+    for entry in &entries[1..3] {
+        assert!(!serde_json::to_string(entry).unwrap().contains("Nick"));
+    }
     session.close();
 }

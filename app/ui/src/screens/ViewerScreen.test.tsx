@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ViewEvent } from '../api/types';
@@ -284,10 +284,25 @@ describe('notifications for the viewer', () => {
       });
       await act(async () => vi.advanceTimersByTimeAsync(2000));
       expect(bridge.viewerNotify).toHaveBeenCalledTimes(1);
-      expect(bridge.viewerNotify).toHaveBeenCalledWith('plans', 'Plan add-login is ready for review', 'Claude Code wrote proposal.');
+      expect(bridge.viewerNotify).toHaveBeenCalledWith('plans', 'Plan add-login is ready for review', 'Claude Code wrote proposal.', {
+        kind: 'document',
+        path: 'openspec/changes/add-login/proposal.md',
+      });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('opens what a clicked notification is about', () => {
+    const { bridge } = setup();
+    join();
+    act(() => {
+      emit({ type: 'timeline', event: proposal(1) });
+      emit({ type: 'timeline', event: plan(2) });
+    });
+    const opened = vi.mocked(bridge.onNoticeOpen).mock.calls[0]![0];
+    act(() => opened({ kind: 'document', path: 'openspec/changes/add-login/proposal.md' }));
+    expect(screen.getByRole('tab', { name: /proposal\.md/ })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('stays quiet about what happened before the viewer came in', async () => {
@@ -351,5 +366,136 @@ describe('sending a link as a viewer', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Open in your browser' }));
     expect(bridge.openLink).toHaveBeenCalledWith(3);
     expect(screen.queryByRole('button', { name: 'Remove…' })).toBeNull();
+  });
+});
+
+describe('joining late', () => {
+  const HOUR = 3_600_000;
+  /** Three answered prompts, an hour apart, starting at `start`. */
+  const history = (start: number): ViewEvent[] =>
+    [0, 1, 2].flatMap((n): ViewEvent[] => [
+      { type: 'timeline', event: { outputSeq: n * 2, at: start + n * HOUR, kind: 'prompt', promptId: `p${n}`, text: `Prompt ${n}` } },
+      { type: 'timeline', event: { outputSeq: n * 2 + 1, at: start + n * HOUR + 60_000, kind: 'response', promptId: `p${n}`, text: `Done with ${n}.` } },
+    ]);
+
+  it('folds the prompts that finished before joining and shows what happened so far', () => {
+    setup();
+    join();
+    act(() => history(Date.now() - 3 * HOUR).forEach(emit));
+    expect(screen.getByRole('region', { name: 'So far' })).toHaveTextContent('So far: 3 prompts.');
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).toHaveClass('folded');
+    expect(screen.getByRole('article', { name: 'Prompt 3' })).not.toHaveClass('folded');
+  });
+
+  it('shows the demo as a late join', async () => {
+    renderWith(fakeBridge('viewer'), <ViewerScreen code="7K2M9QXH4TPA" layout={choose('developer')} onLayout={vi.fn()} onLeave={vi.fn()} />);
+    expect(await screen.findByRole('region', { name: 'So far' })).toHaveTextContent('So far: 2 prompts.');
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).toHaveClass('folded');
+    expect(screen.getByRole('article', { name: 'Prompt 2' })).not.toHaveClass('folded');
+  });
+
+  it('does not count reconnecting as joining', () => {
+    const now = vi.spyOn(Date, 'now');
+    const start = 1_800_000_000_000;
+    now.mockReturnValue(start);
+    setup();
+    join();
+    // Watched from the start; later the connection drops and comes back.
+    now.mockReturnValue(start + 4 * HOUR);
+    act(() => {
+      history(start + 1000).forEach(emit);
+      emit({ type: 'reconnecting' });
+      emit({ type: 'reconnected' });
+      emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+    });
+    expect(screen.queryByRole('region', { name: 'So far' })).not.toBeInTheDocument();
+    expect(document.querySelectorAll('.turn.folded')).toHaveLength(0);
+    now.mockRestore();
+  });
+});
+
+describe('the host’s asks for a viewer', () => {
+  const read = (mine: 'reading' | 'ready' | { question: { text: string | null } } = 'reading') => ({
+    id: 1,
+    target: { document: { path: 'openspec/changes/heartbeat/design.md' } },
+    label: 'design.md',
+    limitS: 120,
+    leftMs: 90_000,
+    people: [[1, 'ready'], [2, 'reading'], [3, 'question']] as [number, 'ready' | 'reading' | 'question'][],
+    mine,
+    questions: [],
+  });
+  const vote = (over: object = {}) => ({ id: 2, round: 1, task: 'Show unreachable', cards: 'story-points' as const, voted: [0, 1], mine: null, revealed: null, older: [], ...over });
+
+  function answering() {
+    const { bridge } = setup();
+    bridge.answerRead = vi.fn(async () => {});
+    bridge.castVote = vi.fn(async () => {});
+    join();
+    return bridge;
+  }
+
+  it('opens what to read, marks ready, takes it back and sends a question', async () => {
+    const bridge = answering();
+    act(() => emit({ type: 'read-request', open: read() }));
+    const banner = screen.getByRole('region', { name: /The host asks you to read design.md/ });
+    expect(within(banner).getByRole('timer')).toHaveTextContent('1:30 left');
+    expect(banner).toHaveTextContent('1 of 3 ready, 1 with a question');
+    // Other viewers' names and questions are the host's only.
+    expect(within(banner).queryByRole('list')).toBeNull();
+    await userEvent.click(within(banner).getByRole('button', { name: 'Open it' }));
+    expect(screen.getByRole('tab', { name: 'design.md' })).toHaveAttribute('aria-selected', 'true');
+    await userEvent.click(within(banner).getByRole('button', { name: /I’m ready/ }));
+    expect(bridge.answerRead).toHaveBeenCalledWith(1, 'ready');
+    act(() => emit({ type: 'read-request', open: read('ready') }));
+    await userEvent.click(within(banner).getByRole('button', { name: 'Ready', pressed: true }));
+    expect(bridge.answerRead).toHaveBeenLastCalledWith(1, 'reading');
+    await userEvent.click(within(banner).getByRole('button', { name: /I have a question/ }));
+    await userEvent.type(within(banner).getByLabelText(/Your question for the host/), 'Why three?');
+    await userEvent.click(within(banner).getByRole('button', { name: 'Send' }));
+    expect(bridge.answerRead).toHaveBeenLastCalledWith(1, { question: { text: 'Why three?' } });
+  });
+
+  it('votes without seeing others’ values until the reveal', async () => {
+    const bridge = answering();
+    act(() => emit({ type: 'vote', open: vote() }));
+    let banner = screen.getByRole('region', { name: 'How big is it?' });
+    expect(within(banner).getByRole('listitem', { name: 'Nick: voted' })).toBeInTheDocument();
+    expect(within(banner).getByRole('listitem', { name: 'You: not voted yet' })).toBeInTheDocument();
+    expect(banner).toHaveTextContent('2 of 4 voted.');
+    expect(within(banner).queryByRole('button', { name: /Reveal/ })).toBeNull();
+    await userEvent.click(within(banner).getByRole('button', { name: '8' }));
+    expect(bridge.castVote).toHaveBeenCalledWith(2, 1, { value: 4 });
+    act(() => emit({ type: 'vote', open: vote({ voted: [0, 1, 2], revealed: [[0, { value: 3 }], [1, { value: 4 }], [2, { value: 4 }]] }) }));
+    banner = screen.getByRole('region', { name: 'Votes' });
+    const votes = within(within(banner).getByRole('list', { name: 'Votes' })).getAllByRole('listitem');
+    expect(votes.map((seat) => seat.getAttribute('aria-label'))).toEqual(['Nick: 5', 'Anna de Vries: 8', 'You: 8', 'Anna de Vries (2): no vote']);
+    expect(banner).toHaveTextContent('From 5 to 8');
+    expect(within(banner).queryByRole('button', { name: /Keep/ })).toBeNull();
+  });
+
+  it('says to wait when an answer was over the limit', () => {
+    answering();
+    act(() => {
+      emit({ type: 'read-request', open: read() });
+      emit({ type: 'answer-sent', id: 7 });
+      emit({ type: 'reply', id: 7, outcome: 'RateLimited' });
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Wait a moment, then answer again.');
+  });
+
+  it('notifies a new read request, naming the host, and not one open on joining', async () => {
+    const { bridge } = setup();
+    act(() => {
+      emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+      emit({ type: 'participants', participants: demoParticipants });
+      emit({ type: 'vote', open: vote() });
+      emit({ type: 'status', status: 'working' });
+    });
+    expect(bridge.viewerNotify).not.toHaveBeenCalled();
+    act(() => emit({ type: 'read-request', open: read() }));
+    expect(bridge.viewerNotify).toHaveBeenCalledWith('reads', 'Nick asks you to read', 'design.md');
+    act(() => emit({ type: 'vote', open: vote({ round: 2, voted: [] }) }));
+    expect(bridge.viewerNotify).toHaveBeenLastCalledWith('estimates', 'Nick asks for an estimate', 'Round 2');
   });
 });

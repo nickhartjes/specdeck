@@ -8,6 +8,9 @@
   const MAX_CONSOLE = 500;
   const INTERACTIVE_ROLES = ['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'option', 'combobox', 'textbox'];
   const SKIPPED = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'svg'];
+  // Fields whose value is never repeated, even one Claude typed (`agent-browser`, *Sensitive
+  // fields stay hidden*): what password managers fill.
+  const SENSITIVE_AUTOCOMPLETE = ['current-password', 'new-password', 'one-time-code', 'cc-number', 'cc-csc'];
   const TAURI_REFUSAL = / not allowed\. (Plugin not found|Permissions associated with this command)/;
 
   // State kept per document: its generation, so numbers from an earlier page are refused, and
@@ -59,24 +62,34 @@
     return image ? squash(image.getAttribute('alt')) : '';
   }
 
+  function sensitive(element) {
+    if (element.type === 'password') return true;
+    const tokens = (element.getAttribute('autocomplete') || '').toLowerCase().split(/\s+/);
+    return tokens.some((token) => SENSITIVE_AUTOCOMPLETE.includes(token));
+  }
+
+  // The element's kind, then its label as a JSON string, so the session can tell where a label
+  // with quotes in it ends (`browser-steps` design decision 1). A sensitive field ends in
+  // `(filled)` or `(empty)`, never its value.
   function describe(element) {
     const tag = element.tagName;
     const name = cut(label(element), 80);
-    const quoted = name ? ` "${name}"` : '';
+    const quoted = name ? ` ${JSON.stringify(name)}` : '';
+    const value = (text) => JSON.stringify(cut(text, 200));
     if (tag === 'A') return `link${quoted}`;
     if (tag === 'SELECT') {
       const chosen = element.selectedOptions?.[0];
       const options = [...element.options].slice(0, 20).map((o) => squash(o.textContent));
-      return `select${quoted} = "${squash(chosen?.textContent)}" (options: ${options.join(', ')})`;
+      return `select${quoted} = ${value(squash(chosen?.textContent))} (options: ${options.join(', ')})`;
     }
-    if (tag === 'TEXTAREA') return `text area${quoted} = "${cut(element.value, 200)}"`;
+    if (tag === 'TEXTAREA') return `text area${quoted} = ${value(element.value)}`;
     if (tag === 'INPUT') {
       const type = element.type;
       if (type === 'checkbox' || type === 'radio') return `${type}${quoted}${element.checked ? ' (checked)' : ''}`;
-      if (['button', 'submit', 'reset'].includes(type)) return `button "${squash(element.value) || name}"`;
-      // Never repeat a password, even one Claude typed.
-      if (type === 'password') return `password field${quoted}${element.value ? ' (filled)' : ''}`;
-      return `${type} field${quoted} = "${cut(element.value, 200)}"`;
+      if (['button', 'submit', 'reset'].includes(type)) return `button ${JSON.stringify(squash(element.value) || name)}`;
+      // Never repeat a password or the like, even one Claude typed.
+      if (sensitive(element)) return `${type} field${quoted} ${element.value ? '(filled)' : '(empty)'}`;
+      return `${type} field${quoted} = ${value(element.value)}`;
     }
     if (element.isContentEditable) return `editable text${quoted}`;
     const role = element.getAttribute('role');

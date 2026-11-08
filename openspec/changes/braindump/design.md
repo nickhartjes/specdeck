@@ -116,6 +116,8 @@ The host's own items take the same path as viewers' items: the same checks, the 
 
 If a release ships protocol 5 before this merges, or `read-and-estimate` raises the version first, the constant becomes the current unreleased version, and `MIN_VIEWER_PROTOCOL_VERSION` follows the one-older rule. Task 1.1 checks this at the start of apply. Each change keeps its own constant, so merging is one line each.
 
+`read-and-estimate` merged first and raised the version to 6, with the minimum at 5. On merging, `BRAINDUMP_PROTOCOL_VERSION` became 6, beside `ASKS_PROTOCOL_VERSION`; viewers on protocol 5 are the older viewers. The braindump's messages and requests come after the asks' on the wire.
+
 ### 7. UI
 
 - **`SharedTab`:** a `Braindump` group above `SharedWithEveryone`, with the concept's help line ("Notes and files from everyone. <host> gives them to Claude together."). Each row shows the name, who and when, the size, and *Given to Claude* when given. The host gets a header button *Give N to Claude* when N > 0.

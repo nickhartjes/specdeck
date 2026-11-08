@@ -1,7 +1,25 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Eye, LogOut, WifiOff } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, BraindumpItemInfo, EndReason, Participant, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
+import type {
+  AgentId,
+  AgentStatus,
+  BraindumpItemInfo,
+  EndReason,
+  Participant,
+  ReadView,
+  RequestOutcome,
+  SentLink,
+  SharedFileInfo,
+  Suggestion,
+  TerminalSnapshot,
+  TimelineEvent,
+  ViewEvent,
+  VoteView,
+} from '../api/types';
+import { ReadBanner } from '../components/ReadBanner';
+import { VoteBanner } from '../components/VoteBanner';
+import { createHostAskNotices } from '../model/hostAskNotices';
 import { shareEach, type SharedFiles } from '../components/SharedFiles';
 import { Toast, useToast } from '../components/Toast';
 import { useSharedBytes } from './useSharedBytes';
@@ -96,6 +114,15 @@ interface State {
   linkSending: boolean;
   /** The latest link sent, and the host's reply once it came. */
   linkSent: { id: number; outcome: RequestOutcome | null } | null;
+  /** The host's open read request, and when it arrived, to count the time left down from. */
+  readRequest: ReadView | null;
+  readAt: number;
+  /** The host's open vote. */
+  vote: VoteView | null;
+  /** Answers and votes sent that the host has not replied to yet. */
+  answers: number[];
+  /** Why the last answer or vote did not count, if it did not. */
+  answerNotice: string | null;
 }
 
 const initial: State = {
@@ -109,6 +136,11 @@ const initial: State = {
   myLinks: [],
   linkSending: false,
   linkSent: null,
+  readRequest: null,
+  readAt: 0,
+  vote: null,
+  answers: [],
+  answerNotice: null,
   mine: [],
   sent: null,
   phase: 'joining',
@@ -147,7 +179,17 @@ export function viewerReducer(state: State, event: ViewEvent | { type: 'link-sen
       return state.linkSending
         ? { ...state, linkSending: false, linkSent: { id: event.id, outcome: null } }
         : { ...state, sent: { id: event.id, outcome: null } };
+    case 'read-request':
+      return { ...state, readRequest: event.open, readAt: Date.now(), answerNotice: event.open ? state.answerNotice : null };
+    case 'vote':
+      return { ...state, vote: event.open, answerNotice: event.open ? state.answerNotice : null };
+    case 'answer-sent':
+      return { ...state, answers: [...state.answers, event.id] };
     case 'reply':
+      if (state.answers.includes(event.id)) {
+        const answers = state.answers.filter((id) => id !== event.id);
+        return { ...state, answers, answerNotice: answerNotice(event.outcome) };
+      }
       if (state.linkSent?.id === event.id) return { ...state, linkSent: { id: event.id, outcome: event.outcome } };
       return state.sent?.id === event.id ? { ...state, sent: { id: event.id, outcome: event.outcome } } : state;
     case 'suggestions':
@@ -169,6 +211,13 @@ export function viewerReducer(state: State, event: ViewEvent | { type: 'link-sen
     case 'ended':
       return { ...state, phase: 'ended', ended: event.reason };
   }
+}
+
+/** Why an answer or vote did not count; null when it did. */
+function answerNotice(outcome: RequestOutcome): string | null {
+  if (outcome === 'RateLimited') return 'Wait a moment, then answer again.';
+  if (outcome === 'Gone') return 'The host closed it already.';
+  return null;
 }
 
 interface Props {
@@ -195,6 +244,8 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   const shown = layout ?? choose('developer');
   const workspace = useRef<WorkspaceHandle>(null);
   const [state, dispatch] = useReducer(viewerReducer, initial);
+  // When this screen first joined; reconnecting is not joining again (`catch-up`).
+  const [joinedAt, setJoinedAt] = useState<number | null>(null);
   useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
 
   // What the viewer is notified about; the switches are read again on every status change, so
@@ -203,22 +254,46 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
     () =>
       createViewerNotices({
         switches: DEFAULT_VIEWER_NOTIFICATIONS,
-        notify: ({ kind, title, body }) => void bridge.viewerNotify(kind, title, body).catch(() => {}),
+        notify: ({ kind, title, body, open }) => void bridge.viewerNotify(kind, title, body, open).catch(() => {}),
       }),
     [bridge],
   );
   useEffect(() => () => notices.dispose(), [notices]);
+  const askNotices = useMemo(
+    () =>
+      createHostAskNotices({
+        switches: DEFAULT_VIEWER_NOTIFICATIONS,
+        notify: ({ kind, title, body }) => void bridge.viewerNotify(kind, title, body).catch(() => {}),
+      }),
+    [bridge],
+  );
+  // The host's name for notifications, read when one arrives.
+  const participants = useRef<Participant[]>([]);
+  const hostLabel = () => participants.current.find((p) => p.role === 'Host')?.label ?? 'The host';
+  // A click on one of them opens what it is about here (`notification-open` design decision 4).
+  useEffect(() => bridge.onNoticeOpen((open) => workspace.current?.open(open)), [bridge]);
   const onEvent = (event: ViewEvent) => {
     dispatch(event);
     if (event.type === 'joined' || event.type === 'status') {
       void bridge
         .getProfile()
-        .then((profile) => notices.setSwitches(profile.viewerNotifications))
+        .then((profile) => {
+          notices.setSwitches(profile.viewerNotifications);
+          askNotices.setSwitches(profile.viewerNotifications);
+        })
         .catch(() => {});
     }
-    if (event.type === 'joined') notices.joined(AGENT_NAMES[event.agent]);
-    else if (event.type === 'status') notices.status(event.status);
-    else if (event.type === 'timeline') notices.timeline(event.event);
+    if (event.type === 'joined') {
+      setJoinedAt((at) => at ?? Date.now());
+      notices.joined(AGENT_NAMES[event.agent]);
+      askNotices.joined();
+    } else if (event.type === 'status') {
+      notices.status(event.status);
+      askNotices.status();
+    } else if (event.type === 'timeline') notices.timeline(event.event);
+    else if (event.type === 'participants') participants.current = event.participants;
+    else if (event.type === 'read-request') askNotices.read(event.open, hostLabel());
+    else if (event.type === 'vote') askNotices.vote(event.open, hostLabel());
   };
 
   const joined = useRef(false);
@@ -281,6 +356,33 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
           }
         : undefined,
     [state.filesAllowed, state.sharedFiles, state.braindump, state.viewerId, live, hostName, terminal, agentName, bridge, showToast, open],
+  );
+
+  const { readRequest, vote } = state;
+  const answer = (call: () => Promise<void>) => void call().catch((e) => showToast(errorMessage(e)));
+  const requests = live && (readRequest || vote) && (
+    <>
+      {readRequest && (
+        <ReadBanner
+          view={readRequest}
+          receivedAt={state.readAt}
+          participants={state.participants}
+          onOpen={() => workspace.current?.openTarget(readRequest.target, readRequest.label)}
+          onAnswer={(reply) => answer(() => bridge.answerRead(readRequest.id, reply))}
+          notice={state.answerNotice}
+        />
+      )}
+      {vote && (
+        <VoteBanner
+          key={`${vote.id}:${vote.round}`}
+          view={vote}
+          participants={state.participants}
+          me={state.viewerId ?? -1}
+          onVote={(card) => answer(() => bridge.castVote(vote.id, vote.round, card))}
+          notice={readRequest ? null : state.answerNotice}
+        />
+      )}
+    </>
   );
 
   // Ended before ever joining: explain, and offer to try again.
@@ -357,9 +459,11 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
           onLayout={setLayout}
           timelineSupported={state.timelineSupported}
           timeline={state.timeline}
+          joinedAt={joinedAt}
           wholeFiles={state.wholeFiles}
           shared={shared}
           sharedProgress={state.fileProgress}
+          requests={requests}
           linksBar={
             // Hosts that can't take links never say whether they allow them.
             state.linksAllowed !== null && state.phase !== 'ended' ? (

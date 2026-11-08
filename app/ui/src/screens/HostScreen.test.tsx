@@ -352,6 +352,145 @@ describe('shared links on the host screen', () => {
     act(() => emit({ ...snapshot(), agent: 'terminal', timelineSupported: false, suggestionsPossible: false, wholeFilesPossible: false }));
     expect(screen.getByRole('button', { name: 'Share a link' })).toBeInTheDocument();
   });
+
+  it('never folds prompts for the host', async () => {
+    await setup();
+    const old = Date.now() - 3 * 3_600_000;
+    act(() =>
+      emit({
+        ...snapshot(),
+        timeline: [0, 1, 2].flatMap((n) => [
+          { outputSeq: n * 2, at: old + n * 600_000, kind: 'prompt' as const, promptId: `p${n}`, text: `Prompt ${n}` },
+          { outputSeq: n * 2 + 1, at: old + n * 600_000 + 60_000, kind: 'response' as const, promptId: `p${n}`, text: `Done with ${n}.` },
+        ]),
+      }),
+    );
+    expect(await screen.findByRole('article', { name: 'Prompt 1' })).not.toHaveClass('folded');
+    expect(screen.queryByRole('region', { name: 'So far' })).not.toBeInTheDocument();
+  });
+});
+
+describe('asks on the host screen', () => {
+  const read = (people: [number, 'reading' | 'ready' | 'question' | 'older-app'][], questions: [number, string][] = []) => ({
+    id: 1,
+    target: { document: { path: 'openspec/changes/heartbeat/design.md' } },
+    label: 'design.md',
+    limitS: 300,
+    leftMs: 300_000,
+    people,
+    mine: 'reading' as const,
+    questions,
+  });
+  const vote = (over: Partial<Extract<HostEvent, { type: 'asks' }>['vote'] & object> = {}) => ({
+    id: 2,
+    round: 1,
+    task: 'Show unreachable after three missed heartbeats',
+    cards: 't-shirt' as const,
+    voted: [],
+    mine: null,
+    revealed: null,
+    older: [],
+    ...over,
+  });
+
+  it('asks everyone to read, with a time limit', async () => {
+    const { bridge } = await setup();
+    await userEvent.click(screen.getByRole('button', { name: 'Ask to read' }));
+    const dialog = screen.getByRole('dialog', { name: 'Ask everyone to read' });
+    await userEvent.click(within(dialog).getByRole('radio', { name: 'health.ts' }));
+    await userEvent.selectOptions(within(dialog).getByLabelText('Time limit'), '5 minutes');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Ask to read' }));
+    expect(bridge.hostAskToRead).toHaveBeenCalledWith({ code: { path: 'src/routes/health.ts' } }, 'health.ts', 300);
+    expect(await screen.findByRole('region', { name: /You asked everyone to read health.ts/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask to read' })).toBeDisabled();
+  });
+
+  it('sees who is reading, ready, has a question with its text, and on an older app', async () => {
+    const { bridge } = await setup();
+    act(() => emit({ type: 'asks', read: read([[1, 'reading'], [2, 'ready'], [3, 'question'], [4, 'older-app']], [[3, 'Why three heartbeats?']]), vote: null }));
+    const banner = screen.getByRole('region', { name: /You asked everyone to read design.md/ });
+    expect(banner).toHaveTextContent('1 of 3 ready, 1 with a question');
+    expect(within(banner).getByRole('timer')).toHaveTextContent('5:00 left');
+    const people = within(banner).getByRole('list', { name: 'Who read' });
+    expect(people).toHaveTextContent('Anna de Vries: Reading');
+    expect(people).toHaveTextContent('Bram: Ready');
+    expect(people).toHaveTextContent('Anna de Vries (2): Has a question');
+    expect(people).toHaveTextContent('Viewer 4: On an older app');
+    await userEvent.click(within(banner).getByText('1 question'));
+    expect(within(banner).getByText('Why three heartbeats?')).toBeVisible();
+    await userEvent.click(within(banner).getByRole('button', { name: 'Go on' }));
+    expect(bridge.hostEndRead).toHaveBeenCalled();
+  });
+
+  it('estimates in T-shirt sizes, votes, reveals and keeps another card', async () => {
+    // The demo's vote would close on the first of these; each is only checked to be called.
+    const stays = () => vi.fn(async () => {});
+    const { bridge } = await setup({ hostCastVote: stays(), hostKeepEstimate: stays(), hostVoteAgain: stays(), hostStopVote: stays() });
+    await userEvent.click(screen.getByRole('button', { name: 'Estimate' }));
+    const dialog = screen.getByRole('dialog', { name: 'Estimate a task' });
+    await userEvent.selectOptions(within(dialog).getByLabelText('Fill from'), 'Yes, add a test with a stubbed database.');
+    expect(within(dialog).getByLabelText('Task')).toHaveValue('Yes, add a test with a stubbed database.');
+    await userEvent.click(within(dialog).getByRole('radio', { name: /T-shirt sizes/ }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Start the vote' }));
+    expect(bridge.hostStartVote).toHaveBeenCalledWith('Yes, add a test with a stubbed database.', 't-shirt');
+
+    act(() => emit({ type: 'asks', read: null, vote: vote({ voted: [1, 2] }) }));
+    let banner = screen.getByRole('region', { name: 'How big is it?' });
+    const seats = within(banner).getByRole('list', { name: 'Who voted' });
+    expect(within(seats).getAllByRole('listitem').map((seat) => seat.getAttribute('aria-label'))).toEqual([
+      'You: not voted yet',
+      'Anna de Vries: voted',
+      'Bram: voted',
+      'Anna de Vries (2): not voted yet',
+    ]);
+    expect(banner).toHaveTextContent('2 of 4 voted.');
+    // No value is shown before the reveal.
+    expect(within(banner).queryByRole('list', { name: 'Votes' })).toBeNull();
+    await userEvent.click(within(banner).getByRole('button', { name: 'M' }));
+    expect(bridge.hostCastVote).toHaveBeenCalledWith({ value: 2 });
+
+    act(() =>
+      emit({ type: 'asks', read: null, vote: vote({ voted: [0, 1, 2], mine: { value: 2 }, revealed: [[0, { value: 2 }], [1, { value: 3 }], [2, { value: 2 }], [3, 'break']] }) }),
+    );
+    banner = screen.getByRole('region', { name: 'Votes' });
+    const votes = within(banner).getByRole('list', { name: 'Votes' });
+    expect(within(votes).getAllByRole('listitem').map((seat) => seat.getAttribute('aria-label'))).toEqual([
+      'You: M',
+      'Anna de Vries: L',
+      'Bram: M',
+      'Anna de Vries (2): I need a break',
+    ]);
+    expect(banner).toHaveTextContent('From M to L');
+    expect(within(banner).getByLabelText('Keep')).toHaveDisplayValue('M');
+    await userEvent.selectOptions(within(banner).getByLabelText('Keep'), 'L');
+    await userEvent.click(within(banner).getByRole('button', { name: 'Keep L' }));
+    expect(bridge.hostKeepEstimate).toHaveBeenCalledWith({ value: 3 });
+    await userEvent.click(within(banner).getByRole('button', { name: 'Vote again' }));
+    expect(bridge.hostVoteAgain).toHaveBeenCalled();
+    await userEvent.click(within(banner).getByRole('button', { name: 'Stop voting' }));
+    expect(bridge.hostStopVote).toHaveBeenCalled();
+  });
+
+  it('shows both at once, and the row takes no space once both close', async () => {
+    await setup();
+    act(() => emit({ type: 'asks', read: read([[1, 'reading']]), vote: vote() }));
+    expect(screen.getByRole('region', { name: /You asked everyone to read/ })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'How big is it?' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Estimate' })).toBeDisabled();
+    act(() => emit({ type: 'asks', read: null, vote: null }));
+    expect(document.querySelector('.requests')).toBeEmptyDOMElement();
+    expect(screen.getByRole('button', { name: 'Estimate' })).toBeEnabled();
+  });
+
+  it('offers no asks for a session of the previous release', async () => {
+    await setup();
+    const older: HostEvent = { ...snapshot() };
+    delete older.asksPossible;
+    delete older.asks;
+    act(() => emit(older));
+    expect(screen.queryByRole('button', { name: 'Ask to read' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Estimate' })).toBeNull();
+  });
 });
 
 /** The demo's snapshot, as a session of this release sends it. */
@@ -376,5 +515,7 @@ function snapshot(): Extract<HostEvent, { type: 'snapshot' }> {
     linksPossible: true,
     linksAllowed: true,
     viewerLinks: [],
+    asksPossible: true,
+    asks: { read: null, vote: null },
   };
 }

@@ -9,6 +9,8 @@ import './styles.css';
 import './highlight.css';
 import './shared-files.css';
 import './links.css';
+import './asks.css';
+import './catch-up.css';
 
 async function bridge(): Promise<Bridge> {
   // In a plain browser during development, /?demo=start|host|viewer shows sample sessions.

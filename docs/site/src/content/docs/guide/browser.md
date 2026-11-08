@@ -24,7 +24,7 @@ SpecDeck doesn't approve these tools for you: your Claude Code permissions decid
 - **Never on screen.** The browser has no window you see, and it never takes the focus while you work.
 - **No way into SpecDeck.** Pages Claude opens can't use SpecDeck's functions or reach your sessions. Only the session's own Claude Code can use its browser: it gets the tools from a server on your computer (`127.0.0.1`) that answers only with that session's secret token.
 - **More detail.** [Claude's browser](/specdeck/security/claude-browser/) in *Security and privacy* says how it is kept apart, step by step.
-- **What viewers see.** Viewers see Claude's browser steps in the timeline and the terminal as they see any other tool, including what Claude types, and the [screenshots](#screenshots-in-the-timeline) it takes. Use test accounts, not your own passwords.
+- **What viewers see.** Viewers see Claude's browser steps in the timeline, such as *Typed into “Email”* and *Clicked “Sign in”*, and the [screenshots](#screenshots-in-the-timeline) it takes. What Claude types into an ordinary field shows in the step's details. What it types into a password field, or into a field the page marks as a one-time code or card number, is left out of the timeline: the step only says *Filled in “Password”*. The terminal still shows every tool call as Claude Code prints it, including what Claude types, so use test accounts, not your own passwords.
 
 ## Screenshots in the timeline
 

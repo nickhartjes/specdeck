@@ -9,6 +9,7 @@ use specdeck_core::peer::PeerConfig;
 use specdeck_core::viewer::{
     CONNECT_TIMEOUT, FileError, ViewerConfig, ViewerEvent, ViewerSession, ViewerStatus,
 };
+use specdeck_protocol::asks::{Card, ReadAnswer, ReadView, VoteView, valid_question};
 use specdeck_protocol::control::{
     BraindumpItemInfo, Outcome, PROTOCOL_VERSION, Participant, SentLink, SharedFileInfo,
     Suggestion, valid_suggestion,
@@ -91,6 +92,18 @@ pub enum ViewEvent {
     /// This viewer's links and what became of each.
     Links {
         mine: Vec<SentLink>,
+    },
+    /// The host's open read request as this viewer sees it; `None` once it closed.
+    ReadRequest {
+        open: Option<ReadView>,
+    },
+    /// The host's open vote as this viewer sees it; `None` once it closed.
+    Vote {
+        open: Option<VoteView>,
+    },
+    /// An answer or vote was numbered; its replies carry this id.
+    AnswerSent {
+        id: u32,
     },
     /// The session is over for this viewer; `reason` says why, for the window to explain.
     Ended {
@@ -267,6 +280,29 @@ impl ViewerRuntime {
         self.links.lock().unwrap().openable(id)
     }
 
+    /// Answers the host's read request; a question too long for the host is refused here, so a
+    /// slip in the window never costs the viewer its connection. A blank text counts as none.
+    pub fn answer_read(&self, ask: u32, answer: ReadAnswer) -> Result<(), String> {
+        let answer = match answer {
+            ReadAnswer::Question { text } => {
+                let text = text.map(|t| t.replace("\r\n", "\n").trim().to_owned());
+                let text = text.filter(|t| !t.is_empty());
+                if text.as_deref().is_some_and(|t| !valid_question(t)) {
+                    return Err("A question is at most 280 characters of text.".into());
+                }
+                ReadAnswer::Question { text }
+            }
+            answer => answer,
+        };
+        self.session.answer_read(ask, answer);
+        Ok(())
+    }
+
+    /// Votes in the host's vote; `None` takes the vote back.
+    pub fn cast_vote(&self, ask: u32, round: u16, card: Option<Card>) {
+        self.session.cast_vote(ask, round, card);
+    }
+
     /// Drops the connection and reconnects at once, keeping the viewer's place; refused while
     /// not connected.
     pub fn reconnect(&self) -> Result<(), String> {
@@ -319,6 +355,9 @@ fn translate(event: ViewerEvent) -> Option<ViewEvent> {
         ViewerEvent::Suggestions(mine) => ViewEvent::Suggestions { mine },
         ViewerEvent::LinksAllowed { links } => ViewEvent::LinksAllowed { links },
         ViewerEvent::Links(mine) => ViewEvent::Links { mine },
+        ViewerEvent::ReadRequest(open) => ViewEvent::ReadRequest { open },
+        ViewerEvent::Vote(open) => ViewEvent::Vote { open },
+        ViewerEvent::AnswerSent { id } => ViewEvent::AnswerSent { id },
         ViewerEvent::Braindump(items) => ViewEvent::Braindump { items },
         ViewerEvent::Ended => ViewEvent::Ended { reason: EndReason::Closed },
         ViewerEvent::Refused(reason) => ViewEvent::Ended {

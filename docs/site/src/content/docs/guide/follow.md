@@ -72,11 +72,11 @@ Agents report their state through the terminal (the [Program Status Protocol](ht
 
 ## Get called back
 
-You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session).
+You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. It also tells you when the host [asks you to read something or to estimate](/specdeck/guide/read-and-estimate/). Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session). Clicking a notification opens the plan or document it is about.
 
 ### Notifications in the browser
 
-In the web viewer, notifications are off until you turn them on: open the layout button and tick **While this tab is in the background** under **Notifications**. Your browser asks whether the page may show notifications. Once you allow it, choose the same kinds as in the app. The browser remembers your choice, so you are not asked again. They show only while the tab is hidden or the browser is not in front. If the browser does not allow notifications, the menu says so; allow them for the page in your browser's site settings and try again.
+In the web viewer, notifications are off until you turn them on: open the layout button and tick **While this tab is in the background** under **Notifications**. Your browser asks whether the page may show notifications. Once you allow it, choose the same kinds as in the app. The browser remembers your choice, so you are not asked again. They show only while the tab is hidden or the browser is not in front. Clicking one shows the page and opens the plan or document it is about, as in the app, as long as the page is still open. If the browser does not allow notifications, the menu says so; allow them for the page in your browser's site settings and try again.
 
 ## Read the session
 
@@ -98,6 +98,16 @@ In the web viewer, notifications are off until you turn them on: open the layout
 | Read the terminal larger or smaller | The terminal keeps the host's size and scales its text to fill the width of the tab area, following the latest output. Give it more room (a wider window, narrower or closed side panels) for larger text. [Zoom](/specdeck/guide/keyboard/) makes the rest of the window larger; the terminal keeps filling its tab |
 
 What you scroll, search or open only changes your own view.
+
+## Joining late
+
+If you join after prompts have finished, the timeline starts with a card about what happened before you came in: how long the session has run, how many prompts it had, the plans with their tasks done, the documents the agent wrote, the files and links people shared, and how many code files changed. Select a plan, document, file or link to open it. The card does not change after you join, and **×** closes it for the rest of the session.
+
+The prompts that finished before you joined are folded to the prompt and its outcome, such as *4 files changed · 3 of 6 tasks done*, or the first sentence of the agent's reply. Select **Show the N steps** to unfold one. A search that finds something in a folded prompt unfolds it. The prompt that was running or latest when you joined stays open, as does everything after it.
+
+To get around, use **Jump to a prompt** in the card, or **Go to the latest prompt** to go to the end of the timeline and follow it again. Jumping to a folded prompt leaves it folded.
+
+Losing the connection and coming back does not count as joining again. In the web viewer, reloading the page does. The host never sees prompts folded.
 
 ## Share a file or add to the braindump
 

@@ -124,6 +124,8 @@ function fakeCore(): FakeCore {
       core.unanswered.push(request);
       return request;
     },
+    answerRead: (ask) => ({ id: 70 + ask, message: new Uint8Array([3, 70 + ask]) }),
+    castVote: (ask) => ({ id: 80 + ask, message: new Uint8Array([3, 80 + ask]) }),
     unansweredRequests: () => core.unanswered,
     unanswered: [],
     shareFile: (name) => ({ id: 50 + name.length, message: new Uint8Array([3, 50 + name.length]) }),
@@ -350,6 +352,27 @@ describe('web viewer connection', () => {
     control.receive([0]);
     expect(events.at(-1)).toEqual({ type: 'links', mine });
     expect(() => connection.sendLink('http://localhost:3000/', null, false)).toThrow('can’t be shared');
+  });
+
+  it('passes on the host’s asks and sends answers and votes', async () => {
+    const core = fakeCore();
+    const open = { id: 1, target: { document: { path: 'design.md' } }, label: 'design.md', limitS: 0, leftMs: null, people: [], mine: 'reading' as const, questions: [] };
+    const vote = { id: 2, round: 1, task: 'A task', cards: 't-shirt' as const, voted: [], mine: null, revealed: null, older: [] };
+    core.controls.push(welcome, { type: 'read-request', open }, { type: 'vote', open: vote });
+    const { sockets, peers, events, connection } = setup(core);
+    const { peer } = await reachHost(sockets, peers);
+    const control = peer.channel('control');
+    control.open();
+    control.receive([0]);
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'read-request', open });
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'vote', open: vote });
+    connection.answerRead(1, 'ready');
+    expect(events.at(-1)).toEqual({ type: 'answer-sent', id: 71 });
+    expect(control.sent.at(-1)).toEqual(new Uint8Array([3, 71]));
+    connection.castVote(2, 1, { value: 3 });
+    expect(events.at(-1)).toEqual({ type: 'answer-sent', id: 82 });
   });
 
   it('says the code is invalid when its room does not exist', async () => {

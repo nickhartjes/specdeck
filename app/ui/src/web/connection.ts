@@ -4,7 +4,7 @@
 // RTCPeerConnection. What each message means is decided by `ViewerCore`, the shared Rust code
 // compiled to WebAssembly (crates/web), so verification and ordering match the app.
 
-import type { AgentId, AgentStatus, BraindumpItemInfo, EndReason, Participant, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, BraindumpItemInfo, Card, EndReason, Participant, ReadAnswer, ReadView, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent, VoteView } from '../api/types';
 
 /** How long joining may take, and one reconnection attempt; as `CONNECT_TIMEOUT` in the app. */
 export const CONNECT_TIMEOUT_MS = 20_000;
@@ -28,6 +28,8 @@ export type ControlUpdate =
   | { type: 'files'; files: SharedFileInfo[] }
   | { type: 'links-allowed'; links: boolean }
   | { type: 'links'; mine: SentLink[] }
+  | { type: 'read-request'; open: ReadView | null }
+  | { type: 'vote'; open: VoteView | null }
   | { type: 'braindump'; items: BraindumpItemInfo[] }
   | { type: 'retry' };
 
@@ -81,6 +83,9 @@ export interface ViewerCore {
   suggest(text: string): Request;
   /** Throws for a link the host would refuse; sends it in the form the host requires. */
   sendLink(url: string, title: string | null, sessionOnly: boolean): Request;
+  /** Throws for a question the host would refuse. */
+  answerRead(ask: number, answer: ReadAnswer): Request;
+  castVote(ask: number, round: number, card: Card | null): Request;
   /** Requests the host has not answered, to send once admitted. */
   unansweredRequests(): Request[];
   /** A file to share, announced with its size and hash. */
@@ -345,6 +350,20 @@ export class Connection {
     this.asked = null;
   }
 
+  /** Answers the host's read request; throws for a question the host would refuse. */
+  answerRead(ask: number, answer: ReadAnswer) {
+    const request = this.options.core.answerRead(ask, answer);
+    this.options.onEvent({ type: 'answer-sent', id: request.id });
+    this.sendControl?.(new Uint8Array(request.message));
+  }
+
+  /** Votes in the host's vote; null takes the vote back. */
+  castVote(ask: number, round: number, card: Card | null) {
+    const request = this.options.core.castVote(ask, round, card);
+    this.options.onEvent({ type: 'answer-sent', id: request.id });
+    this.sendControl?.(new Uint8Array(request.message));
+  }
+
   /** Sends the host a link to share, as `suggest` does. Throws for a link the host would refuse. */
   sendLink(url: string, title: string | null, sessionOnly: boolean) {
     const request = this.options.core.sendLink(url, title, sessionOnly);
@@ -532,6 +551,12 @@ export class Connection {
               break;
             case 'links':
               onEvent({ type: 'links', mine: update.mine });
+              break;
+            case 'read-request':
+              onEvent({ type: 'read-request', open: update.open });
+              break;
+            case 'vote':
+              onEvent({ type: 'vote', open: update.open });
               break;
             case 'participants':
               onEvent({ type: 'participants', participants: update.participants });

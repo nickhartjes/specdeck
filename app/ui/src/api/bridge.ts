@@ -9,10 +9,15 @@ import type {
   AgentId,
   Appearance,
   AgentVersion,
+  Card,
+  CardSet,
   DiagnosticsStatus,
   HostEvent,
   JoinLink,
+  NoticeOpen,
   Profile,
+  ReadAnswer,
+  ReadTarget,
   RunningSession,
   ServiceCheck,
   SharedFileInfo,
@@ -34,8 +39,13 @@ export interface Bridge {
   setUsername(username: string): Promise<Profile>;
   setNotifications(enabled: boolean): Promise<Profile>;
   setViewerNotifications(kinds: ViewerNotifications): Promise<Profile>;
-  /** Notifies about the session this window watches, unless that kind is off or the window is in front. */
-  viewerNotify(kind: ViewerNotificationKind, title: string, body: string): Promise<void>;
+  /**
+   * Notifies about the session this window watches, unless that kind is off or the window is in
+   * front. A click on it brings the window to the front and passes `open` to `onNoticeOpen`.
+   */
+  viewerNotify(kind: ViewerNotificationKind, title: string, body: string, open?: NoticeOpen): Promise<void>;
+  /** Calls `handler` with what a clicked notification about this window's session opens; returns a function that stops listening. */
+  onNoticeOpen(handler: (open: NoticeOpen) => void): () => void;
   setCheckUpdates(enabled: boolean): Promise<Profile>;
   setScreenReader(enabled: boolean): Promise<Profile>;
   setVerboseLogging(enabled: boolean): Promise<Profile>;
@@ -99,6 +109,21 @@ export interface Bridge {
   hostRemoveLink(id: number): Promise<void>;
   /** Lets viewers send links, or stops them. */
   hostAllowLinks(on: boolean): Promise<void>;
+  /** Asks everyone to read `target`, with a limit of 0 (none), 120, 300 or 600 seconds. */
+  hostAskToRead(target: ReadTarget, label: string, limitS: number): Promise<void>;
+  /** Goes on: closes the read request. */
+  hostEndRead(): Promise<void>;
+  /** Asks everyone how big `task` is. */
+  hostStartVote(task: string, cards: CardSet): Promise<void>;
+  /** The host's own vote; null takes it back. */
+  hostCastVote(card: Card | null): Promise<void>;
+  hostRevealVotes(): Promise<void>;
+  /** After the reveal: a new round with the same task and cards. */
+  hostVoteAgain(): Promise<void>;
+  /** Closes the vote and keeps nothing. */
+  hostStopVote(): Promise<void>;
+  /** After the reveal: closes the vote keeping `card`. */
+  hostKeepEstimate(card: Card): Promise<void>;
   hostClose(): Promise<void>;
   /** Joins through `server`, from a link the user agreed to, or their own service when null. */
   joinSession(code: string, server: string | null, terminal: TerminalSink, events: (event: ViewEvent) => void): Promise<void>;
@@ -121,6 +146,10 @@ export interface Bridge {
   sendLink(url: string, title: string | null, sessionOnly: boolean): Promise<void>;
   /** Opens shared link `id` of this window's session in the default browser; never an address the window names. */
   openLink(id: number): Promise<void>;
+  /** Answers the host's read request `ask`; fails for a question the host would refuse. */
+  answerRead(ask: number, answer: ReadAnswer): Promise<void>;
+  /** Votes in round `round` of the host's vote `ask`; null takes the vote back. */
+  castVote(ask: number, round: number, card: Card | null): Promise<void>;
   /** The join link for this window that opened the app or came in since, once; null when there is none. */
   takeJoinLink(): Promise<JoinLink | null>;
   /** The host, join or recent-folder command a new window opened with, once; null when there is none. */

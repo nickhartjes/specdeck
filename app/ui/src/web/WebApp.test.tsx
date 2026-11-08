@@ -1,10 +1,11 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderWith } from '../test/helpers';
 import { TerminalViewStub } from '../test/terminal-stub';
 import { webBridge } from './bridge';
 import type { ViewerCore } from './connection';
+import type { ViewEvent } from '../api/types';
 import { choose } from '../model/layout';
 import { appLink, takeHashCode, WebApp, webPage } from './WebApp';
 
@@ -75,6 +76,39 @@ describe('web viewer page', () => {
   });
 });
 
+describe('the host’s asks in the browser', () => {
+  it('answers a read request with a question and votes', async () => {
+    const { bridge, joinSession } = setup('7K2M-9QXH-4TPA');
+    let emit: (event: ViewEvent) => void = () => {};
+    joinSession.mockImplementation(async (_code, _server, _terminal, events) => {
+      emit = events;
+    });
+    const answerRead = vi.spyOn(bridge, 'answerRead').mockResolvedValue();
+    const castVote = vi.spyOn(bridge, 'castVote').mockResolvedValue();
+    await userEvent.type(await screen.findByLabelText('Your name'), 'anna');
+    await userEvent.click(screen.getByRole('button', { name: 'Watch in this browser' }));
+    await waitFor(() => expect(joinSession).toHaveBeenCalled());
+    act(() => {
+      emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 80, rows: 24 });
+      emit({ type: 'participants', participants: [{ id: 0, username: 'Nick', role: 'Host', label: 'Nick' }, { id: 2, username: 'anna', role: 'Viewer', label: 'anna' }] });
+      emit({ type: 'status', status: 'waiting' });
+      emit({
+        type: 'read-request',
+        open: { id: 1, target: { document: { path: 'design.md' } }, label: 'design.md', limitS: 0, leftMs: null, people: [[2, 'reading']], mine: 'reading', questions: [] },
+      });
+      emit({ type: 'vote', open: { id: 2, round: 1, task: 'Show unreachable', cards: 't-shirt', voted: [], mine: null, revealed: null, older: [] } });
+    });
+    const read = screen.getByRole('region', { name: /The host asks you to read design.md/ });
+    expect(read).toHaveTextContent('No time limit');
+    await userEvent.click(within(read).getByRole('button', { name: /I have a question/ }));
+    await userEvent.type(within(read).getByLabelText(/Your question/), 'Why?');
+    await userEvent.click(within(read).getByRole('button', { name: 'Send' }));
+    expect(answerRead).toHaveBeenCalledWith(1, { question: { text: 'Why?' } });
+    await userEvent.click(within(screen.getByRole('region', { name: 'How big is it?' })).getByRole('button', { name: 'L' }));
+    expect(castVote).toHaveBeenCalledWith(2, 1, { value: 3 });
+  });
+});
+
 describe('web shortcuts', () => {
   async function watching() {
     const { bridge } = setup('7K2M-9QXH-4TPA');
@@ -109,5 +143,49 @@ describe('links', () => {
     expect(webPage('wss://other.example.com/x/signal', 'C')).toBe('https://other.example.com/x/join#C');
     expect(webPage('ws://127.0.0.1:18081/signal', 'C')).toBe('http://127.0.0.1:18081/join#C');
     expect(appLink(SERVICE, '7K2M-9QXH-4TPA')).toBe('specdeck://join/7K2M-9QXH-4TPA?server=wss%3A%2F%2Fspecdeck.example.com%2Fsignal');
+  });
+});
+
+describe('joining late in a browser', () => {
+  const HOUR = 3_600_000;
+  const start = 1_800_000_000_000;
+  /** Three answered prompts, an hour apart. */
+  const history: ViewEvent[] = [0, 1, 2].flatMap((n): ViewEvent[] => [
+    { type: 'timeline', event: { outputSeq: n * 2, at: start + n * HOUR, kind: 'prompt', promptId: `p${n}`, text: `Prompt ${n}` } },
+    { type: 'timeline', event: { outputSeq: n * 2 + 1, at: start + n * HOUR + 60_000, kind: 'response', promptId: `p${n}`, text: `Done with ${n}.` } },
+  ]);
+
+  /** Joins at `now` and replays the history. */
+  async function joinAt(now: number) {
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const { joinSession } = setup('7K2M-9QXH-4TPA');
+    let emit: (event: ViewEvent) => void = () => {};
+    joinSession.mockImplementation(async (_code, _server, _terminal, events) => {
+      emit = events;
+    });
+    await userEvent.type(await screen.findByLabelText('Your name'), 'anna');
+    await userEvent.click(screen.getByRole('button', { name: 'Watch in this browser' }));
+    await waitFor(() => expect(joinSession).toHaveBeenCalled());
+    act(() => {
+      emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+      history.forEach(emit);
+    });
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('folds earlier prompts and shows the overview, and a reload is a new join', async () => {
+    // Joined before the first prompt: nothing folds.
+    await joinAt(start - 1000);
+    expect(await screen.findByRole('article', { name: 'Prompt 1' })).not.toHaveClass('folded');
+    expect(screen.queryByRole('region', { name: 'So far' })).not.toBeInTheDocument();
+
+    // The page is reloaded later: the prompts before then fold.
+    cleanup();
+    await joinAt(start + 3 * HOUR);
+    expect(await screen.findByRole('region', { name: 'So far' })).toHaveTextContent('So far: 3 prompts.');
+    expect(screen.getByRole('article', { name: 'Prompt 1' })).toHaveClass('folded');
+    expect(screen.getByRole('article', { name: 'Prompt 2' })).toHaveClass('folded');
+    expect(screen.getByRole('article', { name: 'Prompt 3' })).not.toHaveClass('folded');
   });
 });

@@ -1,6 +1,7 @@
 //! SpecDeck wire protocol shared by hosts and viewers. Contains no I/O.
 
 mod agent;
+pub mod asks;
 pub mod control;
 pub mod files;
 pub mod frames;

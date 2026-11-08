@@ -12,11 +12,13 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use serde::Serialize;
+use specdeck_protocol::asks::{self as ask, Card, CardSet, ReadTarget, ReadView, VoteView};
 use specdeck_protocol::control::{
-    self, BRAINDUMP_PROTOCOL_VERSION, HostMessage, LINKS_PROTOCOL_VERSION, MAX_LINKS_LISTED,
-    MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant, REQUESTS_PROTOCOL_VERSION,
-    RefusalReason, Role, SHARED_FILES_PROTOCOL_VERSION, SentLink, SentLinkState, Suggestion,
-    SuggestionState, ViewerMessage, ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
+    self, ASKS_PROTOCOL_VERSION, BRAINDUMP_PROTOCOL_VERSION, HostMessage, LINKS_PROTOCOL_VERSION,
+    MAX_LINKS_LISTED, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
+    REQUESTS_PROTOCOL_VERSION, RefusalReason, Role, SHARED_FILES_PROTOCOL_VERSION, SentLink,
+    SentLinkState, Suggestion, SuggestionState, ViewerMessage, ViewerRequest,
+    WHOLE_FILES_PROTOCOL_VERSION,
 };
 use specdeck_protocol::files::{
     self, Assembled, Assembly, FILE_CHUNK_BYTES, FilesReply, FilesRequest,
@@ -30,6 +32,7 @@ use specdeck_protocol::{AgentId, AgentStatus};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{oneshot, watch};
 
+use crate::asks::{AskRefusal, Asks, Gone, HOST, Present};
 use crate::diag::{self, LeaveReason};
 use crate::ice::turn_url_with_credentials;
 use crate::peer::{BUFFERED_LOW, Channel, LinkState, Peer, PeerConfig, PeerEvent};
@@ -55,6 +58,13 @@ const REQUEST_BURST: f64 = 3.0;
 
 /// After the burst, one request per this long.
 const REQUEST_REFILL: Duration = Duration::from_secs(10);
+
+/// Answers and votes a viewer may send at once, before their own rate limit applies
+/// (`read-and-estimate` design decision 6).
+const ANSWER_BURST: f64 = 5.0;
+
+/// After the burst, one answer per this long.
+const ANSWER_REFILL: Duration = Duration::from_secs(1);
 
 /// A viewer's files channel may hold this much before the next chunk waits, well under the
 /// stream channel's mark, so terminal output keeps room on the connection.
@@ -100,6 +110,39 @@ pub enum SharingEvent {
     },
     /// Every link viewers sent in the session, oldest first, on every change.
     Links(Vec<HostLink>),
+    /// The open read request and vote as the host sees them, on every change; boxed, as it is
+    /// much larger than the others.
+    Asks(Box<HostAsks>),
+}
+
+/// The host's asks as the host's window shows them: the same views viewers get, with every
+/// question's text and no vote's value before the reveal but the host's own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct HostAsks {
+    pub read: Option<ReadView>,
+    pub vote: Option<VoteView>,
+}
+
+/// What the host asks of everyone, or does with an open ask.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AskCommand {
+    Read {
+        target: ReadTarget,
+        label: String,
+        limit_s: u16,
+    },
+    /// Go on: closes the read request.
+    EndRead,
+    StartVote {
+        task: String,
+        cards: CardSet,
+    },
+    /// The host's own vote; `None` takes it back.
+    CastVote(Option<Card>),
+    Reveal,
+    VoteAgain,
+    StopVote,
+    Keep(Card),
 }
 
 /// A viewer's link as the host sees it, before and after the host shared or declined it.
@@ -199,6 +242,7 @@ enum Command {
     Answer { viewer: u32, id: u32, answer: Answer, done: oneshot::Sender<bool> },
     AllowLinks(bool),
     AnswerLink { viewer: u32, id: u32, share: bool, done: oneshot::Sender<Option<HostLink>> },
+    Ask { command: AskCommand, done: oneshot::Sender<Result<(), AskRefusal>> },
     Close,
 }
 
@@ -279,6 +323,14 @@ impl Sharing {
     ) -> oneshot::Receiver<Option<HostLink>> {
         let (done, receiver) = oneshot::channel();
         let _ = self.commands.send(Command::AnswerLink { viewer, id, share, done });
+        receiver
+    }
+
+    /// Asks everyone to read or vote, or acts on an open ask. Resolves to why it was refused,
+    /// if it was. A read request that closes and a kept estimate are added to the timeline.
+    pub fn ask(&self, command: AskCommand) -> oneshot::Receiver<Result<(), AskRefusal>> {
+        let (done, receiver) = oneshot::channel();
+        let _ = self.commands.send(Command::Ask { command, done });
         receiver
     }
 
@@ -391,6 +443,8 @@ struct Host {
     /// The shared files' version and the viewers' switch, as last told to viewers.
     files_version: u64,
     files_allowed: bool,
+    /// The open read request and vote.
+    asks: Asks,
 }
 
 /// What viewers may send and what they sent: the switches, each viewer's rate limit, and the
@@ -403,6 +457,8 @@ struct Requests {
     links_on: bool,
     /// By viewer id, so reconnecting does not refill it.
     buckets: HashMap<u32, Bucket>,
+    /// The answers' and votes' own rate limit, by viewer id like `buckets`.
+    answer_buckets: HashMap<u32, Bucket>,
     /// Oldest first; kept for the session, also of viewers who left or were removed.
     suggestions: Vec<HostSuggestion>,
     /// As `suggestions`.
@@ -424,6 +480,7 @@ impl Requests {
             suggestions_on: agent != AgentId::Terminal,
             links_on: true,
             buckets: HashMap::new(),
+            answer_buckets: HashMap::new(),
             suggestions: Vec::new(),
             links: Vec::new(),
         }
@@ -469,12 +526,14 @@ impl Requests {
         let (on, bytes) = match &request {
             ViewerRequest::Suggest { text } => (self.suggestions_on, text.len()),
             ViewerRequest::ShareLink { url, .. } => (self.links_on, url.len()),
-            // Files and the braindump have their own gate, `Inner::file_request`.
+            // Files, the braindump and answers have their own gates, `Host::file_request` and
+            // `Host::answer`.
             ViewerRequest::ShareFile { .. }
             | ViewerRequest::RemoveFile { .. }
             | ViewerRequest::AddToBraindump { .. }
             | ViewerRequest::AddNote { .. }
-            | ViewerRequest::ReplaceNote { .. } => {
+            | ViewerRequest::ReplaceNote { .. }
+            | ViewerRequest::Answer(_) => {
                 return (Outcome::Off, None);
             }
         };
@@ -503,7 +562,8 @@ impl Requests {
                 | ViewerRequest::RemoveFile { .. }
                 | ViewerRequest::AddToBraindump { .. }
                 | ViewerRequest::AddNote { .. }
-                | ViewerRequest::ReplaceNote { .. } => unreachable!("returned above"),
+                | ViewerRequest::ReplaceNote { .. }
+                | ViewerRequest::Answer(_) => unreachable!("returned above"),
             }
         };
         let name = match (known, outcome) {
@@ -548,6 +608,14 @@ impl Requests {
         self.buckets.entry(viewer).or_insert_with(|| Bucket::new(now)).take(now)
     }
 
+    /// Takes one from the viewer's rate limit for answers and votes.
+    fn take_answer(&mut self, viewer: u32, now: Instant) -> bool {
+        self.answer_buckets
+            .entry(viewer)
+            .or_insert_with(|| Bucket::with(ANSWER_BURST, ANSWER_REFILL, now))
+            .take(now)
+    }
+
     /// Records the host's answer; false when the suggestion is not waiting.
     fn answer(&mut self, viewer: u32, id: u32, answer: &Answer) -> bool {
         let Some(suggestion) = self
@@ -581,21 +649,28 @@ impl Requests {
     }
 }
 
-/// A viewer's rate limit: [`REQUEST_BURST`] requests at once, then one per [`REQUEST_REFILL`].
+/// A viewer's rate limit: `burst` at once, then one per `refill`; for requests
+/// [`REQUEST_BURST`] and [`REQUEST_REFILL`].
 struct Bucket {
     tokens: f64,
     at: Instant,
+    burst: f64,
+    refill: Duration,
 }
 
 impl Bucket {
     fn new(now: Instant) -> Self {
-        Self { tokens: REQUEST_BURST, at: now }
+        Self::with(REQUEST_BURST, REQUEST_REFILL, now)
+    }
+
+    fn with(burst: f64, refill: Duration, now: Instant) -> Self {
+        Self { tokens: burst, at: now, burst, refill }
     }
 
     fn take(&mut self, now: Instant) -> bool {
         let refilled =
-            now.saturating_duration_since(self.at).as_secs_f64() / REQUEST_REFILL.as_secs_f64();
-        self.tokens = (self.tokens + refilled).min(REQUEST_BURST);
+            now.saturating_duration_since(self.at).as_secs_f64() / self.refill.as_secs_f64();
+        self.tokens = (self.tokens + refilled).min(self.burst);
         self.at = now;
         if self.tokens >= 1.0 {
             self.tokens -= 1.0;
@@ -645,6 +720,7 @@ impl Host {
             whole_files: false,
             files_version: 0,
             files_allowed: false,
+            asks: Asks::new(),
         }
     }
 
@@ -662,6 +738,7 @@ impl Host {
                 server_rx = self.connect_signalling(&mut backoff).await;
                 next_attempt = Instant::now() + backoff;
             }
+            let time_up = self.asks.deadline();
             tokio::select! {
                 command = commands.recv() => match command {
                     Some(Command::NewCode) => self.rotate_code(),
@@ -674,6 +751,9 @@ impl Host {
                     Some(Command::AllowLinks(on)) => self.allow_links(on),
                     Some(Command::AnswerLink { viewer, id, share, done }) => {
                         let _ = done.send(self.answer_link(viewer, id, share));
+                    }
+                    Some(Command::Ask { command, done }) => {
+                        let _ = done.send(self.ask(command));
                     }
                     Some(Command::Close) | None => break,
                 },
@@ -692,6 +772,10 @@ impl Host {
                 Ok(()) = changes.changed() => {}
                 // Waits before retrying the signalling service; only armed while it is down.
                 _ = tokio::time::sleep_until(next_attempt), if server_rx.is_none() => {}
+                // The open read request's time is up: it closes as if the host went on.
+                _ = tokio::time::sleep_until(time_up.unwrap_or(next_attempt)), if time_up.is_some() => {
+                    self.close_read(true);
+                }
                 _ = traffic.tick() => {
                     self.traffic.report_host();
                     self.drop_stalled_uploads();
@@ -1063,6 +1147,8 @@ impl Host {
                 send_newer(slot, BRAINDUMP_PROTOCOL_VERSION, &braindump);
                 self.send_mine(identity.id);
                 self.send_my_links(identity.id);
+                // Everyone's view of the asks changes with the participants, the new viewer's
+                // included.
                 self.broadcast_participants();
             }
             ViewerMessage::Resend { from_output_seq } => {
@@ -1096,9 +1182,18 @@ impl Host {
             || (admitted.protocol < LINKS_PROTOCOL_VERSION
                 && matches!(request, ViewerRequest::ShareLink { .. }))
             || (admitted.protocol < BRAINDUMP_PROTOCOL_VERSION && braindump)
+            || (admitted.protocol < ASKS_PROTOCOL_VERSION
+                && matches!(request, ViewerRequest::Answer(_)))
         {
             // It said it speaks a version without this request.
             return self.disconnect(connection, LeaveReason::Malformed);
+        }
+        if let ViewerRequest::Answer(answer) = request {
+            let outcome = self.answer_ask(viewer, answer);
+            if let Some(slot) = self.slots.get_mut(connection) {
+                send_newer(slot, REQUESTS_PROTOCOL_VERSION, &HostMessage::Reply { id, outcome });
+            }
+            return;
         }
         if braindump
             || matches!(request, ViewerRequest::ShareFile { .. } | ViewerRequest::RemoveFile { .. })
@@ -1166,7 +1261,9 @@ impl Host {
             ViewerRequest::ReplaceNote { file, size, sha256 } => {
                 ("replace_note", String::new(), size, sha256, Purpose::ReplaceNote { file })
             }
-            ViewerRequest::Suggest { .. } | ViewerRequest::ShareLink { .. } => {
+            ViewerRequest::Suggest { .. }
+            | ViewerRequest::ShareLink { .. }
+            | ViewerRequest::Answer(_) => {
                 return Outcome::Off;
             }
         };
@@ -1201,6 +1298,123 @@ impl Host {
             diag::host_file_shared(viewer, group, "unknown", size, outcome.as_str());
         }
         outcome
+    }
+
+    /// A viewer's answer to a read request or vote, within its own rate limit. Nothing here
+    /// reaches the agent.
+    fn answer_ask(&mut self, viewer: u32, answer: ask::Answer) -> Outcome {
+        if !self.requests.take_answer(viewer, Instant::now()) {
+            diag::ask_answer_refused(viewer, "rate_limited");
+            return Outcome::RateLimited;
+        }
+        let taken = match answer {
+            ask::Answer::Read { ask, answer } => self.asks.answer_read(viewer, ask, answer),
+            ask::Answer::Vote { ask, round, card } => self.asks.vote(viewer, ask, round, card),
+        };
+        match taken {
+            Ok(()) => {
+                self.broadcast_asks();
+                Outcome::Received
+            }
+            Err(Gone) => {
+                diag::ask_answer_refused(viewer, "gone");
+                Outcome::Gone
+            }
+        }
+    }
+
+    /// The host's ask, or what the host does with an open one.
+    fn ask(&mut self, command: AskCommand) -> Result<(), AskRefusal> {
+        let present = self.present();
+        match command {
+            AskCommand::Read { target, label, limit_s } => {
+                if !self.can_be_read(&target) {
+                    return Err(AskRefusal::Target);
+                }
+                self.asks.open_read(target, label, limit_s, Instant::now())?;
+            }
+            AskCommand::EndRead => {
+                if !self.close_read(false) {
+                    return Err(AskRefusal::NotOpen);
+                }
+                return Ok(());
+            }
+            AskCommand::StartVote { task, cards } => {
+                self.asks.start_vote(task, cards)?;
+            }
+            AskCommand::CastVote(card) => self.asks.host_vote(card)?,
+            AskCommand::Reveal => self.asks.reveal(&present)?,
+            AskCommand::VoteAgain => self.asks.vote_again()?,
+            AskCommand::StopVote => self.asks.stop_vote(&present)?,
+            AskCommand::Keep(card) => {
+                let entry = self.asks.keep(card, &present)?;
+                self.view.add_entry(entry);
+            }
+        }
+        self.broadcast_asks();
+        Ok(())
+    }
+
+    /// Closes the read request, adds its entry to the timeline and tells everyone; false when
+    /// none was open.
+    fn close_read(&mut self, time_up: bool) -> bool {
+        let Ok(entry) = self.asks.close_read(&self.present(), time_up) else { return false };
+        self.view.add_entry(entry);
+        self.broadcast_asks();
+        true
+    }
+
+    /// Whether the session has `target` to read: a file the agent changed, a shared file, or a
+    /// range of the timeline that starts at a prompt.
+    fn can_be_read(&self, target: &ReadTarget) -> bool {
+        match target {
+            ReadTarget::Document { path } | ReadTarget::Code { path } => {
+                self.view.timeline_from(0).iter().any(|event| {
+                    matches!(&event.entry, Entry::FileChange { path: changed, .. } if changed == path)
+                })
+            }
+            ReadTarget::Shared { file } => self.view.shared_file(*file).is_some(),
+            ReadTarget::Changes { from_seq, to_seq } => {
+                let (from, to) = (*from_seq as usize, *to_seq as usize);
+                from < to
+                    && to < self.view.timeline_len()
+                    && self
+                        .view
+                        .timeline_from(from)
+                        .first()
+                        .is_some_and(|event| matches!(event.entry, Entry::Prompt { .. }))
+            }
+        }
+    }
+
+    /// The viewers present, and whether each can answer.
+    fn present(&self) -> Present {
+        Present::new(
+            self.slots
+                .values()
+                .filter_map(|slot| slot.admitted.as_ref())
+                .map(|admitted| (admitted.id, admitted.protocol >= ASKS_PROTOCOL_VERSION))
+                .collect(),
+        )
+    }
+
+    /// Sends every viewer that can read them its own view of the asks, and the host's window
+    /// the host's (design decision 3). Viewers of an older version get nothing.
+    fn broadcast_asks(&mut self) {
+        let present = self.present();
+        let now = Instant::now();
+        for slot in self.slots.values_mut() {
+            let Some(id) = slot.admitted.as_ref().map(|a| a.id) else { continue };
+            let read = HostMessage::ReadRequest { open: self.asks.read_view(id, &present, now) };
+            send_newer(slot, ASKS_PROTOCOL_VERSION, &read);
+            let vote = HostMessage::Vote { open: self.asks.vote_view(id, &present) };
+            send_newer(slot, ASKS_PROTOCOL_VERSION, &vote);
+        }
+        let host = HostAsks {
+            read: self.asks.read_view(HOST, &present, now),
+            vote: self.asks.vote_view(HOST, &present),
+        };
+        let _ = self.events.send(SharingEvent::Asks(Box::new(host)));
     }
 
     /// A message on a viewer's files channel: a fetch to start or stop, or a chunk of its upload.
@@ -1523,6 +1737,7 @@ impl Host {
             let _ = slot.peer.send(Channel::Control, &message);
         }
         let _ = self.events.send(SharingEvent::Participants(participants));
+        self.broadcast_asks();
     }
 
     /// Sends every admitted viewer what it has not received yet, as far as its channel allows.
@@ -1625,12 +1840,13 @@ fn pump(
         if sink.queued() >= HIGH_WATER {
             break;
         }
-        // An older viewer cannot decode a code file's text, a shared file's step or a link; it
-        // sees a gap, which it accepts.
+        // An older viewer cannot decode a code file's text, a shared file's step, a link or an
+        // ask's entry; it sees a gap, which it accepts.
         let newer = match event.entry {
             Entry::FileText { .. } => WHOLE_FILES_PROTOCOL_VERSION,
             Entry::FileShared { .. } => SHARED_FILES_PROTOCOL_VERSION,
             Entry::Link { .. } | Entry::LinkRemoved { .. } => LINKS_PROTOCOL_VERSION,
+            Entry::ReadDone { .. } | Entry::Estimated { .. } => ASKS_PROTOCOL_VERSION,
             Entry::BraindumpItem { .. } | Entry::BraindumpGiven { .. } => {
                 BRAINDUMP_PROTOCOL_VERSION
             }
@@ -1902,6 +2118,19 @@ mod tests {
         let later = start + Duration::from_secs(600);
         assert!((0..3).all(|_| bucket.take(later)));
         assert!(!bucket.take(later));
+    }
+
+    #[test]
+    fn the_answers_limit_allows_five_then_one_per_second() {
+        let start = Instant::now();
+        let mut requests = Requests::new(AgentId::ClaudeCode);
+        // Suggestions use up the requests' limit, not the answers'.
+        assert!((0..3).all(|_| requests.take(1, start)));
+        assert!((0..5).all(|_| requests.take_answer(1, start)));
+        assert!(!requests.take_answer(1, start));
+        assert!(!requests.take_answer(1, start + Duration::from_millis(900)));
+        assert!(requests.take_answer(1, start + Duration::from_secs(2)));
+        assert!(requests.take_answer(2, start), "another viewer has its own");
     }
 
     fn suggest(text: &str) -> ViewerRequest {

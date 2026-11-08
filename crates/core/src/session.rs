@@ -372,7 +372,7 @@ impl SessionView {
 
     /// Adds `entry` to the timeline through the pump, so it is ordered with the agent's entries
     /// and reaches the host's window; directly for a view without an agent.
-    fn add_entry(&self, entry: Entry) {
+    pub(crate) fn add_entry(&self, entry: Entry) {
         match &self.pump {
             Some(pump) => {
                 let _ = pump.send(Command::Entry(entry));

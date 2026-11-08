@@ -366,6 +366,37 @@ pub fn host_link_removed(id: u32) {
     info!(id, "host.link_removed");
 }
 
+/// The host asked everyone to read something: the kind of thing and the time limit, never its
+/// path or label (`read-and-estimate` design decision 9).
+pub fn ask_read_opened(id: u32, target: &'static str, limit_s: u16) {
+    info!(id, target, limit_s, "host.ask_read_opened");
+}
+
+/// A read request closed, with its counts; never a question's text.
+pub fn ask_read_closed(id: u32, ready: u16, questions: u16, of: u16, time_up: bool) {
+    info!(id, ready, questions, of, time_up, "host.ask_read_closed");
+}
+
+/// The host started a vote with this card set; never the task.
+pub fn ask_vote_opened(id: u32, cards: &'static str) {
+    info!(id, cards, "host.ask_vote_opened");
+}
+
+/// The host revealed the votes (`revealed`), or started round `round`.
+pub fn ask_vote_round(id: u32, round: u16, revealed: bool) {
+    info!(id, round, revealed, "host.ask_vote_round");
+}
+
+/// A vote closed: kept or stopped, and how many voted; never a card.
+pub fn ask_vote_closed(id: u32, kept: bool, votes: u16) {
+    info!(id, kept, votes, "host.ask_vote_closed");
+}
+
+/// A viewer's answer or vote was not taken: `rate_limited` or `gone`.
+pub fn ask_answer_refused(viewer: u32, outcome: &'static str) {
+    info!(viewer, outcome, "host.ask_answer_refused");
+}
+
 /// The host shares whole code files, or stops: the setting only, never a path or text.
 pub fn host_code_sharing(whole_files: bool) {
     info!(whole_files, "host.code_sharing");

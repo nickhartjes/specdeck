@@ -11,11 +11,11 @@ use specdeck_local::{Compat, Frame, Protocol, compat};
 use specdeck_session::messages::{Command, Event};
 
 /// Commands added in this release (`viewer-to-host-channel`, `files-documents-and-code`,
-/// `shared-files`, `shared-links`, `braindump`), which a session of the release before it does
-/// not know. Its snapshot has no `suggestionsPossible`, `wholeFilesPossible`,
-/// `sharedFilesPossible`, `linksPossible` or `braindump`, so the window offers none of them; this
-/// keeps a stray one from reaching it. Remove a release later.
-const NEW_COMMANDS: [&str; 16] = [
+/// `shared-files`, `shared-links`, `read-and-estimate`, `braindump`), which a session of the
+/// release before it does not know. Its snapshot has no `suggestionsPossible`,
+/// `wholeFilesPossible`, `sharedFilesPossible`, `linksPossible`, `asksPossible` or `braindump`, so
+/// the window offers none of them; this keeps a stray one from reaching it. Remove a release later.
+const NEW_COMMANDS: [&str; 24] = [
     "allow-requests",
     "answer-suggestion",
     "share-code",
@@ -28,6 +28,14 @@ const NEW_COMMANDS: [&str; 16] = [
     "answer-link",
     "remove-link",
     "allow-links",
+    "ask-to-read",
+    "end-read",
+    "start-vote",
+    "cast-vote",
+    "reveal-votes",
+    "vote-again",
+    "stop-vote",
+    "keep-estimate",
     "add-to-braindump",
     "add-note",
     "replace-note",
@@ -229,6 +237,24 @@ mod tests {
             assert!(command(Protocol::own(), &links).is_some(), "{links:?}");
         }
 
+        use specdeck_protocol::asks::{Card, CardSet, ReadTarget};
+        for asks in [
+            Command::AskToRead {
+                target: ReadTarget::Shared { file: 1 },
+                label: "notes.md".into(),
+                limit_s: 120,
+            },
+            Command::EndRead,
+            Command::StartVote { task: "t".into(), cards: CardSet::StoryPoints },
+            Command::CastVote { card: Some(Card::Value(1)) },
+            Command::RevealVotes,
+            Command::VoteAgain,
+            Command::StopVote,
+            Command::KeepEstimate { card: Card::Break },
+        ] {
+            assert!(command(previous, &asks).is_none(), "{asks:?}");
+            assert!(command(Protocol::own(), &asks).is_some(), "{asks:?}");
+        }
         for braindump in [
             Command::AddToBraindump { id: 1, name: "a.png".into(), data: "YQ==".into() },
             Command::AddNote { id: 2, text: "Edge cases".into() },

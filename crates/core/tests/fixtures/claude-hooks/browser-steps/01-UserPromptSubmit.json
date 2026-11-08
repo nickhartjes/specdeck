@@ -1,0 +1,9 @@
+{
+  "cwd": "/workspace/project",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt": "This is a test login page with test credentials. Using the specdeck browser, do these steps in order, then say in one sentence what you did. 1. Open http://localhost:5173/login. 2. Read the page. 3. Type test@example.com into the Email field. 4. Type the test password hunter2-test into the Password field. 5. Click the Sign in button.",
+  "prompt_id": "f8f341cb-8d57-4efe-8e46-b9da7f227b13",
+  "session_id": "244b377e-5ea7-433f-9476-601eb8aff67e",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/244b377e-5ea7-433f-9476-601eb8aff67e.jsonl"
+}

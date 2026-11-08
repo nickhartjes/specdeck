@@ -1,0 +1,53 @@
+## MODIFIED Requirements
+
+### Requirement: Notifications
+The app SHALL send OS notifications for events that need attention while the window of the session concerned is not focused: to the host when a viewer joins or leaves and when the agent waits for the host's input (for agents whose events the app captures, and for agents and terminal programs that report a request for the host), and to a viewer when the session ends and for the kinds of viewer notification they turned on (see `viewer-notifications`). The user SHALL be able to turn them all off with one switch.
+
+#### Scenario: Agent waits for the host
+- **WHEN** Claude Code finishes a turn or asks for permission while the host's window is in the background
+- **THEN** the host gets a notification, and clicking it brings the session window to the front
+
+#### Scenario: Reported request
+- **WHEN** omp reports that it needs permission while the host's window is in the background
+- **THEN** the host gets a notification with omp's message
+
+#### Scenario: Window focused
+- **WHEN** a viewer joins while the host's window has focus
+- **THEN** no notification is shown
+
+#### Scenario: Notifications turned off
+- **WHEN** the user turned notifications off in settings
+- **THEN** the app shows no notifications
+
+#### Scenario: Another window focused
+- **WHEN** the agent in the `api` session waits for the host while the host works in the `shop` session's window
+- **THEN** the host gets a notification naming `api`, and clicking it brings the `api` window to the front
+
+#### Scenario: Viewer called in for a plan
+- **WHEN** a viewer's window is in the background and Claude proposes a change in the session they watch
+- **THEN** the viewer gets a notification that the plan is ready for review, and clicking it brings that session's window to the front with the plan's proposal open
+
+#### Scenario: Viewer's window in front
+- **WHEN** Claude changes a document while the viewer's window of that session has focus
+- **THEN** the viewer gets no notification
+
+#### Scenario: Main switch off for a viewer
+- **WHEN** a viewer turned notifications off in settings, with plans still checked
+- **THEN** a plan ready for review gives no notification
+
+## ADDED Requirements
+
+### Requirement: Notification clicks per platform
+A click on a notification SHALL be acted on whenever the OS reports it to the app: on macOS; on Windows while the notification is on screen; on Linux with a notification server that supports clicks. A click the OS doesn't report SHALL open nothing, and the user guide SHALL say where that happens.
+
+#### Scenario: Windows Action Center
+- **WHEN** a viewer on Windows clicks a notification about `README.md` after it moved to the Action Center
+- **THEN** the app does not open `README.md`, as the guide says
+
+#### Scenario: Linux server without clicks
+- **WHEN** a viewer on Linux uses a notification server that doesn't report clicks
+- **THEN** notifications are still shown, and clicking them opens nothing
+
+#### Scenario: macOS
+- **WHEN** a viewer on macOS clicks the notification that `README.md` changed
+- **THEN** the session's window comes to the front with `README.md` open

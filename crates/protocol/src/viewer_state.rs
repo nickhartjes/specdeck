@@ -5,6 +5,7 @@
 
 use crate::AgentId;
 use crate::AgentStatus;
+use crate::asks::{Answer, ReadView, VoteView};
 use crate::control::{
     self, BraindumpItemInfo, HostMessage, Outcome, Participant, RefusalReason, SentLink,
     SharedFileInfo, Suggestion, ViewerMessage, ViewerRequest,
@@ -76,6 +77,10 @@ pub enum ControlUpdate {
     },
     /// This viewer's links and what became of each.
     Links(Vec<SentLink>),
+    /// The open read request as this viewer sees it; `None` once it closed.
+    ReadRequest(Option<ReadView>),
+    /// The open vote as this viewer sees it; `None` once it closed.
+    Vote(Option<VoteView>),
     /// The braindump now.
     Braindump(Vec<BraindumpItemInfo>),
     /// The message could not be used; drop this connection and try again.
@@ -184,16 +189,25 @@ impl ViewerState {
             HostMessage::Files { files } => ControlUpdate::Files(files),
             HostMessage::LinksAllowed { links } => ControlUpdate::LinksAllowed { links },
             HostMessage::Links { mine } => ControlUpdate::Links(mine),
+            HostMessage::ReadRequest { open } => ControlUpdate::ReadRequest(open),
+            HostMessage::Vote { open } => ControlUpdate::Vote(open),
             HostMessage::Braindump { items } => ControlUpdate::Braindump(items),
         }
     }
 
     /// A new request to the host, numbered; it is kept until the host answers it. A file to
     /// share, or anything else with an upload, is not kept: its upload belongs to the
-    /// connection, so after a reconnect the viewer sends it again instead.
+    /// connection, so after a reconnect the viewer sends it again instead. An answer replaces an
+    /// unanswered one of the same kind, so only the newest is sent again.
     pub fn send_request(&mut self, request: ViewerRequest) -> (u32, ViewerMessage) {
         let id = self.next_request;
         self.next_request += 1;
+        if let ViewerRequest::Answer(answer) = &request {
+            let read = matches!(answer, Answer::Read { .. });
+            self.unanswered.retain(|(_, waiting)| {
+                !matches!(waiting, ViewerRequest::Answer(a) if matches!(a, Answer::Read { .. }) == read)
+            });
+        }
         if !matches!(
             request,
             ViewerRequest::ShareFile { .. }
@@ -515,6 +529,61 @@ mod tests {
         }];
         let links = HostMessage::Links { mine: mine.clone() };
         assert_eq!(viewer.on_control(&control::encode(&links)), ControlUpdate::Links(mine));
+    }
+
+    #[test]
+    fn asks_become_updates() {
+        use crate::asks::{Card, CardSet, ReadAnswer, ReadTarget};
+        let mut viewer = ViewerState::new(InviteCode::generate());
+        let read = ReadView {
+            id: 1,
+            target: ReadTarget::Shared { file: 2 },
+            label: "notes.md".into(),
+            limit_s: 0,
+            left_ms: None,
+            people: vec![],
+            mine: ReadAnswer::Ready,
+            questions: vec![],
+        };
+        let message = HostMessage::ReadRequest { open: Some(read.clone()) };
+        assert_eq!(
+            viewer.on_control(&control::encode(&message)),
+            ControlUpdate::ReadRequest(Some(read))
+        );
+        let message = HostMessage::ReadRequest { open: None };
+        assert_eq!(viewer.on_control(&control::encode(&message)), ControlUpdate::ReadRequest(None));
+        let vote = VoteView {
+            id: 2,
+            round: 2,
+            task: "t".into(),
+            cards: CardSet::TShirt,
+            voted: vec![1],
+            mine: Some(Card::Value(0)),
+            revealed: None,
+            older: vec![],
+        };
+        let message = HostMessage::Vote { open: Some(vote.clone()) };
+        assert_eq!(viewer.on_control(&control::encode(&message)), ControlUpdate::Vote(Some(vote)));
+    }
+
+    #[test]
+    fn only_the_newest_unanswered_answer_of_each_kind_is_sent_again() {
+        use crate::asks::{Card, ReadAnswer};
+        let key = SessionKey::generate();
+        let mut viewer = viewer(&key);
+        let vote = |card| ViewerRequest::Answer(Answer::Vote { ask: 2, round: 1, card });
+        let read = ViewerRequest::Answer(Answer::Read { ask: 1, answer: ReadAnswer::Ready });
+        viewer.send_request(vote(Some(Card::Value(1))));
+        viewer.send_request(read.clone());
+        viewer.send_request(vote(Some(Card::Value(4))));
+        viewer.send_request(vote(None));
+        assert_eq!(
+            viewer.unanswered_requests(),
+            [
+                ViewerMessage::Send { id: 2, request: read },
+                ViewerMessage::Send { id: 4, request: vote(None) },
+            ]
+        );
     }
 
     #[test]

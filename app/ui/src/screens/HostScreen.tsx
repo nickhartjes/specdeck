@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Copy, Link2, Power, RefreshCw } from 'lucide-react';
+import { AlertTriangle, BookOpen, Copy, Gauge, Link2, Power, RefreshCw } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, BraindumpItemInfo, HostEvent, HostLink, HostSuggestion, Participant, SharedFileInfo, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
+import type { AgentId, AgentStatus, BraindumpItemInfo, HostAsks, HostEvent, HostLink, HostSuggestion, Participant, SharedFileInfo, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
+import { AskReadDialog } from '../components/AskReadDialog';
+import { EstimateDialog } from '../components/EstimateDialog';
+import { ReadBanner } from '../components/ReadBanner';
+import { VoteBanner } from '../components/VoteBanner';
 import { shareEach, type SharedFiles } from '../components/SharedFiles';
 import { useSharedBytes } from './useSharedBytes';
 import { SuggestionsInbox } from '../components/SuggestionsInbox';
@@ -76,6 +80,12 @@ interface State {
   viewerLinks: HostLink[];
   /** The latest link from a viewer to arrive while the window is open, to announce. */
   linkArrived: HostLink | null;
+  /** False for sessions of the previous release, which can't ask to read or estimate. */
+  asksPossible: boolean;
+  /** The open read request and vote. */
+  asks: HostAsks;
+  /** When `asks` arrived, to count the time left down from. */
+  asksAt: number;
 }
 
 const initial: State = {
@@ -107,6 +117,9 @@ const initial: State = {
   linksAllowed: false,
   viewerLinks: [],
   linkArrived: null,
+  asksPossible: false,
+  asks: { read: null, vote: null },
+  asksAt: 0,
 };
 
 export function hostReducer(state: State, event: HostEvent | { type: 'limit'; limit: number }): State {
@@ -133,7 +146,13 @@ export function hostReducer(state: State, event: HostEvent | { type: 'limit'; li
         linksPossible: event.linksPossible ?? false,
         linksAllowed: event.linksAllowed ?? false,
         viewerLinks: event.viewerLinks ?? [],
+        // A session of the previous release says nothing of asks: it takes none.
+        asksPossible: event.asksPossible ?? false,
+        asks: event.asks ?? { read: null, vote: null },
+        asksAt: Date.now(),
       };
+    case 'asks':
+      return { ...state, asks: { read: event.read, vote: event.vote }, asksAt: Date.now() };
     case 'shared-files':
       return { ...state, sharedFiles: event.files, braindump: event.braindump ?? state.braindump, filesAllowed: event.filesAllowed };
     case 'allowed':
@@ -201,6 +220,7 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, showToast] = useToast();
+  const [dialog, setDialog] = useState<'read' | 'estimate' | null>(null);
 
   const attached = useRef(false);
   useEffect(() => {
@@ -271,6 +291,38 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
           }
         : undefined,
     [state.sharedFilesPossible, state.sharedFiles, state.braindump, state.braindumpPromptPossible, hostName, terminal, agentName, bridge, showToast, open],
+  );
+
+  // The host's asks: a failure says why in a toast.
+  const ask = (call: () => Promise<void>) => void call().catch((e) => showToast(errorMessage(e)));
+  const { read, vote } = state.asks;
+  const requests = (read || vote) && (
+    <>
+      {read && (
+        <ReadBanner
+          view={read}
+          receivedAt={state.asksAt}
+          participants={state.participants}
+          onOpen={() => workspace.current?.openTarget(read.target, read.label)}
+          onEnd={() => ask(() => bridge.hostEndRead())}
+        />
+      )}
+      {vote && (
+        <VoteBanner
+          key={`${vote.id}:${vote.round}`}
+          view={vote}
+          participants={state.participants}
+          me={0}
+          onVote={(card) => ask(() => bridge.hostCastVote(card))}
+          host={{
+            onReveal: () => ask(() => bridge.hostRevealVotes()),
+            onVoteAgain: () => ask(() => bridge.hostVoteAgain()),
+            onStop: () => ask(() => bridge.hostStopVote()),
+            onKeep: (card) => ask(() => bridge.hostKeepEstimate(card)),
+          }}
+        />
+      )}
+    </>
   );
 
   const copy = async (text: string, message: string) => {
@@ -349,6 +401,16 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
           }
           agentName={agentName}
         />
+        {state.asksPossible && (
+          <>
+            <button className="btn" onClick={() => setDialog('read')} disabled={read !== null} title={read ? 'A read request is open. Go on first.' : undefined}>
+              <BookOpen aria-hidden /> Ask to read
+            </button>
+            <button className="btn" onClick={() => setDialog('estimate')} disabled={vote !== null} title={vote ? 'A vote is open. Close it first.' : undefined}>
+              <Gauge aria-hidden /> Estimate
+            </button>
+          </>
+        )}
         <LayoutControls host layout={shown} onLayout={setLayout} />
         <InviteCode
           sharing={state.sharing}
@@ -398,6 +460,7 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
         shared={shared}
         linksBar={linksBar}
         onRemoveLink={state.linksPossible ? onRemoveLink : undefined}
+        requests={requests}
         prompts={
           state.suggestionsPossible
             ? {
@@ -422,6 +485,16 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
           <p>{endingText(state.exited === null ? (terminal ? 'The shell' : agentName) : null, viewers)}</p>
         </ConfirmDialog>
       )}
+      {dialog === 'read' && (
+        <AskReadDialog
+          timeline={state.timeline}
+          timelineSupported={state.timelineSupported}
+          shared={state.sharedFiles}
+          onAsk={(target, label, limitS) => bridge.hostAskToRead(target, label, limitS)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'estimate' && <EstimateDialog timeline={state.timeline} onStart={(task, cards) => bridge.hostStartVote(task, cards)} onClose={() => setDialog(null)} />}
       <Toast message={toast} />
     </div>
   );
