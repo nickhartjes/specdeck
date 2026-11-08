@@ -1,9 +1,10 @@
 // The web viewer's bridge (`web-viewer` design decision 4): watching only, through the sharing
-// service that served the page. The viewer's name, layout and appearance stay in this browser's storage; host,
+// service that served the page. The viewer's name, layout, appearance and notification choices stay in this browser's storage; host,
 // folder, agent and update calls are not part of the web viewer and fail.
 
 import type { Bridge } from '../api/bridge';
-import type { Appearance, JoinLink, Profile, View } from '../api/types';
+import type { Appearance, JoinLink, Profile, View, ViewerNotifications } from '../api/types';
+import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 import { asAppearance } from '../appearance';
 import { Connection, type Platform, type ViewerCore } from './connection';
 
@@ -13,6 +14,8 @@ export const STORAGE_KEYS = {
   view: 'specdeck.view',
   layout: 'specdeck.layout',
   appearance: 'specdeck.appearance',
+  notifications: 'specdeck.notifications',
+  viewerNotifications: 'specdeck.viewerNotifications',
 } as const;
 
 export interface WebBridgeOptions {
@@ -25,6 +28,37 @@ export interface WebBridgeOptions {
   /** `localStorage`, or null where the browser keeps nothing. */
   storage: Storage | null;
   platform?: Platform;
+  /** The browser's notifications; null where it has none. The page's own by default. */
+  notifications?: BrowserNotifications | null;
+}
+
+/** What the web viewer needs of the browser's notifications (`viewer-notifications` design decision 5). */
+export interface BrowserNotifications {
+  permission(): NotificationPermission;
+  /** Asks the viewer; browsers allow it only right after a click. */
+  request(): Promise<NotificationPermission>;
+  show(title: string, body: string): void;
+  /** The page is hidden, or the browser window is not in front. */
+  away(): boolean;
+}
+
+/** Shown when the browser does not let this page notify. */
+export const NOTIFICATIONS_BLOCKED = 'This browser does not allow notifications for this page.';
+
+export function browserNotifications(): BrowserNotifications | null {
+  if (typeof Notification === 'undefined') return null;
+  return {
+    permission: () => Notification.permission,
+    request: () => Notification.requestPermission(),
+    show: (title, body) => {
+      const notification = new Notification(title, { body, tag: 'specdeck-viewer' });
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    },
+    away: () => document.visibilityState === 'hidden' || !document.hasFocus(),
+  };
 }
 
 /** The host name of a `wss://host/…/signal` URL. */
@@ -66,6 +100,22 @@ export function storedAppearance(storage: Storage | null): Appearance {
   return asAppearance(read(storage, STORAGE_KEYS.appearance));
 }
 
+/** The kinds kept in this browser; each kind it does not have gets its default. */
+function readViewerNotifications(storage: Storage | null): ViewerNotifications {
+  const text = read(storage, STORAGE_KEYS.viewerNotifications);
+  const kinds = { ...DEFAULT_VIEWER_NOTIFICATIONS };
+  if (!text) return kinds;
+  try {
+    const stored = JSON.parse(text) as Record<string, unknown>;
+    for (const kind of Object.keys(kinds) as (keyof ViewerNotifications)[]) {
+      if (typeof stored[kind] === 'boolean') kinds[kind] = stored[kind];
+    }
+  } catch {
+    // Unreadable: the defaults.
+  }
+  return kinds;
+}
+
 /** The stored layout as is; `model/layout.ts` reads it. */
 function readLayout(storage: Storage | null): unknown {
   const text = read(storage, STORAGE_KEYS.layout);
@@ -88,6 +138,11 @@ export function webBridge(options: WebBridgeOptions): Bridge {
   const view = readView(storage);
   let layout = readLayout(storage);
   let appearance = storedAppearance(storage);
+  const notifier = options.notifications === undefined ? browserNotifications() : options.notifications;
+  // Off until the viewer turns them on; kept only while the browser still allows them.
+  let notifying = read(storage, STORAGE_KEYS.notifications) === 'on';
+  let viewerNotifications = readViewerNotifications(storage);
+  const allowed = () => notifying && notifier?.permission() === 'granted';
   const appearanceHandlers = new Set<(appearance: Appearance) => void>();
 
   const profile = (): Profile => ({
@@ -98,7 +153,8 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     hosting: false,
     hostedSessions: 0,
     watchedSessions: connection !== null ? 1 : 0,
-    notifications: false,
+    notifications: allowed(),
+    viewerNotifications,
     view,
     layout,
     translucent: false,
@@ -135,7 +191,25 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       write(storage, STORAGE_KEYS.username, username);
       return Promise.resolve(profile());
     },
-    setNotifications: () => Promise.resolve(profile()),
+    setNotifications: async (enabled) => {
+      if (enabled) {
+        if (!notifier) throw new Error(NOTIFICATIONS_BLOCKED);
+        const permission = notifier.permission() === 'granted' ? 'granted' : await notifier.request();
+        if (permission !== 'granted') throw new Error(NOTIFICATIONS_BLOCKED);
+      }
+      notifying = enabled;
+      write(storage, STORAGE_KEYS.notifications, enabled ? 'on' : 'off');
+      return profile();
+    },
+    setViewerNotifications: (kinds) => {
+      viewerNotifications = { ...kinds };
+      write(storage, STORAGE_KEYS.viewerNotifications, JSON.stringify(kinds));
+      return Promise.resolve(profile());
+    },
+    viewerNotify: (kind, title, body) => {
+      if (allowed() && viewerNotifications[kind] && notifier?.away()) notifier.show(title, body);
+      return Promise.resolve();
+    },
     setCheckUpdates: () => Promise.resolve(profile()),
     setScreenReader: () => Promise.resolve(profile()),
     setVerboseLogging: () => Promise.resolve(profile()),
