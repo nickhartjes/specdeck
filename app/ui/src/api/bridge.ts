@@ -79,6 +79,14 @@ export interface Bridge {
   hostReadSharedFile(file: number): Promise<ArrayBuffer>;
   /** Puts a shared file into shared/ in the session folder; the path it was written to. */
   hostPutSharedFile(file: number): Promise<string>;
+  /** Shares the host's own link with everyone; `url` is checked again on the Rust side. */
+  hostShareLink(url: string, title: string | null, sessionOnly: boolean): Promise<void>;
+  /** Shares a viewer's waiting link with everyone as they sent it, or declines it. */
+  hostAnswerLink(viewerId: number, id: number, share: boolean): Promise<void>;
+  /** Removes a shared link: from now on nobody receives its address. */
+  hostRemoveLink(id: number): Promise<void>;
+  /** Lets viewers send links, or stops them. */
+  hostAllowLinks(on: boolean): Promise<void>;
   hostClose(): Promise<void>;
   /** Joins through `server`, from a link the user agreed to, or their own service when null. */
   joinSession(code: string, server: string | null, terminal: TerminalSink, events: (event: ViewEvent) => void): Promise<void>;
@@ -93,6 +101,10 @@ export interface Bridge {
   viewerRemoveFile(file: number): Promise<void>;
   /** Saves a copy of a shared file where the person chooses; false when they cancelled. */
   saveSharedFile(name: string, bytes: ArrayBuffer): Promise<boolean>;
+  /** Sends the host of the watched session a link to share; fails for a link the host would refuse. */
+  sendLink(url: string, title: string | null, sessionOnly: boolean): Promise<void>;
+  /** Opens shared link `id` of this window's session in the default browser; never an address the window names. */
+  openLink(id: number): Promise<void>;
   /** The join link for this window that opened the app or came in since, once; null when there is none. */
   takeJoinLink(): Promise<JoinLink | null>;
   /** The host, join or recent-folder command a new window opened with, once; null when there is none. */

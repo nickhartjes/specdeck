@@ -7,13 +7,14 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::{ChildKiller, MasterPty, PtySize};
 use specdeck_protocol::control::SharedFileInfo;
+use specdeck_protocol::links::{self, LinkRefusal};
 use specdeck_protocol::timeline::{Entry, MAX_EVENT_JSON_BYTES, TimelineEvent, fit};
 use specdeck_protocol::{AgentId, AgentStatus};
 use tempfile::NamedTempFile;
@@ -22,6 +23,7 @@ use tokio::sync::{mpsc, watch};
 use crate::activity::{Activity, Change};
 use crate::browser::BrowserHandler;
 use crate::code_files::CodeFiles;
+use crate::diag;
 use crate::documents::{self, DocumentText};
 use crate::environment::Environment;
 use crate::hooks::{self, HookEndpoint, HookPayload};
@@ -85,6 +87,9 @@ enum Command {
     /// command changed (decision 10b) and the text of changed documents.
     Hook(HookPayload, Option<CommandChanges>, Vec<DocumentText>),
     Git(Entry),
+    /// A link shared with everyone, already checked.
+    Link(Entry),
+    RemoveLink(u32),
     /// The plan of an OpenSpec change the agent touched, read off the hook path.
     Plan(Entry),
     /// An entry that needs nothing but adding, such as a shared file's.
@@ -327,6 +332,8 @@ pub struct HostSession {
     commands: mpsc::UnboundedSender<Command>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     host_entered: Arc<Mutex<Option<Instant>>>,
+    /// The id of the next shared link.
+    next_link: AtomicU32,
     /// The endpoint, the settings file and the status-line relay script.
     /// Where shared files are put for the agent.
     folder: PathBuf,
@@ -453,6 +460,7 @@ impl HostSession {
             killer: Mutex::new(killer),
             host_entered: Arc::default(),
             folder: config.folder.clone(),
+            next_link: AtomicU32::new(1),
             _hooks: hooks,
         };
         let pump = Pump {
@@ -563,6 +571,43 @@ impl HostSession {
         let shared = self.view.shared_file(file).ok_or(PutError::Gone)?;
         let folder = SessionFolder::new(&self.folder, None);
         shared_files::put_in_folder(&folder, &self.folder, &shared.info.name, &shared.bytes)
+    }
+
+    /// Shares a link with everyone in the session as a timeline entry, in any session, and
+    /// returns its id. `by` is the label of whoever shared it. The link must pass
+    /// [`links::check_link`] in its normalized form, and a title [`links::valid_title`]; a blank
+    /// title counts as none.
+    pub fn share_link(
+        &self,
+        url: &str,
+        title: Option<&str>,
+        by: &str,
+        session_only: bool,
+    ) -> Result<u32, LinkRefusal> {
+        let url = links::check_link(url)?;
+        let title = title.map(str::trim).filter(|t| !t.is_empty());
+        if title.is_some_and(|t| !links::valid_title(t)) {
+            return Err(LinkRefusal::Title);
+        }
+        let id = self.next_link.fetch_add(1, Ordering::SeqCst);
+        diag::host_link_shared(id, session_only);
+        let entry = Entry::Link {
+            id,
+            url: Some(url),
+            title: title.map(Into::into),
+            by: by.into(),
+            session_only,
+        };
+        let _ = self.commands.send(Command::Link(entry));
+        Ok(id)
+    }
+
+    /// Removes a shared link: its entry is kept without the address, so nobody receives it
+    /// from now on, and a `LinkRemoved` entry tells those who have it. Unknown or already
+    /// removed links are left alone.
+    pub fn remove_link(&self, id: u32) {
+        diag::host_link_removed(id);
+        let _ = self.commands.send(Command::RemoveLink(id));
     }
 
     /// Terminal input from the host. The only way input reaches the agent.
@@ -738,6 +783,12 @@ impl Pump {
                         self.emit_entry(entry);
                     }
                 }
+                Some(Command::Link(entry)) => {
+                    // Linked to the output before it, like the agent's entries.
+                    self.flush();
+                    self.emit_entry(entry);
+                }
+                Some(Command::RemoveLink(id)) => self.remove_link(id),
                 Some(Command::Exited { code }) => {
                     self.flush();
                     let changes = self.activity.on_exit();
@@ -873,6 +924,19 @@ impl Pump {
                 }
                 Change::Timeline(entry) => self.emit_entry(entry),
             }
+        }
+    }
+
+    /// Takes the address out of the stored entry before announcing the removal, so a viewer
+    /// that has not received the entry yet never gets it.
+    fn remove_link(&self, id: u32) {
+        let removed =
+            self.timeline.write().unwrap().iter_mut().any(|event| match &mut event.entry {
+                Entry::Link { id: link, url, .. } if *link == id => url.take().is_some(),
+                _ => false,
+            });
+        if removed {
+            self.emit_entry(Entry::LinkRemoved { id });
         }
     }
 

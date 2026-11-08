@@ -2,7 +2,7 @@
 // open /?demo=start, /?demo=host or /?demo=viewer) and for component tests. Never used by the app.
 
 import type { Bridge, TerminalSink } from './bridge';
-import type { DiagnosticsStatus, FileKind, HostEvent, HostSuggestion, Participant, Profile, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from './types';
+import type { DiagnosticsStatus, FileKind, HostEvent, HostLink, HostSuggestion, Participant, Profile, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from './types';
 import { formatCode } from '../model/code';
 import { applyAppearance } from '../appearance';
 
@@ -372,6 +372,17 @@ export function demoBridge(screen: string): Bridge {
     if (!bytes) throw new Error('That file is no longer shared.');
     return bytes.slice(0);
   };
+  // Links: one from a viewer waits for the host; shared ones go into both timelines.
+  let hostLinks: HostLink[] = [
+    { viewer: 2, id: 9, from: 'Sanne', url: 'https://staging.example.com/s/demo', title: 'Staging: the new pill', sessionOnly: false, state: 'Waiting' },
+  ];
+  const myLinks: SentLink[] = [];
+  let nextLink = 1;
+  const shareLink = (url: string, title: string | null, by: string, sessionOnly: boolean) => {
+    const event: TimelineEvent = { ...at(9), kind: 'link', id: nextLink++, url, ...(title ? { title } : {}), by, sessionOnly };
+    hostEvents?.({ type: 'timeline', event });
+    viewerEvents?.({ type: 'timeline', event });
+  };
   return {
     getProfile: async () => profile,
     agentVersions: async () => [
@@ -430,6 +441,9 @@ export function demoBridge(screen: string): Bridge {
         sharedFilesPossible: true,
         filesAllowed,
         sharedFiles,
+        linksPossible: true,
+        linksAllowed: true,
+        viewerLinks: hostLinks,
       });
       hostEvents = events;
       setTimeout(() => terminal(terminalStream()), 50);
@@ -464,6 +478,20 @@ export function demoBridge(screen: string): Bridge {
     hostRemoveSharedFile: async (file) => removeFile(file),
     hostReadSharedFile: fileBytes,
     hostPutSharedFile: async (file) => `shared/${sharedFiles.find((info) => info.file === file)?.name ?? 'file'}`,
+    hostShareLink: async (url, title, sessionOnly) => shareLink(url, title, 'Nick', sessionOnly),
+    hostAnswerLink: async (viewerId, id, share) => {
+      const link = hostLinks.find((l) => l.viewer === viewerId && l.id === id && l.state === 'Waiting');
+      if (!link) throw new Error('That link has already been answered.');
+      hostLinks = hostLinks.map((l) => (l === link ? { ...l, state: share ? 'Shared' : 'Declined' } : l));
+      hostEvents?.({ type: 'viewer-links', links: hostLinks });
+      if (share) shareLink(link.url, link.title, link.from, link.sessionOnly);
+    },
+    hostRemoveLink: async (id) => {
+      const event: TimelineEvent = { ...at(10), kind: 'link-removed', id };
+      hostEvents?.({ type: 'timeline', event });
+      viewerEvents?.({ type: 'timeline', event });
+    },
+    hostAllowLinks: async (links) => hostEvents?.({ type: 'links-allowed', links }),
     hostClose: async () => {},
     joinSession: async (_code, _server, terminal: TerminalSink, events: (event: ViewEvent) => void) => {
       setTimeout(() => {
@@ -496,6 +524,8 @@ export function demoBridge(screen: string): Bridge {
         events({ type: 'suggestions', mine: [] });
         events({ type: 'files-allowed', files: params.get('files') !== 'off' });
         events({ type: 'shared-files', files: sharedFiles });
+        events({ type: 'links-allowed', links: params.get('links') !== 'off' });
+        events({ type: 'links', mine: [] });
         // A viewer takes the host's size from the stream's resize records, as from the engine.
         terminal(resizeRecord(cols, rows));
         terminal(terminalStream());
@@ -523,6 +553,23 @@ export function demoBridge(screen: string): Bridge {
     viewerOpenFile: fileBytes,
     viewerRemoveFile: async (file) => removeFile(file),
     saveSharedFile: async () => true,
+    sendLink: async (url, title, sessionOnly) => {
+      const id = nextRequest++;
+      viewerEvents?.({ type: 'request-sent', id });
+      myLinks.push({ id, url, title, sessionOnly, state: 'Waiting' });
+      viewerEvents?.({ type: 'reply', id, outcome: 'Received' });
+      viewerEvents?.({ type: 'links', mine: myLinks.map((l) => ({ ...l })) });
+      // The demo host shares it after a while.
+      setTimeout(() => {
+        const link = myLinks.find((l) => l.id === id);
+        if (!link) return;
+        link.state = 'Shared';
+        viewerEvents?.({ type: 'links', mine: myLinks.map((l) => ({ ...l })) });
+        shareLink(link.url, link.title, demoParticipants.find((p) => p.id === 2)?.label ?? 'Viewer', link.sessionOnly);
+      }, 3000);
+    },
+    // The demo opens nothing.
+    openLink: async () => {},
     takeJoinLink: async () => null,
     takeStartCommand: async () => null,
     setSessionTitle: async () => {},

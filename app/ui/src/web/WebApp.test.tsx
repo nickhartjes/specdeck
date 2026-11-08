@@ -20,6 +20,7 @@ function setup(initialCode = '') {
       const match = /^https:\/\/([^/]+)\/join#(.+)$/.exec(link);
       return match ? { code: match[2]!, service: `wss://${match[1]}/signal` } : undefined;
     },
+    openableLink: (url) => url,
     storage: null,
   });
   const joinSession = vi.spyOn(bridge, 'joinSession').mockResolvedValue();

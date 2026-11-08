@@ -19,7 +19,17 @@ describe('sharing settings', () => {
     expect(button).toHaveFocus();
   });
 
-  it('is not there when there is nothing to set, as in a terminal session', () => {
+  it('lets viewers share links, or stops them, also on its own as in a terminal session', async () => {
+    const onChange = vi.fn();
+    render(<SharingSettings links={{ allowed: true, onChange }} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Sharing settings' }));
+    const toggle = screen.getByRole('checkbox', { name: /Viewers can share links/ });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledWith(false);
+  });
+
+  it('is not there when there is nothing to set, as in a session of the previous release', () => {
     const { container } = render(<SharingSettings />);
     expect(container).toBeEmptyDOMElement();
   });

@@ -307,3 +307,49 @@ describe('notifications for the viewer', () => {
     }
   });
 });
+
+describe('sending a link as a viewer', () => {
+  it('sends a link to the host, and shows what became of it', async () => {
+    const { bridge } = setup();
+    join();
+    act(() => emit({ type: 'links-allowed', links: true }));
+    await userEvent.click(screen.getByRole('button', { name: 'Send a link to Nick' }));
+    await userEvent.type(screen.getByLabelText('Address'), 'https://staging.example.com/s/demo');
+    await userEvent.click(screen.getByRole('button', { name: 'Send to Nick' }));
+    expect(bridge.sendLink).toHaveBeenCalledWith('https://staging.example.com/s/demo', null, false);
+    act(() => emit({ type: 'links', mine: [{ id: 1, url: 'https://staging.example.com/s/demo', title: null, sessionOnly: false, state: 'Declined' }] }));
+    expect(screen.getByRole('list', { name: 'Your links' })).toHaveTextContent('Nick declined it');
+  });
+
+  it('says when the host had turned links off', async () => {
+    setup();
+    join();
+    act(() => emit({ type: 'links-allowed', links: true }));
+    await userEvent.click(screen.getByRole('button', { name: 'Send a link to Nick' }));
+    await userEvent.type(screen.getByLabelText('Address'), 'https://example.com/');
+    await userEvent.click(screen.getByRole('button', { name: 'Send to Nick' }));
+    act(() => {
+      emit({ type: 'request-sent', id: 7 });
+      emit({ type: 'reply', id: 7, outcome: 'Off' });
+    });
+    expect(screen.getByText(/Nick has turned off links from viewers. Your link was not sent./)).toBeInTheDocument();
+  });
+
+  it('offers no way to send while links are off, and none with a host that takes no links', () => {
+    setup();
+    join();
+    expect(screen.queryByRole('button', { name: /Send a link/ })).toBeNull();
+    act(() => emit({ type: 'links-allowed', links: false }));
+    expect(screen.queryByRole('button', { name: /Send a link/ })).toBeNull();
+    expect(screen.getByText('Nick has turned off links from viewers.')).toBeInTheDocument();
+  });
+
+  it('opens a shared link through the app by its id', async () => {
+    const { bridge } = setup();
+    join();
+    act(() => emit({ type: 'timeline', event: { outputSeq: 1, at: 1, kind: 'link', id: 3, url: 'https://example.com/', title: 'Ticket', by: 'Nick' } }));
+    await userEvent.click(screen.getByRole('button', { name: 'Open in your browser' }));
+    expect(bridge.openLink).toHaveBeenCalledWith(3);
+    expect(screen.queryByRole('button', { name: 'Remove…' })).toBeNull();
+  });
+});

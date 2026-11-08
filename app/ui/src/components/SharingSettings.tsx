@@ -8,6 +8,8 @@ interface Props {
   suggestions?: { allowed: boolean; onChange: (on: boolean) => void };
   /** Whether viewers may share files, with its switch; absent where the session takes none. */
   files?: { allowed: boolean; onChange: (on: boolean) => void };
+  /** Whether viewers may send links, with its switch; absent for a session that can't share links. */
+  links?: { allowed: boolean; onChange: (on: boolean) => void };
   agentName?: string;
 }
 
@@ -16,7 +18,7 @@ interface Props {
  * do, from a button in the toolbar. Not shown when there is nothing to set, as in a terminal
  * session.
  */
-export function SharingSettings({ wholeFiles, suggestions, files, agentName = 'the agent' }: Props) {
+export function SharingSettings({ wholeFiles, suggestions, files, links, agentName = 'the agent' }: Props) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -41,7 +43,7 @@ export function SharingSettings({ wholeFiles, suggestions, files, agentName = 't
     };
   }, [open]);
 
-  if (!wholeFiles && !suggestions && !files) return null;
+  if (!wholeFiles && !suggestions && !files && !links) return null;
   return (
     <div className="sharing-menu">
       <button
@@ -89,6 +91,15 @@ export function SharingSettings({ wholeFiles, suggestions, files, agentName = 't
                   {' '}
                   · their files reach you and everyone in the session; {agentName} sees one only when you put it in the session folder
                 </span>
+              </span>
+            </label>
+          )}
+          {links && (
+            <label className="check">
+              <input type="checkbox" checked={links.allowed} onChange={(event) => links.onChange(event.target.checked)} />
+              <span>
+                Viewers can share links
+                <span className="field-hint"> · you see each one first, and share or decline it</span>
               </span>
             </label>
           )}

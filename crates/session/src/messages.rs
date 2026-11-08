@@ -113,6 +113,27 @@ pub enum Command {
         id: u32,
         answer: SuggestionAnswer,
     },
+    /// Shares a link with everyone in the session (`shared-links`); refused with
+    /// [`Event::Failed`] when it is not a link others can reach.
+    ShareLink {
+        url: String,
+        title: Option<String>,
+        session_only: bool,
+    },
+    /// The host's answer to a viewer's waiting link; a shared one goes to everyone as sent.
+    AnswerLink {
+        viewer_id: u32,
+        id: u32,
+        answer: LinkAnswer,
+    },
+    /// Removes a shared link: from now on nobody receives its address.
+    RemoveLink {
+        id: u32,
+    },
+    /// Whether viewers may send links.
+    AllowLinks {
+        links: bool,
+    },
     /// Asks for [`Event::Status`].
     Status,
     /// The answer to [`Event::Browser`] with the same `id`.
@@ -132,6 +153,13 @@ pub enum SuggestionAnswer {
     Send {
         text: String,
     },
+    Decline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum LinkAnswer {
+    Share,
     Decline,
 }
 
@@ -239,6 +267,28 @@ mod tests {
         let json = serde_json::to_string(&answer).unwrap();
         assert_eq!(json, r#"{"type":"answer","id":4,"value":"shared/a.md"}"#);
         assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), answer);
+        let link =
+            r#"{"type":"share-link","url":"https://example.com/","title":null,"sessionOnly":true}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(link).unwrap(),
+            Command::ShareLink {
+                url: "https://example.com/".into(),
+                title: None,
+                session_only: true
+            }
+        );
+        let answer = r#"{"type":"answer-link","viewerId":2,"id":5,"answer":{"type":"share"}}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(answer).unwrap(),
+            Command::AnswerLink { viewer_id: 2, id: 5, answer: LinkAnswer::Share }
+        );
+        let remove = r#"{"type":"remove-link","id":1}"#;
+        assert_eq!(serde_json::from_str::<Command>(remove).unwrap(), Command::RemoveLink { id: 1 });
+        let allow = r#"{"type":"allow-links","links":false}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(allow).unwrap(),
+            Command::AllowLinks { links: false }
+        );
         let notice = Event::Notice { notice: HostNotice::ViewerJoined("Anna".into()) };
         let json = serde_json::to_string(&notice).unwrap();
         assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), notice);

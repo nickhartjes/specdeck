@@ -2,7 +2,9 @@
 
 The wire protocol between a host and its viewers. Both sides use this crate; it does no I/O. Design background: decisions 7 and 8 in [`design.md`](../../openspec/changes/archive/2026-10-31-native-shared-session-mvp/design.md).
 
-Current version: `PROTOCOL_VERSION = 4` ([`src/control.rs`](src/control.rs)). Hosts admit viewers from `MIN_VIEWER_PROTOCOL_VERSION = 3` up to their own version: one version back.
+Current version: `PROTOCOL_VERSION = 5` ([`src/control.rs`](src/control.rs)). Hosts admit viewers from `MIN_VIEWER_PROTOCOL_VERSION = 4` up to their own version: one version back.
+
+- Version 5 added shared links: the `link` and `link-removed` timeline entries, the `ShareLink` request, and the host's `LinksAllowed` and `Links`. Which links are accepted is decided by `check_link` ([`src/links.rs`](src/links.rs)), used by the sharer, the host and every participant before opening one. Version 4 viewers are admitted and watch as before, suggestions included: the host never sends them a link entry, `LinksAllowed` or `Links`, and they can't share links.
 
 - Version 4 added the whole text of code files: the `file-text` timeline entry and the host's setting for it (`Shared`). It also added shared files: the `files` channel, the `file-shared` entry, `FilesAllowed`, `Files`, and the `ShareFile` and `RemoveFile` requests with their outcomes. Version 3 viewers are admitted and watch as before, suggestions included: the host never sends them a `file-text` or `file-shared` event, `Shared`, `FilesAllowed` or `Files`, and does not accept a `files` channel from them. It skips such an event for them, which they see as a gap in the event sequence, as they already accept.
 - Version 3 added requests from viewers to the host (`Send`) and the host's answers (`Allowed`, `Reply`, `Suggestions`). Version 2 viewers are admitted and watch read-only: the host never sends them a version 3 message, which they could not decode and would answer by reconnecting.
@@ -41,7 +43,7 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `Hello` | `protocol_version`, `username`, `last_output_seq?`, `last_event_seq?`, `resume_token?` | First message on a connection. When reconnecting, the `last_*` fields say where the viewer left off and `resume_token` lets it take its old place |
 | `Resend` | `from_output_seq` | Send records again from this sequence, after a gap or a failed verification |
 | `Leave` | | The viewer is leaving |
-| `Send` (v3) | `id`, `request` | A request to the host. `request` is `Suggest { text }`, or (v4) `ShareFile { name, size, sha256 }` (name 1 to 255 bytes) or `RemoveFile { file }`. `id` is the viewer's own and unique among its requests; a repeated id is answered again without taking the request twice, so a viewer resends unanswered requests after reconnecting. A `ShareFile` is not resent: its upload belongs to the connection |
+| `Send` (v3) | `id`, `request` | A request to the host. `request` is `Suggest { text }`, (v4) `ShareFile { name, size, sha256 }` (name 1 to 255 bytes) or `RemoveFile { file }`, or (v5) `ShareLink { url, title?, session_only }`, where `url` must be in the normalized form `check_link` returns and `title` 1 to 120 characters without control characters. `id` is the viewer's own and unique among its requests; a repeated id is answered again without taking the request twice, so a viewer resends unanswered requests after reconnecting. A `ShareFile` is not resent: its upload belongs to the connection |
 
 ### Host to viewer
 
@@ -58,8 +60,10 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `Shared` (v4) | `whole_files` | Whether the host shares whole code files; on admission and on every change |
 | `FilesAllowed` (v4) | `files` | Whether viewers may share files; on admission and on every change |
 | `Files` (v4) | `files[]` (`file`, `name`, `kind`, `media_type`, `size`, `sha256`, `by`, `by_label`, `at_ms`) | The files shared now, oldest first; on admission and on every change |
+| `LinksAllowed` (v5) | `links` | Whether viewers may send links; on admission and on every change |
+| `Links` (v5) | `mine[]` (`id`, `url`, `title?`, `session_only`, `state`) | To one viewer: their newest 50 links in this session, `Waiting`, `Shared` or `Declined`; on admission and on every change |
 
-Messages marked v3 or v4 are sent only to viewers admitted with that version or later.
+Messages marked v3, v4 or v5 are sent only to viewers admitted with that version or later.
 
 ### Handshake
 
@@ -73,6 +77,7 @@ viewer                                      host
   | <-- Participants, Status -----------------  |
   | <-- Allowed, Suggestions (v3 viewers) ----  |
   | <-- Shared, FilesAllowed, Files (v4) -----  |
+  | <-- LinksAllowed, Links (v5 viewers) -----  |
   | <== history, then live records and ======  |
   |     timeline events on `stream`             |
 ```
@@ -144,6 +149,8 @@ Chunks are not signed: the signed `file-shared` event announces `size` and `sha2
 | `document` | The whole text of a Markdown file the agent created or changed, after its `file-change`; `text` is null when too large |
 | `file-text` (v4) | The whole text of a code file the agent created or changed, after its `file-change`, only while the host shares whole code files; `text` is null when too large. Never sent to version 3 viewers |
 | `file-shared` (v4) | Someone shared a file: `file`, `name`, `fileKind` (`image`, `markdown` or `text`), `mediaType`, `size`, `sha256` (hex), `by` (participant id, 0 for the host) and `byLabel`. Its bytes come on `files` and are checked against `size` and `sha256`. Never sent to version 3 viewers |
+| `link` (v5) | A link shared with everyone: `id` (from 1 within the session), `url`, `title?`, `by` (the label of whoever shared it) and `sessionOnly`. `url` is null once the host removed it: the host then also sends the stored entry without it to anyone who receives it later. Never sent to version 4 viewers |
+| `link-removed` (v5) | The host removed the link `id`. Never sent to version 4 viewers |
 | `timeline-unavailable` | Structured events cannot be captured; the terminal mirror still works |
 | `timeline-available` | Events arrive again |
 

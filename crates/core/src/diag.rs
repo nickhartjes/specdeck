@@ -346,6 +346,26 @@ pub fn host_requests_allowed(suggestions: bool) {
     info!(suggestions, "host.requests_allowed");
 }
 
+/// The host let viewers send links, or stopped them.
+pub fn host_links_allowed(links: bool) {
+    info!(links, "host.links_allowed");
+}
+
+/// The host shared or declined a viewer's link; never its address or title.
+pub fn host_link_answered(viewer: u32, answer: &'static str) {
+    info!(viewer, answer, "host.link_answered");
+}
+
+/// A link was shared with everyone; never its address or title.
+pub fn host_link_shared(id: u32, session_only: bool) {
+    info!(id, session_only, "host.link_shared");
+}
+
+/// The host removed a shared link.
+pub fn host_link_removed(id: u32) {
+    info!(id, "host.link_removed");
+}
+
 /// The host shares whole code files, or stops: the setting only, never a path or text.
 pub fn host_code_sharing(whole_files: bool) {
     info!(whole_files, "host.code_sharing");

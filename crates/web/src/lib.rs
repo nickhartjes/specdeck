@@ -7,11 +7,12 @@
 
 use serde::Serialize;
 use specdeck_protocol::control::{
-    self, MAX_FILE_NAME_BYTES, Outcome, PROTOCOL_VERSION, Participant, RefusalReason,
+    self, MAX_FILE_NAME_BYTES, Outcome, PROTOCOL_VERSION, Participant, RefusalReason, SentLink,
     SharedFileInfo, Suggestion, ViewerMessage, ViewerRequest, valid_suggestion,
 };
 use specdeck_protocol::files::{self, FetchStep, Fetching, FilesReply, Uploading};
 use specdeck_protocol::invite::InviteCode;
+use specdeck_protocol::links::{MAX_LINK_BYTES, valid_title};
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
 use specdeck_protocol::terminal_stream::encode_records;
 use specdeck_protocol::timeline::TimelineEvent;
@@ -67,6 +68,12 @@ enum Control {
     },
     Files {
         files: Vec<SharedFileInfo>,
+    },
+    LinksAllowed {
+        links: bool,
+    },
+    Links {
+        mine: Vec<SentLink>,
     },
     Retry,
 }
@@ -203,6 +210,30 @@ impl WebViewer {
         Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
     }
 
+    /// A link for the host to share: `{ id, message }`, as [`suggest`](Self::suggest). The page
+    /// checks the link with the browser's own URL parser first (`app/ui/src/model/links.ts`),
+    /// which follows the same standard as the host's check; `check_link` is left out of the
+    /// WebAssembly, whose URL and IDNA tables would make it about a third larger. The host checks
+    /// again and disconnects a viewer that sends a link it refuses.
+    #[wasm_bindgen(js_name = sendLink)]
+    pub fn send_link(
+        &mut self,
+        url: &str,
+        title: Option<String>,
+        session_only: bool,
+    ) -> Result<JsValue, JsError> {
+        if url.is_empty() || url.len() > MAX_LINK_BYTES {
+            return Err(JsError::new("That link can't be shared."));
+        }
+        let title = title.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+        if title.as_deref().is_some_and(|t| !valid_title(t)) {
+            return Err(JsError::new("A title is one line of at most 120 characters."));
+        }
+        let request = ViewerRequest::ShareLink { url: url.to_owned(), title, session_only };
+        let (id, message) = self.state.send_request(request);
+        Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
+    }
+
     /// Removes a file this viewer shared: `{ id, message }`.
     #[wasm_bindgen(js_name = removeFile)]
     pub fn remove_file(&mut self, file: u32) -> JsValue {
@@ -229,7 +260,8 @@ impl WebViewer {
     }
 
     /// What a message on the control channel means: `{ type: "welcome" | "participants" |
-    /// "status" | "refused" | "ended" | "allowed" | "reply" | "suggestions" | "shared" | "retry", ... }`.
+    /// "status" | "refused" | "ended" | "allowed" | "reply" | "suggestions" | "shared" |
+    /// "links-allowed" | "links" | "retry", ... }`.
     #[wasm_bindgen(js_name = onControl)]
     pub fn on_control(&mut self, bytes: &[u8]) -> JsValue {
         to_js(&match self.state.on_control(bytes) {
@@ -251,6 +283,8 @@ impl WebViewer {
             ControlUpdate::Shared { whole_files } => Control::Shared { whole_files },
             ControlUpdate::FilesAllowed { files } => Control::FilesAllowed { files },
             ControlUpdate::Files(files) => Control::Files { files },
+            ControlUpdate::LinksAllowed { links } => Control::LinksAllowed { links },
+            ControlUpdate::Links(mine) => Control::Links { mine },
             ControlUpdate::Retry => Control::Retry,
         })
     }

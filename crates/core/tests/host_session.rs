@@ -8,6 +8,7 @@ use std::time::Duration;
 use specdeck_core::environment::Environment;
 use specdeck_core::output_log::Record;
 use specdeck_core::session::{HostConfig, HostSession, SessionEvent};
+use specdeck_protocol::links::LinkRefusal;
 use specdeck_protocol::timeline::Entry;
 use specdeck_protocol::{AgentId, AgentStatus};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -740,4 +741,92 @@ async fn the_host_shares_removes_and_puts_files_without_typing_them() {
     session.input(b"after\r").unwrap();
     wait_for_output(&session, &mut events, "got:after").await;
     assert!(!output_text(&session).contains(MARKER));
+}
+
+#[tokio::test]
+async fn links_are_shared_in_any_session_and_removing_one_drops_its_address() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    fake_agent(bin.path(), "opencode", r#"echo ready; read line; echo "after:$line"; read wait"#);
+    let (session, mut events) =
+        HostSession::start(config(AgentId::OpenCode, bin.path(), data.path()), &env(bin.path()))
+            .await
+            .unwrap();
+    wait_for_output(&session, &mut events, "ready").await;
+
+    let room = "https://excalidraw.com/#room=5c1e2a9b,Q3h9vX2m";
+    assert_eq!(session.share_link(room, Some("  Draw  "), "Nick", true), Ok(1));
+    let shared = next_matching(
+        &mut events,
+        |e| matches!(e, SessionEvent::Timeline(t) if matches!(t.entry, Entry::Link { .. })),
+    )
+    .await;
+    // At its moment: after the output before it.
+    let SessionEvent::Timeline(shared) = shared else { unreachable!() };
+    assert!(shared.output_seq >= 0);
+    assert_eq!(
+        shared.entry,
+        Entry::Link {
+            id: 1,
+            url: Some(room.into()),
+            title: Some("Draw".into()),
+            by: "Nick".into(),
+            session_only: true,
+        }
+    );
+
+    session.input(b"x\r").unwrap();
+    wait_for_output(&session, &mut events, "after:x").await;
+    // Normalized, and numbered on.
+    assert_eq!(session.share_link("https://Example.com", None, "Mo", false), Ok(2));
+    assert_eq!(
+        session.share_link("http://localhost:5173/", None, "Nick", false),
+        Err(LinkRefusal::OwnMachine)
+    );
+    assert_eq!(
+        session.share_link("https://example.com/", Some("a\u{1b}[2J"), "Nick", false),
+        Err(LinkRefusal::Title)
+    );
+
+    session.remove_link(1);
+    session.remove_link(1);
+    session.remove_link(99);
+    next_matching(
+        &mut events,
+        |e| matches!(e, SessionEvent::Timeline(t) if t.entry == Entry::LinkRemoved { id: 1 }),
+    )
+    .await;
+    let links: Vec<Entry> = session
+        .timeline()
+        .into_iter()
+        .map(|e| e.entry)
+        .filter(|e| matches!(e, Entry::Link { .. } | Entry::LinkRemoved { .. }))
+        .collect();
+    assert_eq!(
+        links,
+        [
+            Entry::Link {
+                id: 1,
+                url: None,
+                title: Some("Draw".into()),
+                by: "Nick".into(),
+                session_only: true,
+            },
+            Entry::Link {
+                id: 2,
+                url: Some("https://example.com/".into()),
+                title: None,
+                by: "Mo".into(),
+                session_only: false,
+            },
+            Entry::LinkRemoved { id: 1 },
+        ],
+        "removed once, and the address is gone from the stored entry"
+    );
+    let first =
+        session.timeline().iter().position(|e| matches!(e.entry, Entry::Link { id: 1, .. }));
+    let second =
+        session.timeline().iter().position(|e| matches!(e.entry, Entry::Link { id: 2, .. }));
+    assert!(first < second);
+    session.close();
 }

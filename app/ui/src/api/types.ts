@@ -259,6 +259,10 @@ export type TimelineEvent = Stamp &
         sevenDay?: RateLimit;
       }
     | { kind: 'git'; folder: string; branch?: string; dirty: boolean; ahead: number; behind: number; worktree?: string }
+    /** A link shared with everyone; `url` is null once the host removed it. `by` is the sharer's name. */
+    | { kind: 'link'; id: number; url: string | null; title?: string; by: string; sessionOnly?: boolean }
+    /** The host removed link `id`. */
+    | { kind: 'link-removed'; id: number }
   );
 
 export type SharingState = 'connecting' | 'ready' | 'unavailable';
@@ -278,6 +282,26 @@ export interface HostSuggestion extends Suggestion {
   /** The viewer's number; with `id` it names the suggestion. */
   viewer: number;
   /** The viewer's name as the participant list showed it when the suggestion arrived. */
+  from: string;
+}
+
+/** What became of a viewer's link; `SentLinkState` in crates/protocol. */
+export type SentLinkState = 'Waiting' | 'Shared' | 'Declined';
+
+/** A viewer's own link, as that viewer sees it. */
+export interface SentLink {
+  id: number;
+  url: string;
+  title: string | null;
+  sessionOnly: boolean;
+  state: SentLinkState;
+}
+
+/** A viewer's link as the host sees it. */
+export interface HostLink extends SentLink {
+  /** The viewer's number; with `id` it names the link. */
+  viewer: number;
+  /** The viewer's name as the participant list showed it when the link arrived. */
   from: string;
 }
 
@@ -337,6 +361,11 @@ export type HostEvent =
       sharedFilesPossible?: boolean;
       filesAllowed?: boolean;
       sharedFiles?: SharedFileInfo[];
+      /** Absent from sessions of the previous release, which can't share links. */
+      linksPossible?: boolean;
+      linksAllowed?: boolean;
+      /** Every link viewers sent, oldest first. */
+      viewerLinks?: HostLink[];
     }
   | { type: 'sharing'; state: SharingState; code: string | null }
   /** What viewers may send, after the host changed it. */
@@ -347,6 +376,10 @@ export type HostEvent =
   | { type: 'shared'; wholeFiles: boolean }
   /** The shared files, or whether viewers may share them, changed. */
   | { type: 'shared-files'; files: SharedFileInfo[]; filesAllowed: boolean }
+  /** Whether viewers may send links, after the host changed it. */
+  | { type: 'links-allowed'; links: boolean }
+  /** Every link viewers sent, oldest first, on every change. */
+  | { type: 'viewer-links'; links: HostLink[] }
   /** Whether the sharing service serves the web viewer, once checked. */
   | { type: 'web-viewer'; available: boolean }
   | { type: 'participants'; participants: Participant[] }
@@ -394,6 +427,10 @@ export type ViewEvent =
   | { type: 'shared-files'; files: SharedFileInfo[] }
   /** Bytes of a shared file this viewer is opening. */
   | { type: 'file-progress'; file: number; received: number; size: number }
+  /** Whether the host lets viewers send links; never sent by a host of the previous release. */
+  | { type: 'links-allowed'; links: boolean }
+  /** This viewer's links and what became of each. */
+  | { type: 'links'; mine: SentLink[] }
   | { type: 'ended'; reason: EndReason };
 
 /** The terminal's state for diagnostics: enums and numbers only, never its content. */

@@ -133,3 +133,36 @@ describe('entries the host cut to fit in one message', () => {
     expect(files[0]!.changes[0]).toMatchObject({ path: 'big.rs', truncated: true });
   });
 });
+
+describe('shared links', () => {
+  const link = (id: number, url: string | null, title?: string): TimelineEvent => ({ ...stamp(), kind: 'link', id, url, title, by: 'Nick', sessionOnly: false });
+
+  it('places a link under the prompt it was shared during, and one before any prompt on its own', () => {
+    const model = buildTimeline([
+      link(1, 'https://example.com/early'),
+      { ...stamp(), kind: 'prompt', promptId: 'p1', text: 'Go' },
+      { ...stamp(), kind: 'message', promptId: 'p1', messageId: 'm1', text: 'Working', final: true },
+      link(2, 'https://example.com/during', 'Staging'),
+    ]);
+    expect(model.earlyLinks.map((l) => l.linkId)).toEqual([1]);
+    expect(model.turns[0]!.items.map((item) => item.kind)).toEqual(['text', 'link']);
+    expect(model.links.map((l) => l.url)).toEqual(['https://example.com/early', 'https://example.com/during']);
+    expect(turnText(model.turns[0]!)).toContain('Staging https://example.com/during');
+  });
+
+  it('drops the address of a removed link and renders its turn again', () => {
+    const shared = [{ ...stamp(), kind: 'prompt', promptId: 'p1', text: 'Go' } as TimelineEvent, link(1, 'https://example.com/')];
+    const before = buildTimeline(shared).turns[0]!.revision;
+    const after = buildTimeline([...shared, { ...stamp(), kind: 'link-removed', id: 1 }]);
+    expect(after.links[0]!.url).toBeNull();
+    expect(after.turns[0]!.revision).toBeGreaterThan(before);
+  });
+
+  it('does not search the key of a link for this session only', () => {
+    const model = buildTimeline([
+      { ...stamp(), kind: 'prompt', promptId: 'p1', text: 'Go' },
+      { ...stamp(), kind: 'link', id: 1, url: 'https://excalidraw.com/#room=a,SECRET', title: 'Draw', by: 'Nick', sessionOnly: true },
+    ]);
+    expect(turnText(model.turns[0]!)).not.toContain('SECRET');
+  });
+});

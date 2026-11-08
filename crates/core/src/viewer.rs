@@ -15,8 +15,8 @@ use std::time::Duration;
 use datachannel::ConnectionState;
 use serde::Serialize;
 use specdeck_protocol::control::{
-    self, Outcome as ReplyOutcome, Participant, RefusalReason, SharedFileInfo, Suggestion,
-    ViewerMessage, ViewerRequest,
+    self, Outcome as ReplyOutcome, Participant, RefusalReason, SentLink, SharedFileInfo,
+    Suggestion, ViewerMessage, ViewerRequest,
 };
 use specdeck_protocol::files::{self, FetchStep, Fetching, FilesReply, Uploading};
 use specdeck_protocol::frames::Record;
@@ -102,6 +102,12 @@ pub enum ViewerEvent {
         received: u64,
         size: u64,
     },
+    /// Whether the host lets viewers send links.
+    LinksAllowed {
+        links: bool,
+    },
+    /// This viewer's links and what became of each.
+    Links(Vec<SentLink>),
     /// The connection dropped; the viewer is reconnecting.
     Reconnecting,
     /// Not admitted; final.
@@ -255,6 +261,13 @@ impl ViewerSession {
     /// Removes a file this viewer shared.
     pub fn remove_file(&self, file: u32) {
         let _ = self.control.send(Control::Request(ViewerRequest::RemoveFile { file }));
+    }
+
+    /// Sends the host a link to share, as [`suggest`](Self::suggest) does. `url` must be in the
+    /// normalized form `check_link` gives, or the host disconnects this viewer.
+    pub fn send_link(&self, url: String, title: Option<String>, session_only: bool) {
+        let request = ViewerRequest::ShareLink { url, title, session_only };
+        let _ = self.control.send(Control::Request(request));
     }
 
     /// Drops the connection as a network outage of `outage` would, then reconnects, keeping the
@@ -699,6 +712,8 @@ impl Viewer {
             }
             ControlUpdate::Suggestions(mine) => ViewerEvent::Suggestions(mine),
             ControlUpdate::Shared { whole_files } => ViewerEvent::Shared { whole_files },
+            ControlUpdate::LinksAllowed { links } => ViewerEvent::LinksAllowed { links },
+            ControlUpdate::Links(mine) => ViewerEvent::Links(mine),
             ControlUpdate::Refused(reason) => {
                 return Some(Outcome::Final(ViewerEvent::Refused(reason)));
             }
@@ -714,6 +729,7 @@ impl Viewer {
         let kind = request.kind();
         let bytes = match &request {
             ViewerRequest::Suggest { text } => text.len(),
+            ViewerRequest::ShareLink { url, .. } => url.len(),
             ViewerRequest::ShareFile { size, .. } => *size as usize,
             ViewerRequest::RemoveFile { .. } => 0,
         };

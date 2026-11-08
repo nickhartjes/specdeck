@@ -87,6 +87,10 @@ interface Props {
   shared?: SharedFiles;
   /** Bytes received so far of shared files being fetched, by file. */
   sharedProgress?: ReadonlyMap<number, number>;
+  /** Above the timeline: sharing links; absent where links can't be shared. */
+  linksBar?: ReactNode;
+  /** The host's: removes a shared link. */
+  onRemoveLink?: (linkId: number) => void;
 }
 
 type Pane = "files" | "session" | "timeline";
@@ -779,6 +783,8 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                 shares={shares}
                 sharedNow={sharedNow}
                 onOpenShared={(file, name) => openShared(file, name)}
+                linksBar={props.linksBar}
+                onRemoveLink={props.onRemoveLink}
               />
             </div>
           </aside>

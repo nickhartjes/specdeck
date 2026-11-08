@@ -104,6 +104,14 @@ When the host lets viewers share files, **Files › Shared** has **Share files**
 
 A file you share goes to the host's SpecDeck first, which checks it and passes it on. It never reaches the agent unless the host puts it in the session folder. When the host has not turned sharing on, the **Shared** tab says so.
 
+## Links
+
+The host, or a viewer through the host, can share a link: a preview deploy, staging, a ticket or a whiteboard. It shows as a card in the timeline, at the moment it was shared, with its title, its site, its address and who shared it. Select **Open in your browser** to open it in your own default browser, with your own logins; SpecDeck never loads the page itself. In the browser viewer it opens in a new tab, which can't reach the SpecDeck tab.
+
+A link marked **For this session only** hides the part of its address after `#`, which can hold a key, as in an Excalidraw room. It still opens and copies whole; share it only with people in the session. When the host removes a link, its card says so and the address is gone.
+
+To share a link yourself, select **Send a link to** *host* above the timeline. Only the host sees it, with your name, until they share it with everyone or decline it; you see which. The host can turn this off. Links to your own computer can't be sent, since nobody else can reach them.
+
 ## The status bar
 
 The bar at the bottom of the window shows what the agent works with and has used: the folder, its git branch (● means uncommitted changes, ↑↓ commits ahead of and behind its upstream) and, for Claude Code, the model and effort, how full the context window is, the tokens used in the session, and the host's 5-hour and 7-day limits with the time until they reset. Hover over a figure for details.

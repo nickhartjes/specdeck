@@ -8,6 +8,7 @@ import { SettingsScreen } from './screens/SettingsScreen';
 import './styles.css';
 import './highlight.css';
 import './shared-files.css';
+import './links.css';
 
 async function bridge(): Promise<Bridge> {
   // In a plain browser during development, /?demo=start|host|viewer shows sample sessions.

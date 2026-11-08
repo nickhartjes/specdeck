@@ -6,17 +6,19 @@
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+use crate::links::{check_link, valid_title};
 use crate::{AgentId, AgentStatus};
 
 /// Bumped on every protocol change. Version 3 added requests from viewers (`Send`) and the host's
 /// answers to them (`Allowed`, `Reply`, `Suggestions`); version 4 the whole text of code files
-/// (the `FileText` timeline entry) and the host's setting for it (`Shared`), and shared files
-/// (the `files` channel, `FileShared`, `Files`, `FilesAllowed`, `ShareFile` and `RemoveFile`).
-pub const PROTOCOL_VERSION: u32 = 4;
+/// (the `FileText` timeline entry), the host's setting for it (`Shared`) and shared files (the
+/// `files` channel, `FileShared`, `Files`, `FilesAllowed`, `ShareFile` and `RemoveFile`); version
+/// 5 shared links (the `Link` and `LinkRemoved` entries, `ShareLink`, `LinksAllowed` and `Links`).
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// The oldest viewer protocol a host admits. Older viewers watch only: the host never sends them
 /// a message their version cannot read.
-pub const MIN_VIEWER_PROTOCOL_VERSION: u32 = 3;
+pub const MIN_VIEWER_PROTOCOL_VERSION: u32 = 4;
 
 /// The first protocol version that can send requests to the host.
 pub const REQUESTS_PROTOCOL_VERSION: u32 = 3;
@@ -30,6 +32,9 @@ pub const SHARED_FILES_PROTOCOL_VERSION: u32 = 4;
 
 /// Longest name of a shared file, in bytes of UTF-8.
 pub const MAX_FILE_NAME_BYTES: usize = 255;
+/// The first protocol version that reads and shares links: `Link`, `LinkRemoved`, `ShareLink`,
+/// `LinksAllowed` and `Links`.
+pub const LINKS_PROTOCOL_VERSION: u32 = 5;
 
 /// Longest username accepted, in characters.
 pub const MAX_USERNAME_CHARS: usize = 64;
@@ -74,6 +79,9 @@ pub enum ViewerRequest {
     ShareFile { name: String, size: u64, sha256: [u8; 32] },
     /// Removes a file the viewer shared (version 4).
     RemoveFile { file: u32 },
+    /// A link for everyone in the session, which only the host can share (version 5). `url` is
+    /// in the normalized form [`check_link`] gives.
+    ShareLink { url: String, title: Option<String>, session_only: bool },
 }
 
 impl ViewerRequest {
@@ -83,6 +91,7 @@ impl ViewerRequest {
             ViewerRequest::Suggest { .. } => "suggest",
             ViewerRequest::ShareFile { .. } => "share_file",
             ViewerRequest::RemoveFile { .. } => "remove_file",
+            ViewerRequest::ShareLink { .. } => "share_link",
         }
     }
 }
@@ -147,6 +156,15 @@ pub enum HostMessage {
     Files {
         files: Vec<SharedFileInfo>,
     },
+    /// Whether viewers may send links (version 5): on admission and on every change.
+    LinksAllowed {
+        links: bool,
+    },
+    /// The viewer's own links in this session and what became of each, the newest
+    /// [`MAX_LINKS_LISTED`] (version 5): on admission and on every change; only to that viewer.
+    Links {
+        mine: Vec<SentLink>,
+    },
 }
 
 /// A file shared in the session, as everyone sees it in the list. Its bytes travel on the
@@ -187,6 +205,9 @@ impl FileKind {
         }
     }
 }
+
+/// Most of a viewer's own links sent in one `Links`, so it always fits in one message.
+pub const MAX_LINKS_LISTED: usize = 50;
 
 /// What became of a request when it reached the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,6 +260,26 @@ pub enum SuggestionState {
     Sent {
         edited: bool,
     },
+    Declined,
+}
+
+/// A viewer's link and what became of it. Camel case for the UI, which gets it as JSON;
+/// postcard ignores field names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentLink {
+    pub id: u32,
+    pub url: String,
+    pub title: Option<String>,
+    pub session_only: bool,
+    pub state: SentLinkState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SentLinkState {
+    Waiting,
+    /// The host shared it with everyone.
+    Shared,
     Declined,
 }
 
@@ -311,6 +352,8 @@ pub enum DecodeError {
     InvalidSuggestion,
     #[error("file name must be 1 to {MAX_FILE_NAME_BYTES} bytes")]
     InvalidFileName,
+    #[error("link must be a normalized web address others can reach, with a valid title")]
+    InvalidLink,
 }
 
 pub fn encode<T: Serialize>(message: &T) -> Vec<u8> {
@@ -336,6 +379,14 @@ pub fn decode_viewer(bytes: &[u8]) -> Result<ViewerMessage, DecodeError> {
         ViewerMessage::Send { request: ViewerRequest::Suggest { text }, .. } => {
             if !valid_suggestion(text) {
                 return Err(DecodeError::InvalidSuggestion);
+            }
+        }
+        ViewerMessage::Send { request: ViewerRequest::ShareLink { url, title, .. }, .. } => {
+            // The host shares exactly what it checked, so only the normalized form is accepted.
+            if check_link(url).as_ref() != Ok(url)
+                || title.as_deref().is_some_and(|t| !valid_title(t))
+            {
+                return Err(DecodeError::InvalidLink);
             }
         }
         ViewerMessage::Send { request: ViewerRequest::ShareFile { name, .. }, .. } => {
@@ -381,6 +432,17 @@ mod tests {
         }
     }
 
+    fn share_link(url: &str, title: Option<&str>) -> ViewerMessage {
+        ViewerMessage::Send {
+            id: 1,
+            request: ViewerRequest::ShareLink {
+                url: url.into(),
+                title: title.map(Into::into),
+                session_only: false,
+            },
+        }
+    }
+
     fn hello(username: &str) -> ViewerMessage {
         ViewerMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -400,6 +462,8 @@ mod tests {
             suggest(4, "Add a test for\n\tthe heartbeat"),
             share(5, "wireframe.png"),
             ViewerMessage::Send { id: 6, request: ViewerRequest::RemoveFile { file: 2 } },
+            share_link("https://excalidraw.com/#room=a,b", Some("Draw")),
+            share_link("http://192.168.1.20:8080/", None),
         ] {
             assert_eq!(decode_viewer(&encode(&message)), Ok(message));
         }
@@ -460,6 +524,25 @@ mod tests {
             },
             HostMessage::Reply { id: 5, outcome: Outcome::Ready { upload: 7 } },
             HostMessage::Reply { id: 6, outcome: Outcome::NotAllowedType },
+            HostMessage::LinksAllowed { links: false },
+            HostMessage::Links {
+                mine: vec![
+                    SentLink {
+                        id: 1,
+                        url: "https://example.com/".into(),
+                        title: None,
+                        session_only: false,
+                        state: SentLinkState::Waiting,
+                    },
+                    SentLink {
+                        id: 2,
+                        url: "https://excalidraw.com/#room=a,b".into(),
+                        title: Some("Draw".into()),
+                        session_only: true,
+                        state: SentLinkState::Shared,
+                    },
+                ],
+            },
         ];
         for message in messages {
             assert_eq!(decode_host(&encode(&message)), Ok(message));
@@ -502,6 +585,11 @@ mod tests {
         // Suggestions keep their bytes now that requests and outcomes for files follow them.
         assert_eq!(encode(&suggest(1, "a")), [3, 1, 0, 1, b'a']);
         assert_eq!(encode(&HostMessage::Reply { id: 4, outcome: Outcome::RateLimited }), [6, 4, 2]);
+        // The link messages come after every version 4 message, and `ShareLink` after the file
+        // requests.
+        assert_eq!(encode(&HostMessage::LinksAllowed { links: true }), [11, 1]);
+        assert_eq!(encode(&HostMessage::Links { mine: vec![] }), [12, 0]);
+        assert_eq!(encode(&share_link("https://a.b/", None))[..3], [3, 1, 3]);
     }
 
     #[test]
@@ -513,6 +601,32 @@ mod tests {
         let longer = "x".repeat(MAX_FILE_NAME_BYTES + 1);
         assert_eq!(decode_viewer(&encode(&share(1, &longer))), Err(DecodeError::InvalidFileName));
         assert_eq!(decode_viewer(&encode(&share(1, ""))), Err(DecodeError::InvalidFileName));
+    }
+
+    #[test]
+    fn links_are_validated() {
+        for (url, title) in [
+            ("http://localhost:3000/", None),
+            ("https://user:pw@example.com/", None),
+            ("javascript:alert(1)", None),
+            ("https://Example.com", None),
+            ("https://example.com/", Some("two\nlines")),
+            ("https://example.com/", Some("")),
+        ] {
+            assert_eq!(
+                decode_viewer(&encode(&share_link(url, title))),
+                Err(DecodeError::InvalidLink),
+                "{url} {title:?}"
+            );
+        }
+        let long = "t".repeat(crate::links::MAX_LINK_TITLE_CHARS + 1);
+        assert_eq!(
+            decode_viewer(&encode(&share_link("https://example.com/", Some(&long)))),
+            Err(DecodeError::InvalidLink)
+        );
+        let longest = format!("https://example.com/{}", "a".repeat(2048 - 20));
+        let title = "é".repeat(crate::links::MAX_LINK_TITLE_CHARS);
+        assert!(decode_viewer(&encode(&share_link(&longest, Some(&title)))).is_ok());
     }
 
     #[test]
@@ -580,12 +694,12 @@ mod tests {
 
     #[test]
     fn version_check_names_the_side_that_must_update() {
-        assert_eq!(check_version(3, 4, 3), Ok(()));
-        assert_eq!(check_version(3, 4, 4), Ok(()));
-        assert_eq!(check_version(3, 4, 2), Err(RefusalReason::ViewerOutdated));
-        assert_eq!(check_version(3, 4, 5), Err(RefusalReason::HostOutdated));
+        assert_eq!(check_version(4, 5, 4), Ok(()));
+        assert_eq!(check_version(4, 5, 5), Ok(()));
+        assert_eq!(check_version(4, 5, 3), Err(RefusalReason::ViewerOutdated));
+        assert_eq!(check_version(4, 5, 6), Err(RefusalReason::HostOutdated));
         assert_eq!(
-            check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 3),
+            check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 4),
             Ok(()),
             "the previous release's viewers are admitted"
         );

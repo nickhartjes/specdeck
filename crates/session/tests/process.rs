@@ -16,6 +16,7 @@ use specdeck_local::{Connection, Frame, Frozen, Protocol, connect, make_private_
 use specdeck_protocol::AgentId;
 use specdeck_protocol::control::PROTOCOL_VERSION;
 use specdeck_protocol::invite::InviteCode;
+use specdeck_protocol::timeline::Entry;
 use specdeck_session::messages::{Command, Event, SuggestionAnswer};
 use specdeck_session::runtime::HostNotice;
 use tokio::net::TcpListener;
@@ -804,6 +805,81 @@ async fn the_host_shares_reads_puts_and_removes_a_file() {
     assert_eq!(fetched.unwrap(), b"# Notes\n");
     read_refuse_and_put(&mut app, &mut terminal, folder.path(), file).await;
     allow_and_remove(&mut app, &mut terminal, file).await;
+
+    app.send(&Command::End).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;
+    process.exits().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn links_are_shared_removed_and_refused_in_a_terminal_session() {
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let mut process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let code = started(&mut app, folder.path(), &url).await;
+    let mut terminal = String::new();
+    app.send(&Command::Attach).await;
+    let snapshot = app
+        .until(
+            &mut terminal,
+            |e| matches!(e, Event::HostEvent { event } if event["type"] == "snapshot"),
+        )
+        .await;
+    let Event::HostEvent { event: snapshot } = snapshot else { unreachable!() };
+    assert_eq!(snapshot["linksPossible"], true, "also in a terminal session");
+    assert_eq!(snapshot["linksAllowed"], true);
+    assert_eq!(snapshot["viewerLinks"], serde_json::json!([]));
+
+    let link = |event: &Event| {
+        matches!(event, Event::HostEvent { event }
+            if event["type"] == "timeline" && event["event"]["kind"] == "link")
+    };
+    app.send(&Command::ShareLink {
+        url: "https://excalidraw.com/#room=a,b".into(),
+        title: Some("Draw".into()),
+        session_only: true,
+    })
+    .await;
+    let shared = app.until(&mut terminal, link).await;
+    let Event::HostEvent { event } = shared else { unreachable!() };
+    assert_eq!(
+        event["event"],
+        serde_json::json!({
+            "outputSeq": event["event"]["outputSeq"], "at": event["event"]["at"],
+            "kind": "link", "id": 1, "url": "https://excalidraw.com/#room=a,b",
+            "title": "Draw", "by": "Nick", "sessionOnly": true
+        })
+    );
+
+    // A viewer sees it too.
+    let (_viewer, mut viewer) = join(&url, &code);
+    viewer_until(&mut viewer, |e| {
+        matches!(e, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::Link { id: 1, .. }))
+    })
+    .await;
+
+    app.send(&Command::ShareLink {
+        url: "http://localhost:3000/".into(),
+        title: None,
+        session_only: false,
+    })
+    .await;
+    let failed = app.until(&mut terminal, |e| matches!(e, Event::Failed { .. })).await;
+    let Event::Failed { message } = failed else { unreachable!() };
+    assert!(message.contains("can't reach your computer"), "{message}");
+
+    app.send(&Command::RemoveLink { id: 1 }).await;
+    app.until(&mut terminal, |e| {
+        matches!(e, Event::HostEvent { event }
+            if event["type"] == "timeline" && event["event"]["kind"] == "link-removed")
+    })
+    .await;
+    app.send(&Command::AllowLinks { links: false }).await;
+    app.until(&mut terminal, |e| {
+        matches!(e, Event::HostEvent { event } if event["type"] == "links-allowed" && event["links"] == false)
+    })
+    .await;
 
     app.send(&Command::End).await;
     app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;

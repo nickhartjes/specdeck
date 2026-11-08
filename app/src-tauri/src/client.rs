@@ -12,12 +12,13 @@ use serde::Deserialize;
 use specdeck_core::browser::{BrowserHandler, BrowserResult};
 use specdeck_local::{Compat, Frame, Frozen, Protocol, compat};
 use specdeck_protocol::AgentId;
-use specdeck_session::messages::{Command, Event, SuggestionAnswer};
+use specdeck_session::messages::{Command, Event, LinkAnswer, SuggestionAnswer};
 use specdeck_session::runtime::{HostNotice, Summary};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter;
+use crate::links::LinkBook;
 use crate::sessions::SessionId;
 
 /// How long a new session process may take to serve its socket.
@@ -81,6 +82,8 @@ struct ClientState {
     answers: HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>,
     next_answer: u64,
     over: bool,
+    /// The session's links, as they passed to the window.
+    links: LinkBook,
 }
 
 impl SessionClient {
@@ -225,6 +228,30 @@ impl SessionClient {
         }
     }
 
+    /// Shares the host's own link; the window checked it, and the session checks it again.
+    pub fn share_link(&self, url: String, title: Option<String>, session_only: bool) {
+        self.send(&Command::ShareLink { url, title, session_only });
+    }
+
+    /// Shares a viewer's waiting link with everyone, or declines it.
+    pub fn answer_link(&self, viewer_id: u32, id: u32, share: bool) {
+        let answer = if share { LinkAnswer::Share } else { LinkAnswer::Decline };
+        self.send(&Command::AnswerLink { viewer_id, id, answer });
+    }
+
+    pub fn remove_link(&self, id: u32) {
+        self.send(&Command::RemoveLink { id });
+    }
+
+    pub fn allow_links(&self, on: bool) {
+        self.send(&Command::AllowLinks { links: on });
+    }
+
+    /// The address of a link shared in this session, to open.
+    pub fn link(&self, id: u32) -> Result<String, String> {
+        self.state.lock().unwrap().links.openable(id)
+    }
+
     pub fn set_web_viewer(&self, available: bool) {
         self.send(&Command::WebViewer { available });
     }
@@ -360,7 +387,11 @@ fn receive(
     };
     match event {
         Event::HostEvent { event } => {
-            let events = state.lock().unwrap().events.clone();
+            let events = {
+                let mut state = state.lock().unwrap();
+                state.links.record_host_event(&event);
+                state.events.clone()
+            };
             if let Some(events) = events {
                 let _ = events.send(event);
             }

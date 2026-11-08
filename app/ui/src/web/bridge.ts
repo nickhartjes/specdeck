@@ -3,7 +3,7 @@
 // folder, agent and update calls are not part of the web viewer and fail.
 
 import type { Bridge } from '../api/bridge';
-import type { Appearance, JoinLink, Profile, RequestOutcome, View, ViewerNotifications } from '../api/types';
+import type { Appearance, JoinLink, Profile, RequestOutcome, View, ViewEvent, ViewerNotifications } from '../api/types';
 import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 import { asAppearance } from '../appearance';
 import { Connection, type Platform, type ViewerCore } from './connection';
@@ -25,6 +25,10 @@ export interface WebBridgeOptions {
   core: (code: string) => ViewerCore;
   /** Reads a join link of either form; undefined when it is not one. */
   parseJoinLink: (link: string) => { code: string; service?: string } | undefined;
+  /** A shared link in the form the page may open, or undefined: `checkLink` of model/links.ts. */
+  openableLink: (url: string) => string | undefined;
+  /** Opens a page; `window.open` unless a test passes its own. */
+  open?: (url: string, target: string, features: string) => void;
   /** `localStorage`, or null where the browser keeps nothing. */
   storage: Storage | null;
   platform?: Platform;
@@ -59,6 +63,32 @@ export function browserNotifications(): BrowserNotifications | null {
     },
     away: () => document.visibilityState === 'hidden' || !document.hasFocus(),
   };
+}
+
+/** A new tab that can't reach this page and isn't told where it came from (`web-viewer` spec: Links in the browser). */
+export const LINK_FEATURES = 'noopener,noreferrer';
+
+/** Notes a shared link as it arrives, or forgets one the host removed. */
+export function recordLink(links: Map<number, string>, event: ViewEvent) {
+  if (event.type !== 'timeline') return;
+  const entry = event.event;
+  if (entry.kind === 'link' && entry.url) links.set(entry.id, entry.url);
+  else if (entry.kind === 'link' || entry.kind === 'link-removed') links.delete(entry.id);
+}
+
+/** Opens link `id` in a new tab after the host's own check; fails for anything else. */
+export function openSharedLink(
+  links: Map<number, string>,
+  id: number,
+  openableLink: WebBridgeOptions['openableLink'],
+  open: NonNullable<WebBridgeOptions['open']>,
+) {
+  const stored = links.get(id);
+  if (stored === undefined) throw new Error('That link is not in this session.');
+  // The same check the host made, whatever the host sent.
+  const url = openableLink(stored);
+  if (url === undefined) throw new Error('This link can’t be opened.');
+  open(url, '_blank', LINK_FEATURES);
 }
 
 /** The host name of a `wss://host/…/signal` URL. */
@@ -162,6 +192,9 @@ export function webBridge(options: WebBridgeOptions): Bridge {
   let viewerNotifications = readViewerNotifications(storage);
   const allowed = () => notifying && notifier?.permission() === 'granted';
   const appearanceHandlers = new Set<(appearance: Appearance) => void>();
+  // The session's links by id, as they arrived: the page opens only these.
+  const links = new Map<number, string>();
+  const open = options.open ?? ((url, target, features) => void window.open(url, target, features));
 
   const profile = (): Profile => ({
     username,
@@ -272,6 +305,10 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     hostAllowSuggestions: notInTheWebViewer,
     hostShareCode: notInTheWebViewer,
     hostAnswerSuggestion: notInTheWebViewer,
+    hostShareLink: notInTheWebViewer,
+    hostAnswerLink: notInTheWebViewer,
+    hostRemoveLink: notInTheWebViewer,
+    hostAllowLinks: notInTheWebViewer,
     hostClose: notInTheWebViewer,
     joinSession: async (code, server, terminal, events) => {
       // Each page joins only through its own service (spec: Only the page's own service).
@@ -284,6 +321,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
         throw new Error('That is not an invite code. It looks like 7K2M-9QXH-4TPA.');
       }
       connection?.leave();
+      links.clear();
       connection = new Connection({
         url: service,
         username,
@@ -292,6 +330,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
         onRecords: (bytes) => terminal(bytes.slice().buffer),
         onEvent: (event) => {
           if (event.type === 'ended') connection = null;
+          recordLink(links, event);
           events(event);
         },
       });
@@ -333,6 +372,11 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
       return true;
     },
+    sendLink: async (url, title, sessionOnly) => {
+      if (!connection) throw new Error('You are not in a session.');
+      connection.sendLink(url, title, sessionOnly);
+    },
+    openLink: async (id) => openSharedLink(links, id, options.openableLink, open),
     takeJoinLink: () => Promise.resolve(null),
     // One page, one session: no other windows to start or title.
     takeStartCommand: () => Promise.resolve(null),

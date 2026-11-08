@@ -11,10 +11,11 @@ use specdeck_local::{Compat, Frame, Protocol, compat};
 use specdeck_session::messages::{Command, Event};
 
 /// Commands added in this release (`viewer-to-host-channel`, `files-documents-and-code`,
-/// `shared-files`), which a session of the release before it does not know. Its snapshot has no
-/// `suggestionsPossible`, `wholeFilesPossible` or `sharedFilesPossible`, so the window offers
-/// none of them; this keeps a stray one from reaching it. Remove a release later.
-const NEW_COMMANDS: [&str; 8] = [
+/// `shared-files`, `shared-links`), which a session of the release before it does not know. Its
+/// snapshot has no `suggestionsPossible`, `wholeFilesPossible`, `sharedFilesPossible` or
+/// `linksPossible`, so the window offers none of them; this keeps a stray one from reaching it.
+/// Remove a release later.
+const NEW_COMMANDS: [&str; 12] = [
     "allow-requests",
     "answer-suggestion",
     "share-code",
@@ -23,6 +24,10 @@ const NEW_COMMANDS: [&str; 8] = [
     "remove-shared-file",
     "read-shared-file",
     "put-shared-file",
+    "share-link",
+    "answer-link",
+    "remove-link",
+    "allow-links",
 ];
 
 /// `command` as a session of release `peer` understands it, or None when it cannot take it.
@@ -201,6 +206,24 @@ mod tests {
             assert!(command(Protocol::own(), new).is_some(), "{new:?} did not reach this one");
         }
         assert!(command(previous, &Command::Status).is_some());
+        assert!(command(Protocol::own(), &allow).is_some());
+        assert!(command(Protocol::own(), &answer).is_some());
+        assert!(command(Protocol::own(), &share).is_some());
+
+        use specdeck_session::messages::LinkAnswer;
+        for links in [
+            Command::ShareLink {
+                url: "https://example.com/".into(),
+                title: None,
+                session_only: false,
+            },
+            Command::AnswerLink { viewer_id: 1, id: 1, answer: LinkAnswer::Share },
+            Command::RemoveLink { id: 1 },
+            Command::AllowLinks { links: false },
+        ] {
+            assert!(command(previous, &links).is_none(), "{links:?}");
+            assert!(command(Protocol::own(), &links).is_some(), "{links:?}");
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@
 use crate::AgentId;
 use crate::AgentStatus;
 use crate::control::{
-    self, HostMessage, Outcome, Participant, RefusalReason, SharedFileInfo, Suggestion,
+    self, HostMessage, Outcome, Participant, RefusalReason, SentLink, SharedFileInfo, Suggestion,
     ViewerMessage, ViewerRequest,
 };
 use crate::frames::{Frame, FrameVerifier, Record};
@@ -70,6 +70,12 @@ pub enum ControlUpdate {
     },
     /// The files shared in the session now.
     Files(Vec<SharedFileInfo>),
+    /// Whether the host lets viewers send links.
+    LinksAllowed {
+        links: bool,
+    },
+    /// This viewer's links and what became of each.
+    Links(Vec<SentLink>),
     /// The message could not be used; drop this connection and try again.
     Retry,
 }
@@ -174,6 +180,8 @@ impl ViewerState {
             HostMessage::Shared { whole_files } => ControlUpdate::Shared { whole_files },
             HostMessage::FilesAllowed { files } => ControlUpdate::FilesAllowed { files },
             HostMessage::Files { files } => ControlUpdate::Files(files),
+            HostMessage::LinksAllowed { links } => ControlUpdate::LinksAllowed { links },
+            HostMessage::Links { mine } => ControlUpdate::Links(mine),
         }
     }
 
@@ -451,6 +459,20 @@ mod tests {
             viewer.on_control(&control::encode(&shared)),
             ControlUpdate::Shared { whole_files: true }
         );
+        let allowed = HostMessage::LinksAllowed { links: false };
+        assert_eq!(
+            viewer.on_control(&control::encode(&allowed)),
+            ControlUpdate::LinksAllowed { links: false }
+        );
+        let mine = vec![control::SentLink {
+            id: 2,
+            url: "https://example.com/".into(),
+            title: None,
+            session_only: false,
+            state: control::SentLinkState::Declined,
+        }];
+        let links = HostMessage::Links { mine: mine.clone() };
+        assert_eq!(viewer.on_control(&control::encode(&links)), ControlUpdate::Links(mine));
     }
 
     #[test]

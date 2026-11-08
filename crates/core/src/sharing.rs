@@ -13,9 +13,10 @@ use tokio::time::Instant;
 
 use serde::Serialize;
 use specdeck_protocol::control::{
-    self, HostMessage, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
-    REQUESTS_PROTOCOL_VERSION, RefusalReason, Role, SHARED_FILES_PROTOCOL_VERSION, Suggestion,
-    SuggestionState, ViewerMessage, ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
+    self, HostMessage, LINKS_PROTOCOL_VERSION, MAX_LINKS_LISTED, MIN_VIEWER_PROTOCOL_VERSION,
+    Outcome, PROTOCOL_VERSION, Participant, REQUESTS_PROTOCOL_VERSION, RefusalReason, Role,
+    SHARED_FILES_PROTOCOL_VERSION, SentLink, SentLinkState, Suggestion, SuggestionState,
+    ViewerMessage, ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
 };
 use specdeck_protocol::files::{
     self, Assembled, Assembly, FILE_CHUNK_BYTES, FilesReply, FilesRequest,
@@ -93,6 +94,28 @@ pub enum SharingEvent {
     Shared {
         whole_files: bool,
     },
+    /// Whether viewers may send links, after the host changed it.
+    LinksAllowed {
+        links: bool,
+    },
+    /// Every link viewers sent in the session, oldest first, on every change.
+    Links(Vec<HostLink>),
+}
+
+/// A viewer's link as the host sees it, before and after the host shared or declined it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostLink {
+    pub viewer: u32,
+    /// The viewer's own id for it.
+    pub id: u32,
+    /// The viewer's name as the participant list showed it when the link arrived.
+    pub from: String,
+    /// Checked, in normalized form.
+    pub url: String,
+    pub title: Option<String>,
+    pub session_only: bool,
+    pub state: SentLinkState,
 }
 
 /// A viewer's suggestion as the host sees it.
@@ -174,6 +197,8 @@ enum Command {
     SetLimit(u8),
     AllowSuggestions(bool),
     Answer { viewer: u32, id: u32, answer: Answer, done: oneshot::Sender<bool> },
+    AllowLinks(bool),
+    AnswerLink { viewer: u32, id: u32, share: bool, done: oneshot::Sender<Option<HostLink>> },
     Close,
 }
 
@@ -235,6 +260,25 @@ impl Sharing {
     ) -> oneshot::Receiver<bool> {
         let (done, receiver) = oneshot::channel();
         let _ = self.commands.send(Command::Answer { viewer, id, answer, done });
+        receiver
+    }
+
+    /// Lets viewers send links, or stops them. Links already waiting stay.
+    pub fn allow_links(&self, on: bool) {
+        let _ = self.commands.send(Command::AllowLinks(on));
+    }
+
+    /// Records the host's answer to a waiting link and tells its viewer. Resolves to the link
+    /// when it was waiting, and only then may the caller share a link marked shared: sharing
+    /// itself never writes to the timeline.
+    pub fn answer_link(
+        &self,
+        viewer: u32,
+        id: u32,
+        share: bool,
+    ) -> oneshot::Receiver<Option<HostLink>> {
+        let (done, receiver) = oneshot::channel();
+        let _ = self.commands.send(Command::AnswerLink { viewer, id, share, done });
         receiver
     }
 
@@ -347,16 +391,27 @@ struct Host {
     files_allowed: bool,
 }
 
-/// What viewers may send and what they sent: the switches, each viewer's rate limit and the
-/// suggestions of the session. Holds no reference to the agent.
+/// What viewers may send and what they sent: the switches, each viewer's rate limit, and the
+/// suggestions and links of the session. Holds no reference to the agent or the timeline.
 struct Requests {
     /// False for terminal sessions, where every line typed into the shell runs.
     possible: bool,
     suggestions_on: bool,
+    /// On from the start in every session: a link is never typed into it.
+    links_on: bool,
     /// By viewer id, so reconnecting does not refill it.
     buckets: HashMap<u32, Bucket>,
     /// Oldest first; kept for the session, also of viewers who left or were removed.
     suggestions: Vec<HostSuggestion>,
+    /// As `suggestions`.
+    links: Vec<HostLink>,
+}
+
+/// What an accepted request added.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Added {
+    Suggestion,
+    Link,
 }
 
 impl Requests {
@@ -365,8 +420,10 @@ impl Requests {
             possible: agent != AgentId::Terminal,
             // On from the start where they are possible; the host can turn them off.
             suggestions_on: agent != AgentId::Terminal,
+            links_on: true,
             buckets: HashMap::new(),
             suggestions: Vec::new(),
+            links: Vec::new(),
         }
     }
 
@@ -385,8 +442,19 @@ impl Requests {
         true
     }
 
-    /// Decides on a request; also returns whether it added a suggestion. A request the host
-    /// already has is answered again without counting against the limit.
+    /// Returns whether the switch changed.
+    fn allow_links(&mut self, on: bool) -> bool {
+        if on == self.links_on {
+            return false;
+        }
+        self.links_on = on;
+        diag::host_links_allowed(on);
+        true
+    }
+
+    /// Decides on a request; also returns what it added. A request the host already has is
+    /// answered again without counting against the limit. Ids are the viewer's own, unique
+    /// across kinds.
     fn receive(
         &mut self,
         viewer: u32,
@@ -394,23 +462,77 @@ impl Requests {
         request: ViewerRequest,
         from: String,
         now: Instant,
-    ) -> (Outcome, bool) {
+    ) -> (Outcome, Option<Added>) {
         let kind = request.kind();
-        let ViewerRequest::Suggest { text } = request else { return (Outcome::Off, false) };
-        let bytes = text.len();
-        let (outcome, name) = if self.suggestions.iter().any(|s| s.viewer == viewer && s.id == id) {
-            (Outcome::Received, "duplicate")
-        } else if !self.suggestions_on {
-            (Outcome::Off, "off")
+        let (on, bytes) = match &request {
+            ViewerRequest::Suggest { text } => (self.suggestions_on, text.len()),
+            ViewerRequest::ShareLink { url, .. } => (self.links_on, url.len()),
+            // Files have their own gate, `Inner::file_request`.
+            ViewerRequest::ShareFile { .. } | ViewerRequest::RemoveFile { .. } => {
+                return (Outcome::Off, None);
+            }
+        };
+        let known = self.suggestions.iter().any(|s| s.viewer == viewer && s.id == id)
+            || self.links.iter().any(|l| l.viewer == viewer && l.id == id);
+        let (outcome, added) = if known {
+            (Outcome::Received, None)
+        } else if !on {
+            (Outcome::Off, None)
         } else if !self.buckets.entry(viewer).or_insert_with(|| Bucket::new(now)).take(now) {
-            (Outcome::RateLimited, "limited")
+            (Outcome::RateLimited, None)
         } else {
-            let state = SuggestionState::Waiting;
-            self.suggestions.push(HostSuggestion { viewer, id, from, text, state });
-            (Outcome::Received, "accepted")
+            match request {
+                ViewerRequest::Suggest { text } => {
+                    let state = SuggestionState::Waiting;
+                    self.suggestions.push(HostSuggestion { viewer, id, from, text, state });
+                    (Outcome::Received, Some(Added::Suggestion))
+                }
+                ViewerRequest::ShareLink { url, title, session_only } => {
+                    let state = SentLinkState::Waiting;
+                    let link = HostLink { viewer, id, from, url, title, session_only, state };
+                    self.links.push(link);
+                    (Outcome::Received, Some(Added::Link))
+                }
+                ViewerRequest::ShareFile { .. } | ViewerRequest::RemoveFile { .. } => {
+                    unreachable!("returned above")
+                }
+            }
+        };
+        let name = match (known, outcome) {
+            (true, _) => "duplicate",
+            (_, Outcome::Off) => "off",
+            (_, Outcome::RateLimited) => "limited",
+            (_, _) => "accepted",
         };
         diag::host_viewer_request(viewer, kind, bytes, name);
-        (outcome, name == "accepted")
+        (outcome, added)
+    }
+
+    /// Records the host's answer to a waiting link; the link as answered, or None when it was
+    /// not waiting.
+    fn answer_link(&mut self, viewer: u32, id: u32, share: bool) -> Option<HostLink> {
+        let link = self
+            .links
+            .iter_mut()
+            .find(|l| l.viewer == viewer && l.id == id && l.state == SentLinkState::Waiting)?;
+        link.state = if share { SentLinkState::Shared } else { SentLinkState::Declined };
+        diag::host_link_answered(viewer, if share { "shared" } else { "declined" });
+        Some(link.clone())
+    }
+
+    /// One viewer's newest links, oldest first, as that viewer sees them.
+    fn my_links(&self, viewer: u32) -> Vec<SentLink> {
+        let mine: Vec<&HostLink> = self.links.iter().filter(|l| l.viewer == viewer).collect();
+        mine[mine.len().saturating_sub(MAX_LINKS_LISTED)..]
+            .iter()
+            .map(|l| SentLink {
+                id: l.id,
+                url: l.url.clone(),
+                title: l.title.clone(),
+                session_only: l.session_only,
+                state: l.state,
+            })
+            .collect()
     }
 
     /// Takes one from the viewer's rate limit, shared by every kind of request.
@@ -540,6 +662,10 @@ impl Host {
                     Some(Command::AllowSuggestions(on)) => self.allow_suggestions(on),
                     Some(Command::Answer { viewer, id, answer, done }) => {
                         let _ = done.send(self.answer(viewer, id, answer));
+                    }
+                    Some(Command::AllowLinks(on)) => self.allow_links(on),
+                    Some(Command::AnswerLink { viewer, id, share, done }) => {
+                        let _ = done.send(self.answer_link(viewer, id, share));
                     }
                     Some(Command::Close) | None => break,
                 },
@@ -923,7 +1049,10 @@ impl Host {
                 send_newer(slot, SHARED_FILES_PROTOCOL_VERSION, &allowed);
                 let list = HostMessage::Files { files: self.view.shared_files() };
                 send_newer(slot, SHARED_FILES_PROTOCOL_VERSION, &list);
+                let links = HostMessage::LinksAllowed { links: self.requests.links_on };
+                send_newer(slot, LINKS_PROTOCOL_VERSION, &links);
                 self.send_mine(identity.id);
+                self.send_my_links(identity.id);
                 self.broadcast_participants();
             }
             ViewerMessage::Resend { from_output_seq } => {
@@ -947,8 +1076,11 @@ impl Host {
             return self.disconnect(connection, LeaveReason::Malformed);
         };
         let viewer = admitted.id;
-        if admitted.protocol < REQUESTS_PROTOCOL_VERSION {
-            // It said it speaks a version without requests.
+        if admitted.protocol < REQUESTS_PROTOCOL_VERSION
+            || (admitted.protocol < LINKS_PROTOCOL_VERSION
+                && matches!(request, ViewerRequest::ShareLink { .. }))
+        {
+            // It said it speaks a version without this request.
             return self.disconnect(connection, LeaveReason::Malformed);
         }
         if matches!(request, ViewerRequest::ShareFile { .. } | ViewerRequest::RemoveFile { .. }) {
@@ -966,9 +1098,16 @@ impl Host {
         if let Some(slot) = self.slots.get_mut(connection) {
             send_newer(slot, REQUESTS_PROTOCOL_VERSION, &HostMessage::Reply { id, outcome });
         }
-        if added {
-            self.send_mine(viewer);
-            self.publish_suggestions();
+        match added {
+            Some(Added::Suggestion) => {
+                self.send_mine(viewer);
+                self.publish_suggestions();
+            }
+            Some(Added::Link) => {
+                self.send_my_links(viewer);
+                self.publish_links();
+            }
+            None => {}
         }
     }
 
@@ -1026,7 +1165,7 @@ impl Host {
                 }
                 outcome
             }
-            ViewerRequest::Suggest { .. } => Outcome::Off,
+            ViewerRequest::Suggest { .. } | ViewerRequest::ShareLink { .. } => Outcome::Off,
         }
     }
 
@@ -1098,6 +1237,35 @@ impl Host {
         }
     }
 
+    fn allow_links(&mut self, on: bool) {
+        if !self.requests.allow_links(on) {
+            return;
+        }
+        let allowed = HostMessage::LinksAllowed { links: on };
+        for slot in self.slots.values_mut() {
+            send_newer(slot, LINKS_PROTOCOL_VERSION, &allowed);
+        }
+        let _ = self.events.send(SharingEvent::LinksAllowed { links: on });
+    }
+
+    /// The link as answered when it was waiting; only then is the answer recorded.
+    fn answer_link(&mut self, viewer: u32, id: u32, share: bool) -> Option<HostLink> {
+        let link = self.requests.answer_link(viewer, id, share)?;
+        self.send_my_links(viewer);
+        self.publish_links();
+        Some(link)
+    }
+
+    /// Sends a viewer its own links, wherever it is connected now.
+    fn send_my_links(&mut self, viewer: u32) {
+        let message = HostMessage::Links { mine: self.requests.my_links(viewer) };
+        for slot in self.slots.values_mut() {
+            if slot.admitted.as_ref().is_some_and(|a| a.id == viewer) {
+                send_newer(slot, LINKS_PROTOCOL_VERSION, &message);
+            }
+        }
+    }
+
     fn send_files(&mut self, connection: &str, reply: &FilesReply) {
         if let Some(slot) = self.slots.get_mut(connection) {
             let _ = slot.peer.send(Channel::Files, &files::encode_reply(reply));
@@ -1142,6 +1310,10 @@ impl Host {
         for slot in self.slots.values_mut() {
             send_newer(slot, SHARED_FILES_PROTOCOL_VERSION, &list);
         }
+    }
+
+    fn publish_links(&self) {
+        let _ = self.events.send(SharingEvent::Links(self.requests.links.clone()));
     }
 
     fn allow_suggestions(&mut self, on: bool) {
@@ -1407,13 +1579,15 @@ fn pump(
         if sink.queued() >= HIGH_WATER {
             break;
         }
-        // An older viewer cannot decode a code file's text or a shared file's step; it sees a
-        // gap, which it accepts.
-        if (admitted.protocol < WHOLE_FILES_PROTOCOL_VERSION
-            && matches!(event.entry, Entry::FileText { .. }))
-            || (admitted.protocol < SHARED_FILES_PROTOCOL_VERSION
-                && matches!(event.entry, Entry::FileShared { .. }))
-        {
+        // An older viewer cannot decode a code file's text, a shared file's step or a link; it
+        // sees a gap, which it accepts.
+        let newer = match event.entry {
+            Entry::FileText { .. } => WHOLE_FILES_PROTOCOL_VERSION,
+            Entry::FileShared { .. } => SHARED_FILES_PROTOCOL_VERSION,
+            Entry::Link { .. } | Entry::LinkRemoved { .. } => LINKS_PROTOCOL_VERSION,
+            _ => 0,
+        };
+        if admitted.protocol < newer {
             admitted.event_cursor += 1;
             continue;
         }
@@ -1692,26 +1866,26 @@ mod tests {
         assert!(requests.suggestions_allowed(), "on when the session starts");
         assert!(!requests.allow_suggestions(true), "no change");
         assert!(requests.allow_suggestions(false));
-        assert_eq!(requests.receive(1, 1, suggest("a"), from(), now), (Outcome::Off, false));
+        assert_eq!(requests.receive(1, 1, suggest("a"), from(), now), (Outcome::Off, None));
         assert!(requests.allow_suggestions(true));
         for id in 2..5 {
             assert_eq!(
                 requests.receive(1, id, suggest("a"), from(), now),
-                (Outcome::Received, true)
+                (Outcome::Received, Some(Added::Suggestion))
             );
         }
-        assert_eq!(
-            requests.receive(1, 5, suggest("a"), from(), now),
-            (Outcome::RateLimited, false)
-        );
+        assert_eq!(requests.receive(1, 5, suggest("a"), from(), now), (Outcome::RateLimited, None));
         // Another viewer has its own limit.
-        assert_eq!(requests.receive(2, 1, suggest("b"), from(), now), (Outcome::Received, true));
+        assert_eq!(
+            requests.receive(2, 1, suggest("b"), from(), now),
+            (Outcome::Received, Some(Added::Suggestion))
+        );
         // A resent request is answered again, without counting or adding it twice.
-        assert_eq!(requests.receive(1, 3, suggest("a"), from(), now), (Outcome::Received, false));
+        assert_eq!(requests.receive(1, 3, suggest("a"), from(), now), (Outcome::Received, None));
         assert_eq!(requests.mine(1).len(), 3);
         // Turned off: waiting suggestions stay.
         assert!(requests.allow_suggestions(false));
-        assert_eq!(requests.receive(2, 2, suggest("b"), from(), now), (Outcome::Off, false));
+        assert_eq!(requests.receive(2, 2, suggest("b"), from(), now), (Outcome::Off, None));
         assert_eq!(requests.suggestions.len(), 4);
     }
 
@@ -1720,6 +1894,66 @@ mod tests {
         let mut requests = Requests::new(AgentId::Terminal);
         assert!(!requests.allow_suggestions(true));
         assert!(!requests.suggestions_allowed());
+    }
+
+    fn link(url: &str) -> ViewerRequest {
+        ViewerRequest::ShareLink { url: url.into(), title: None, session_only: false }
+    }
+
+    #[test]
+    fn links_have_their_own_switch_and_share_the_limit() {
+        let now = Instant::now();
+        // On from the start, also where suggestions are not possible.
+        let mut requests = Requests::new(AgentId::Terminal);
+        let from = || "anna".to_owned();
+        assert!(!requests.allow_links(true), "no change");
+        let a = link("https://a.example/");
+        assert_eq!(
+            requests.receive(1, 1, a.clone(), from(), now),
+            (Outcome::Received, Some(Added::Link))
+        );
+        assert!(requests.allow_links(false));
+        assert_eq!(requests.receive(1, 2, a.clone(), from(), now), (Outcome::Off, None));
+        assert!(requests.allow_links(true));
+        // A suggestion's id is taken for links too: ids are unique across kinds.
+        assert_eq!(requests.receive(1, 1, suggest("a"), from(), now), (Outcome::Received, None));
+        assert_eq!(
+            requests.receive(1, 3, a.clone(), from(), now),
+            (Outcome::Received, Some(Added::Link))
+        );
+        assert_eq!(
+            requests.receive(1, 4, a.clone(), from(), now),
+            (Outcome::Received, Some(Added::Link))
+        );
+        assert_eq!(requests.receive(1, 5, a, from(), now), (Outcome::RateLimited, None));
+        assert_eq!(requests.links.len(), 3);
+        assert!(requests.suggestions.is_empty());
+    }
+
+    #[test]
+    fn a_link_is_answered_once_and_a_viewer_sees_its_newest() {
+        let now = Instant::now();
+        let mut requests = Requests::new(AgentId::ClaudeCode);
+        requests.receive(1, 1, link("https://a.example/"), "anna".into(), now);
+        requests.receive(1, 2, link("https://b.example/"), "anna".into(), now);
+        let shared = requests.answer_link(1, 1, true).unwrap();
+        assert_eq!(
+            (shared.url.as_str(), shared.state),
+            ("https://a.example/", SentLinkState::Shared)
+        );
+        assert!(requests.answer_link(1, 1, false).is_none(), "already shared");
+        assert!(requests.answer_link(2, 2, true).is_none(), "another viewer's id");
+        assert_eq!(requests.answer_link(1, 2, false).unwrap().state, SentLinkState::Declined);
+
+        // Only the newest are listed, oldest first, so the list always fits in one message.
+        for id in 3..(MAX_LINKS_LISTED as u32 + 10) {
+            let later = now + REQUEST_REFILL * id;
+            requests.receive(1, id, link("https://c.example/"), "anna".into(), later);
+        }
+        let mine = requests.my_links(1);
+        assert_eq!(mine.len(), MAX_LINKS_LISTED);
+        assert_eq!(mine.last().unwrap().id, MAX_LINKS_LISTED as u32 + 9);
+        assert!(requests.my_links(2).is_empty());
     }
 
     #[test]

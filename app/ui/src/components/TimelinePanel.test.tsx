@@ -1,6 +1,8 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BridgeContext } from '../api/bridge';
+import { fakeBridge } from '../test/helpers';
 import type { Steps, TimelineEvent } from '../api/types';
 import { buildTimeline } from '../model/timeline';
 import { TimelinePanel } from './TimelinePanel';
@@ -192,5 +194,63 @@ describe('shared files in the timeline', () => {
     expect(screen.queryByRole('button', { name: /wireframe/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Sanne shared wireframe.png/)).toHaveTextContent('(removed)');
     expect(screen.queryByText('No prompts yet')).not.toBeInTheDocument();
+  });
+});
+
+describe('shared links', () => {
+  const stamp = (n: number) => ({ outputSeq: n, at: 1_700_000_000_000 + n });
+  const link = (n: number, id: number, url: string | null): TimelineEvent => ({ ...stamp(n), kind: 'link', id, url, title: `Link ${id}`, by: 'Nick' });
+  const show = (events: TimelineEvent[], extra: Partial<Parameters<typeof TimelinePanel>[0]> = {}) =>
+    render(
+      <BridgeContext.Provider value={fakeBridge('host')}>
+        <TimelinePanel
+          model={buildTimeline(events)}
+          timelineSupported
+          agentName="Claude Code"
+          matches={new Set()}
+          current={null}
+          onJump={() => {}}
+          {...extra}
+        />
+      </BridgeContext.Provider>,
+    );
+
+  it('shows a link between two prompts at its moment, under the first', () => {
+    show([
+      { ...stamp(1), kind: 'prompt', promptId: 'p1', text: 'First' },
+      link(2, 1, 'https://staging.example.com/'),
+      { ...stamp(3), kind: 'prompt', promptId: 'p2', text: 'Second' },
+    ]);
+    const first = screen.getByRole('article', { name: 'Prompt 1' });
+    expect(within(first).getByRole('group', { name: 'Link: Link 1' })).toBeTruthy();
+    expect(within(screen.getByRole('article', { name: 'Prompt 2' })).queryByRole('group')).toBeNull();
+  });
+
+  it('shows a link shared before any prompt, and the bar above the timeline', () => {
+    show([link(1, 1, 'https://example.com/')], { linksBar: <button>Share a link</button> });
+    expect(screen.getByRole('region', { name: 'Links shared before the first prompt' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Share a link' })).toBeTruthy();
+    expect(screen.getByText('No prompts yet')).toBeTruthy();
+  });
+
+  it('shows a removed link as removed', () => {
+    show([{ ...stamp(1), kind: 'prompt', promptId: 'p1', text: 'First' }, link(2, 1, 'https://example.com/'), { ...stamp(3), kind: 'link-removed', id: 1 }]);
+    expect(screen.getByText(/The host removed this link/)).toBeTruthy();
+    expect(screen.queryByText('https://example.com/')).toBeNull();
+  });
+
+  it('lists the links of a terminal session below its note', () => {
+    show([link(1, 1, 'https://example.com/')], { timelineSupported: false, terminal: true, linksBar: <button>Share a link</button> });
+    expect(screen.getByText('A terminal session has no timeline')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Shared links' })).getByRole('group', { name: 'Link: Link 1' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Share a link' })).toBeTruthy();
+  });
+
+  it('offers the host to remove a link', async () => {
+    const onRemoveLink = vi.fn();
+    show([link(1, 1, 'https://example.com/')], { onRemoveLink });
+    await userEvent.click(screen.getByRole('button', { name: 'Remove…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove link' }));
+    expect(onRemoveLink).toHaveBeenCalledWith(1);
   });
 });
