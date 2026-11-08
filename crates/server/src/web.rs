@@ -4,7 +4,8 @@
 //! binary; without it the service serves no page, as before.
 //!
 //! Routes: `/` and `/join` give the page, `/assets/*` its files, and `/web-viewer.json` tells the
-//! host's app that the page is here and which session protocol it speaks.
+//! host's app that the page is here and which session protocol it speaks, and operators which
+//! release the service runs.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -92,7 +93,12 @@ async fn asset(State(web): State<WebViewer>, Path(path): Path<String>) -> Respon
 async fn version() -> Response {
     let mut response = (
         [(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "no-cache")],
-        format!("{{\"protocol\":{PROTOCOL_VERSION}}}"),
+        // The release this service was built from (the workspace version, which the release
+        // workflow checks against the tag), so one request tells which release runs.
+        format!(
+            "{{\"protocol\":{PROTOCOL_VERSION},\"version\":\"{}\"}}",
+            env!("CARGO_PKG_VERSION")
+        ),
     )
         .into_response();
     protect(response.headers_mut());

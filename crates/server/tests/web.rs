@@ -81,11 +81,18 @@ async fn assets_have_their_types_and_are_cached_for_good() {
 }
 
 #[tokio::test]
-async fn the_app_can_tell_the_page_is_there_and_its_protocol() {
+async fn the_app_can_tell_the_page_is_there_its_protocol_and_the_release() {
     let response = get(Some(page()), "/web-viewer.json").await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(body, format!("{{\"protocol\":{PROTOCOL_VERSION}}}").as_bytes());
+    let version = env!("CARGO_PKG_VERSION");
+    assert_eq!(
+        body,
+        format!("{{\"protocol\":{PROTOCOL_VERSION},\"version\":\"{version}\"}}").as_bytes()
+    );
+    // The health check keeps its answer: monitors may compare the body.
+    let health = get(Some(page()), "/health").await;
+    assert_eq!(to_bytes(health.into_body(), usize::MAX).await.unwrap(), "ok".as_bytes());
 }
 
 #[tokio::test]

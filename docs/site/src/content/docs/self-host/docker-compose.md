@@ -96,6 +96,12 @@ docker compose up -d --remove-orphans
 
 If you build from source, run `docker compose up -d --build --remove-orphans` after the checkout instead of pulling.
 
+Then check that the new release runs (from 1.7 on, the server states its version):
+
+```sh
+curl https://specdeck.example.com/web-viewer.json   # prints, for example: {"protocol":6,"version":"1.7.0"}
+```
+
 `--remove-orphans` matters once, when you update from 1.6 or earlier: the service was called `signalling` then, and is `server` now, so it stops the old container.
 
 Restarting the server does not end sessions that are already connected; new viewers can join again once it is back.
