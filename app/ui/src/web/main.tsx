@@ -7,9 +7,11 @@ import { BridgeContext } from '../api/bridge';
 import { applyAppearance } from '../appearance';
 import '../styles.css';
 import '../highlight.css';
+import '../links.css';
 import { storedAppearance, webBridge } from './bridge';
 import type { ControlUpdate, Request, StreamUpdate, ViewerCore } from './connection';
 import { WebApp, takeHashCode } from './WebApp';
+import { checkLink } from '../model/links';
 
 /** This page's own sharing service: `signal` next to the page, over WebSocket. */
 function ownService(): string {
@@ -31,8 +33,15 @@ function core(code: string): ViewerCore {
     onStream: (bytes) => viewer.onStream(bytes) as StreamUpdate,
     admittedOnce: () => viewer.admittedOnce(),
     suggest: (text) => viewer.suggest(text) as Request,
+    sendLink: (url, title, sessionOnly) => viewer.sendLink(url, title, sessionOnly) as Request,
     unansweredRequests: () => viewer.unansweredRequests() as Request[],
   };
+}
+
+/** A link in the form the page may open: the host's check, by the browser's own URL parser. */
+function openableLink(url: string): string | undefined {
+  const checked = checkLink(url);
+  return 'url' in checked ? checked.url : undefined;
 }
 
 function storage(): Storage | null {
@@ -49,7 +58,7 @@ document.documentElement.dataset.platform = 'web';
 applyAppearance(storedAppearance(storage()));
 void init().then(() => {
   const service = ownService();
-  const bridge = webBridge({ service, core, parseJoinLink, storage: storage() });
+  const bridge = webBridge({ service, core, parseJoinLink, openableLink, storage: storage() });
   bridge.onAppearance(applyAppearance);
   createRoot(document.getElementById('root')!).render(
     <StrictMode>

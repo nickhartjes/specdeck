@@ -4,6 +4,7 @@ mod agent;
 pub mod control;
 pub mod frames;
 pub mod invite;
+pub mod links;
 pub mod service;
 pub mod signal_auth;
 pub mod signalling;

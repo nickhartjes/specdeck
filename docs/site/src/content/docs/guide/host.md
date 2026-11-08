@@ -49,11 +49,25 @@ SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a com
 | Limit the number of viewers | Select the avatars and set **Max viewers** (1 to 20). Lowering it never disconnects anyone already watching |
 | Let viewers open whole code files | Select the **sharing settings** button (sliders) and set **Code viewers can open**. It applies to changes Claude makes from then on |
 | Let viewers suggest prompts, or stop them | Select the **sharing settings** button and switch **Viewers can suggest prompts**. Nothing a viewer suggests reaches the agent until you send it |
+| Share a link | Select **Share a link** above the timeline. See [Share a link](#share-a-link) |
+| Let viewers send links, or stop them | Select the **sharing settings** button and switch **Viewers can share links**. You see each link first |
 | End the session for everyone | Select **End session** and confirm. The agent or shell stops and the invite code stops working |
 
 The status next to the folder name shows what the agent is doing: **working**, **waiting for input**, or **exited**. For omp, Codex, Grok and pi it shows working or waiting when the agent reports it, and **Live** otherwise; OpenCode always shows **Live**, because its activity is not shared; a terminal session also shows **Live**, and **Shell exited** once you exit the shell. When Claude Code asks your permission, for example to run a command, the status shows **waiting** and the timeline shows the question, so viewers see why it paused.
 
 If you set up your own Claude Code status line, it keeps showing in the terminal. SpecDeck reads the same figures from it for the bar at the bottom of the window, which everyone in the session sees, including your 5-hour and 7-day limits.
+
+## Share a link
+
+Share a preview deploy, staging, a ticket or a live whiteboard with everyone in the session. Select **Share a link** above the timeline, paste the address, and add a title if you like. Everyone sees a card with the title, the site, the address, and who shared it when, in the timeline at that moment, so people who join later find it too. It works in every session, also a terminal session, where the links are listed under the timeline's note.
+
+- **It opens in each person's own browser**, with their own logins, when they select **Open in your browser**. SpecDeck only carries the address: it never loads the page, its title or a preview, and nothing opens by itself.
+- **Only web addresses others can reach.** Links start with `https://`, or `http://` for an address on your network. Links to your own computer (`localhost`, `127.0.0.1` and the like) are refused, because viewers can't reach it; opening your app to viewers is not available yet. Addresses with a user name or password in them are refused too. SpecDeck checks the address as written; it does not look up where a name points.
+- **For this session only.** Some links carry their key after `#`, such as an Excalidraw room (`https://excalidraw.com/#room=…,<key>`): anyone with the link can join the room. **For this session only** is on for such links, and you can turn it off before sharing. The card then hides the part after `#`, and copying the link warns that it holds a key. Once SpecDeck can save a recap of a session, such links will be left out of it. It can't be changed once the link is shared.
+- **Links from viewers.** Viewers can send you a link to share. It waits above the timeline, with who sent it and the whole address, until you select **Share** or **Decline**; nobody else sees it before you share it. Turn this off with **Viewers can share links** in the sharing settings; links already waiting stay.
+- **Removing a link.** Select **Remove…** on its card. Its card then says you removed it, and people who join later never get the address. People who already saw it still have it, so for a link with a key, also close the room or change its key where you made it.
+
+**Drawing together.** Start a live collaboration room on [excalidraw.com](https://excalidraw.com) and share its link. Everyone draws in their own browser, and Excalidraw encrypts the drawing end to end; SpecDeck never sees it.
 
 ## Closing the window
 

@@ -14,14 +14,16 @@ use specdeck_core::environment::Environment;
 use specdeck_core::peer::LinkState;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession};
-use specdeck_core::sharing::{Answer, ServiceState, Sharing, SharingConfig, SharingEvent};
+use specdeck_core::sharing::{
+    Answer, HostLink, ServiceState, Sharing, SharingConfig, SharingEvent,
+};
 use specdeck_core::viewer::{
     CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerPhase, ViewerSession,
 };
 use specdeck_protocol::AgentId;
 use specdeck_protocol::control::{
-    MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant, RefusalReason,
-    SuggestionState,
+    LINKS_PROTOCOL_VERSION, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
+    RefusalReason, SentLinkState, SuggestionState,
 };
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
@@ -354,7 +356,8 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     hosted.session.input(b"later\r").unwrap();
 
     // The older viewer keeps following the session, admitted once and never told anything
-    // its version cannot read. Version 3 reads requests, so it is told about suggestions.
+    // its version cannot read. Version 4 reads requests and whole files, so it is told about
+    // suggestions and the whole-files setting, but not about links.
     let mut newer_messages = Vec::new();
     tokio::time::timeout(WAIT, async {
         loop {
@@ -367,7 +370,8 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
                         }
                     }
                 }
-                ViewerEvent::Shared { .. }
+                ViewerEvent::LinksAllowed { .. }
+                | ViewerEvent::Links(_)
                 | ViewerEvent::Reconnecting
                 | ViewerEvent::Welcome { .. } => newer_messages.push(event.clone()),
                 _ => {}
@@ -405,13 +409,12 @@ fn is_file_text(event: &ViewerEvent) -> bool {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn whole_files_reach_only_viewers_that_can_read_them() {
+async fn whole_files_reach_viewers_and_late_joiners() {
     let url = signalling().await;
     let mut hosted = host_agent(&url, "nick", AgentId::ClaudeCode, "claude", EDIT_AGENT).await;
     let code = ready(&mut hosted.events).await;
-    let (_older, mut older) = join_speaking(&url, &code, "anna", MIN_VIEWER_PROTOCOL_VERSION);
-    let mut seen_older = Seen::default();
-    until(&mut older, &mut seen_older, |seen, _| seen.text.contains("ready")).await;
+    // Every viewer the host admits reads whole files since version 4 became the oldest, so the
+    // host's check for older viewers has no viewer left to test it with.
     let (_newer, mut newer) = join(&url, &code, "bob");
     let mut seen_newer = Seen::default();
     let shared =
@@ -442,36 +445,6 @@ async fn whole_files_reach_only_viewers_that_can_read_them() {
             text: Some("fn a() {}\n".into()),
         }
     );
-
-    // The older viewer gets the change, never the text or the setting, and stays connected.
-    hosted.session.input(b"later\r").unwrap();
-    let mut changes = 0;
-    tokio::time::timeout(WAIT, async {
-        loop {
-            let event = older.recv().await.expect("viewer stopped");
-            assert!(!is_file_text(&event), "a version 3 viewer got a file's text");
-            assert!(!matches!(event, ViewerEvent::Shared { .. }), "a version 3 viewer got Shared");
-            assert_ne!(event, ViewerEvent::Reconnecting, "the older viewer dropped");
-            match &event {
-                ViewerEvent::Timeline { event, .. } => {
-                    changes += usize::from(matches!(event.entry, Entry::FileChange { .. }));
-                }
-                ViewerEvent::Records(records) => {
-                    for record in records {
-                        if let Record::Output { bytes, .. } = record {
-                            seen_older.text.push_str(&String::from_utf8_lossy(bytes));
-                        }
-                    }
-                }
-                _ => {}
-            }
-            if seen_older.text.contains("got:later") && changes == 1 {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("the older viewer stopped following");
 
     // A viewer joining later learns the current setting and gets the text from the history.
     let (_late, mut late) = join(&url, &code, "carl");
@@ -1112,4 +1085,242 @@ async fn a_large_screenshot_reaches_viewers_made_smaller() {
         seen.text.contains("got:after")
     })
     .await;
+}
+
+fn link_entry(event: &ViewerEvent) -> Option<&Entry> {
+    match event {
+        ViewerEvent::Timeline { event, .. }
+            if matches!(event.entry, Entry::Link { .. } | Entry::LinkRemoved { .. }) =>
+        {
+            Some(&event.entry)
+        }
+        _ => None,
+    }
+}
+
+/// Waits for the host's list of viewers' links to satisfy `done`.
+async fn host_links(
+    events: &mut UnboundedReceiver<SharingEvent>,
+    done: impl Fn(&[HostLink]) -> bool,
+) -> Vec<HostLink> {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(SharingEvent::Links(list)) = events.recv().await
+                && done(&list)
+            {
+                return list;
+            }
+        }
+    })
+    .await
+    .expect("the host's links did not change as expected")
+}
+
+const ROOM: &str = "https://excalidraw.com/#room=5c1e2a9b,Q3h9vX2m";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn links_reach_only_viewers_that_can_read_them() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let older_version = LINKS_PROTOCOL_VERSION - 1;
+    assert!(older_version >= MIN_VIEWER_PROTOCOL_VERSION, "the previous version is admitted");
+    let (_older, mut older) = join_speaking(&url, &code, "anna", older_version);
+    let mut seen_older = Seen::default();
+    until(&mut older, &mut seen_older, |seen, _| seen.text.contains("ready")).await;
+    let (_newer, mut newer) = join(&url, &code, "bob");
+    let mut seen_newer = Seen::default();
+    let allowed =
+        until(&mut newer, &mut seen_newer, |_, e| matches!(e, ViewerEvent::LinksAllowed { .. }))
+            .await;
+    assert_eq!(allowed, ViewerEvent::LinksAllowed { links: true }, "on when a session starts");
+
+    assert_eq!(hosted.session.share_link(ROOM, Some("Draw"), "nick", true), Ok(1));
+    let shared = until(&mut newer, &mut seen_newer, |_, e| link_entry(e).is_some()).await;
+    assert_eq!(
+        link_entry(&shared),
+        Some(&Entry::Link {
+            id: 1,
+            url: Some(ROOM.into()),
+            title: Some("Draw".into()),
+            by: "nick".into(),
+            session_only: true,
+        })
+    );
+    hosted.session.remove_link(1);
+    let removed = until(&mut newer, &mut seen_newer, |_, e| link_entry(e).is_some()).await;
+    assert_eq!(link_entry(&removed), Some(&Entry::LinkRemoved { id: 1 }));
+
+    // The older viewer gets neither, nor the switch, and keeps following without reconnecting.
+    hosted.session.input(b"later\r").unwrap();
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let event = older.recv().await.expect("viewer stopped");
+            assert!(link_entry(&event).is_none(), "a version 4 viewer got {event:?}");
+            assert!(
+                !matches!(event, ViewerEvent::LinksAllowed { .. } | ViewerEvent::Links(_)),
+                "a version 4 viewer got {event:?}"
+            );
+            assert_ne!(event, ViewerEvent::Reconnecting, "the older viewer dropped");
+            if let ViewerEvent::Records(records) = &event {
+                for record in records {
+                    if let Record::Output { bytes, .. } = record {
+                        seen_older.text.push_str(&String::from_utf8_lossy(bytes));
+                    }
+                }
+            }
+            if seen_older.text.contains("got:later") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the older viewer stopped following");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn viewers_links_pass_the_gate_and_reach_others_only_when_the_host_shares_them() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut anna_events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut anna_events, &mut seen, |_, e| *e == ViewerEvent::LinksAllowed { links: true })
+        .await;
+    let (_bob, mut bob_events) = join(&url, &code, "bob");
+    let mut seen_bob = Seen::default();
+    until(&mut bob_events, &mut seen_bob, |seen, _| seen.welcome.is_some()).await;
+
+    // Off: the host does not get it.
+    hosted.sharing.allow_links(false);
+    until(&mut anna_events, &mut seen, |_, e| *e == ViewerEvent::LinksAllowed { links: false })
+        .await;
+    tokio::time::timeout(WAIT, async {
+        while !matches!(
+            hosted.events.recv().await,
+            Some(SharingEvent::LinksAllowed { links: false })
+        ) {}
+    })
+    .await
+    .expect("the host's window is not told");
+    anna.send_link("https://example.com/off".into(), None, false);
+    let reply = until(&mut anna_events, &mut seen, |_, e| is_reply(e).is_some()).await;
+    assert_eq!(is_reply(&reply), Some(Outcome::Off));
+
+    // One bucket for every kind: the fourth request in a row waits.
+    hosted.sharing.allow_links(true);
+    until(&mut anna_events, &mut seen, |_, e| *e == ViewerEvent::LinksAllowed { links: true })
+        .await;
+    anna.send_link("https://staging.example.com/s/demo".into(), Some("Staging".into()), false);
+    anna.suggest("one".into());
+    anna.send_link(ROOM.into(), None, true);
+    anna.send_link("https://example.com/fourth".into(), None, false);
+    let mut outcomes = Vec::new();
+    while outcomes.len() < 4 {
+        let reply = until(&mut anna_events, &mut seen, |_, e| is_reply(e).is_some()).await;
+        outcomes.push(is_reply(&reply).unwrap());
+    }
+    assert_eq!(
+        outcomes,
+        [Outcome::Received, Outcome::Received, Outcome::Received, Outcome::RateLimited]
+    );
+    let list = host_links(&mut hosted.events, |list| list.len() == 2).await;
+    assert!(list.iter().all(|l| l.from == "anna" && l.state == SentLinkState::Waiting));
+    assert_eq!(list[0].title.as_deref(), Some("Staging"));
+    assert!(list[1].session_only);
+
+    // The host shares the first and declines the second; a second answer does nothing.
+    let staging = hosted.sharing.answer_link(list[0].viewer, list[0].id, true).await.unwrap();
+    let staging = staging.expect("it was waiting");
+    assert_eq!(staging.state, SentLinkState::Shared);
+    assert!(hosted.sharing.answer_link(list[0].viewer, list[0].id, false).await.unwrap().is_none());
+    let room = hosted.sharing.answer_link(list[1].viewer, list[1].id, false).await.unwrap();
+    assert_eq!(room.unwrap().state, SentLinkState::Declined);
+    let id = hosted
+        .session
+        .share_link(&staging.url, staging.title.as_deref(), &staging.from, staging.session_only)
+        .unwrap();
+    let event = until(
+        &mut anna_events,
+        &mut seen,
+        |_, e| matches!(e, ViewerEvent::Links(mine) if mine.iter().all(|l| l.state != SentLinkState::Waiting)),
+    )
+    .await;
+    let ViewerEvent::Links(mine) = event else { unreachable!() };
+    let states: Vec<_> = mine.iter().map(|l| l.state).collect();
+    assert_eq!(states, [SentLinkState::Shared, SentLinkState::Declined]);
+
+    // Bob sees the shared link, by Anna, and never hears of the declined one.
+    let card = until(&mut bob_events, &mut seen_bob, |_, e| link_entry(e).is_some()).await;
+    assert_eq!(
+        link_entry(&card),
+        Some(&Entry::Link {
+            id,
+            url: Some("https://staging.example.com/s/demo".into()),
+            title: Some("Staging".into()),
+            by: "anna".into(),
+            session_only: false,
+        })
+    );
+    hosted.session.input(b"sync\r").unwrap();
+    until(&mut bob_events, &mut seen_bob, |seen, event| {
+        assert!(!format!("{event:?}").contains("Q3h9vX2m"), "bob heard of the declined link");
+        if let ViewerEvent::Links(mine) = event {
+            assert!(mine.is_empty(), "{mine:?}");
+        }
+        seen.text.contains("got:sync")
+    })
+    .await;
+
+    // On her return Anna is sent her own links again.
+    anna.interrupt(Duration::from_millis(100));
+    until(
+        &mut anna_events,
+        &mut seen,
+        |_, e| matches!(e, ViewerEvent::Links(mine) if mine.len() == 2),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_joiner_never_receives_a_removed_links_address() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    hosted.session.share_link(ROOM, Some("Draw"), "nick", true).unwrap();
+    hosted.session.share_link("https://example.com/kept", None, "nick", false).unwrap();
+    hosted.session.remove_link(1);
+    hosted.session.input(b"after\r").unwrap();
+
+    let (_late, mut late) = join(&url, &code, "carl");
+    let mut seen = Seen::default();
+    let links = std::cell::RefCell::new(Vec::new());
+    until(&mut late, &mut seen, |seen, event| {
+        assert!(!format!("{event:?}").contains("Q3h9vX2m"), "the address reached a late joiner");
+        if let Some(entry) = link_entry(event) {
+            links.borrow_mut().push(entry.clone());
+        }
+        links.borrow().len() == 3 && seen.text.contains("got:after")
+    })
+    .await;
+    assert_eq!(
+        links.into_inner(),
+        [
+            Entry::Link {
+                id: 1,
+                url: None,
+                title: Some("Draw".into()),
+                by: "nick".into(),
+                session_only: true,
+            },
+            Entry::Link {
+                id: 2,
+                url: Some("https://example.com/kept".into()),
+                title: None,
+                by: "nick".into(),
+                session_only: false,
+            },
+            Entry::LinkRemoved { id: 1 },
+        ]
+    );
 }

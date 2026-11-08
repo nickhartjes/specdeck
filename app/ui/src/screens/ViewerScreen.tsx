@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Eye, LogOut, WifiOff } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, SentLink, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
 import { SuggestPanel } from '../components/SuggestPanel';
+import { LinksBar } from '../components/LinksBar';
 import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
 import { FirstJoinDialog } from '../components/FirstJoinDialog';
@@ -71,11 +72,23 @@ interface State {
   sent: { id: number; outcome: RequestOutcome | null } | null;
   /** Whether the host shares whole code files; a host of the previous release never does. */
   wholeFiles: boolean;
+  /** Whether the host lets viewers send links; null while the host has not said, as older hosts never do. */
+  linksAllowed: boolean | null;
+  /** This viewer's links and what became of each. */
+  myLinks: SentLink[];
+  /** A link is being sent: the next request numbered is it. */
+  linkSending: boolean;
+  /** The latest link sent, and the host's reply once it came. */
+  linkSent: { id: number; outcome: RequestOutcome | null } | null;
 }
 
 const initial: State = {
   suggestionsAllowed: null,
   wholeFiles: false,
+  linksAllowed: null,
+  myLinks: [],
+  linkSending: false,
+  linkSent: null,
   mine: [],
   sent: null,
   phase: 'joining',
@@ -89,7 +102,7 @@ const initial: State = {
   request: null,
 };
 
-export function viewerReducer(state: State, event: ViewEvent): State {
+export function viewerReducer(state: State, event: ViewEvent | { type: 'link-sending' | 'link-refused' }): State {
   switch (event.type) {
     case 'joined':
       return { ...state, phase: 'live', viewerId: event.viewerId, agent: event.agent, timelineSupported: event.timelineSupported };
@@ -105,14 +118,26 @@ export function viewerReducer(state: State, event: ViewEvent): State {
       return { ...state, status: event.status, request: nextRequest(state.request, event) };
     case 'allowed':
       return { ...state, suggestionsAllowed: event.suggestions };
+    case 'link-sending':
+      return { ...state, linkSending: true };
+    // Refused before it was numbered: the dialog says why.
+    case 'link-refused':
+      return { ...state, linkSending: false };
     case 'request-sent':
-      return { ...state, sent: { id: event.id, outcome: null } };
+      return state.linkSending
+        ? { ...state, linkSending: false, linkSent: { id: event.id, outcome: null } }
+        : { ...state, sent: { id: event.id, outcome: null } };
     case 'reply':
+      if (state.linkSent?.id === event.id) return { ...state, linkSent: { id: event.id, outcome: event.outcome } };
       return state.sent?.id === event.id ? { ...state, sent: { id: event.id, outcome: event.outcome } } : state;
     case 'suggestions':
       return { ...state, mine: event.mine };
     case 'shared':
       return { ...state, wholeFiles: event.wholeFiles };
+    case 'links-allowed':
+      return { ...state, linksAllowed: event.links };
+    case 'links':
+      return { ...state, myLinks: event.mine };
     case 'ended':
       return { ...state, phase: 'ended', ended: event.reason };
   }
@@ -248,6 +273,27 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
           timelineSupported={state.timelineSupported}
           timeline={state.timeline}
           wholeFiles={state.wholeFiles}
+          linksBar={
+            // Hosts that can't take links never say whether they allow them.
+            state.linksAllowed !== null && state.phase !== 'ended' ? (
+              <LinksBar
+                host={false}
+                hostName={host?.label ?? 'The host'}
+                allowed={state.linksAllowed}
+                mine={state.myLinks}
+                outcome={state.linkSent?.outcome ?? null}
+                onShare={async (url, title, sessionOnly) => {
+                  dispatch({ type: 'link-sending' });
+                  try {
+                    await bridge.sendLink(url, title, sessionOnly);
+                  } catch (error) {
+                    dispatch({ type: 'link-refused' });
+                    throw error;
+                  }
+                }}
+              />
+            ) : undefined
+          }
           prompts={
             // Hosts that take no suggestions never say whether they allow them.
             state.suggestionsAllowed !== null && !terminal && state.phase !== 'ended'

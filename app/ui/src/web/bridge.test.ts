@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ViewerCore } from './connection';
-import { STORAGE_KEYS, storedAppearance, webBridge, type WebBridgeOptions } from './bridge';
+import { STORAGE_KEYS, openSharedLink, recordLink, storedAppearance, webBridge, type WebBridgeOptions } from './bridge';
 import { choose } from '../model/layout';
 
 const SERVICE = 'wss://specdeck.example.com/signal';
@@ -37,6 +37,7 @@ function bridge(options: Partial<WebBridgeOptions> = {}) {
         : link === 'https://other.example.com/join#7K2M-9QXH-4TPA'
           ? { code: '7K2M-9QXH-4TPA', service: 'wss://other.example.com/signal' }
           : undefined,
+    openableLink: (url) => (url.startsWith('https://') ? url : undefined),
     storage: memoryStorage(),
     ...options,
   });
@@ -117,6 +118,31 @@ describe('web bridge', () => {
     await expect(page.suggestPrompt('Add a test')).rejects.toThrow('not in a session');
     await expect(page.hostAllowSuggestions(true)).rejects.toThrow('only watch');
     await expect(page.hostAnswerSuggestion(1, 1, 'x')).rejects.toThrow('only watch');
+  });
+
+  it('sends links only while in a session, and never shares or removes them', async () => {
+    const page = bridge();
+    await expect(page.sendLink('https://example.com/', null, false)).rejects.toThrow('not in a session');
+    await expect(page.hostShareLink('https://example.com/', null, false)).rejects.toThrow('only watch');
+    await expect(page.hostAnswerLink(1, 1, true)).rejects.toThrow('only watch');
+    await expect(page.hostRemoveLink(1)).rejects.toThrow('only watch');
+    await expect(page.openLink(1)).rejects.toThrow('not in this session');
+  });
+
+  it('opens a shared link in a new tab without access back, and only after the check', () => {
+    const links = new Map<number, string>();
+    const at = { outputSeq: 0, at: 0 };
+    recordLink(links, { type: 'timeline', event: { ...at, kind: 'link', id: 1, url: 'https://example.com/', by: 'Nick' } });
+    recordLink(links, { type: 'timeline', event: { ...at, kind: 'link', id: 2, url: 'file:///etc/passwd', by: 'Nick' } });
+    recordLink(links, { type: 'timeline', event: { ...at, kind: 'link', id: 3, url: 'https://gone.example/', by: 'Nick' } });
+    recordLink(links, { type: 'timeline', event: { ...at, kind: 'link-removed', id: 3 } });
+    const open = vi.fn();
+    const check = (url: string) => (url.startsWith('https://') ? url : undefined);
+    openSharedLink(links, 1, check, open);
+    expect(open).toHaveBeenCalledWith('https://example.com/', '_blank', 'noopener,noreferrer');
+    expect(() => openSharedLink(links, 2, check, open)).toThrow('can’t be opened');
+    expect(() => openSharedLink(links, 3, check, open)).toThrow('not in this session');
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it('can only watch', async () => {

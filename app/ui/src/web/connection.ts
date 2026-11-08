@@ -4,7 +4,7 @@
 // RTCPeerConnection. What each message means is decided by `ViewerCore`, the shared Rust code
 // compiled to WebAssembly (crates/web), so verification and ordering match the app.
 
-import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, Suggestion, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, SentLink, Suggestion, TimelineEvent, ViewEvent } from '../api/types';
 
 /** How long joining may take, and one reconnection attempt; as `CONNECT_TIMEOUT` in the app. */
 export const CONNECT_TIMEOUT_MS = 20_000;
@@ -24,6 +24,8 @@ export type ControlUpdate =
   | { type: 'reply'; id: number; outcome: RequestOutcome }
   | { type: 'suggestions'; mine: Suggestion[] }
   | { type: 'shared'; wholeFiles: boolean }
+  | { type: 'links-allowed'; links: boolean }
+  | { type: 'links'; mine: SentLink[] }
   | { type: 'retry' };
 
 /** A numbered request and the control message that carries it. */
@@ -52,6 +54,8 @@ export interface ViewerCore {
   admittedOnce(): boolean;
   /** Throws for text the host would refuse. */
   suggest(text: string): Request;
+  /** Throws for a link the host would refuse; sends it in the form the host requires. */
+  sendLink(url: string, title: string | null, sessionOnly: boolean): Request;
   /** Requests the host has not answered, to send once admitted. */
   unansweredRequests(): Request[];
 }
@@ -141,6 +145,13 @@ export class Connection {
    */
   suggest(text: string) {
     const request = this.options.core.suggest(text.replace(/\r\n/g, '\n'));
+    this.options.onEvent({ type: 'request-sent', id: request.id });
+    this.sendControl?.(new Uint8Array(request.message));
+  }
+
+  /** Sends the host a link to share, as `suggest` does. Throws for a link the host would refuse. */
+  sendLink(url: string, title: string | null, sessionOnly: boolean) {
+    const request = this.options.core.sendLink(url, title, sessionOnly);
     this.options.onEvent({ type: 'request-sent', id: request.id });
     this.sendControl?.(new Uint8Array(request.message));
   }
@@ -292,6 +303,12 @@ export class Connection {
               break;
             case 'shared':
               onEvent({ type: 'shared', wholeFiles: update.wholeFiles });
+              break;
+            case 'links-allowed':
+              onEvent({ type: 'links-allowed', links: update.links });
+              break;
+            case 'links':
+              onEvent({ type: 'links', mine: update.mine });
               break;
             case 'participants':
               onEvent({ type: 'participants', participants: update.participants });

@@ -59,12 +59,28 @@ export interface NoticeItem {
   outputSeq: number;
 }
 
+/** A link shared with everyone, at the moment it was shared (`shared-links`). */
+export interface LinkItem {
+  kind: 'link';
+  id: string;
+  /** The host's number for it. */
+  linkId: number;
+  /** Null once the host removed it. */
+  url: string | null;
+  title?: string;
+  /** Who shared it, by name. */
+  by: string;
+  sessionOnly: boolean;
+  at: number;
+  outputSeq: number;
+}
+
 export interface Turn {
   promptId: string;
   prompt: string;
   at: number;
   outputSeq: number;
-  items: (TextItem | ToolItem | NoticeItem)[];
+  items: (TextItem | ToolItem | NoticeItem | LinkItem)[];
   /** The final response, once the turn is over. */
   response: string | null;
   /** Tokens the agent used for this prompt so far, once usage is known. */
@@ -85,6 +101,10 @@ export interface TouchedFile {
 
 export interface TimelineModel {
   turns: Turn[];
+  /** Every shared link, in order; also in the turns they were shared in. */
+  links: LinkItem[];
+  /** Links shared before the first prompt, which belong to no turn. */
+  earlyLinks: LinkItem[];
   files: TouchedFile[];
   /** Why the timeline is unavailable right now, or null. */
   unavailable: string | null;
@@ -101,6 +121,9 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
   const toolTurns = new Map<string, Turn>();
   const texts = new Map<string, TextItem>();
   const files = new Map<string, TouchedFile>();
+  const links: LinkItem[] = [];
+  const earlyLinks: LinkItem[] = [];
+  const linkTurns = new Map<number, Turn>();
   let unavailable: string | null = null;
   // The session total when each turn started; a turn's tokens are what was added since.
   let sessionTotal = 0;
@@ -231,6 +254,37 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
         turn?.items.push({ kind: 'notice', id: `notice-${event.at}-${turn.items.length}`, text: withNote(event.message, event.truncated), outputSeq: event.outputSeq });
         break;
       }
+      case 'link': {
+        const link: LinkItem = {
+          kind: 'link',
+          id: `link-${event.id}`,
+          linkId: event.id,
+          url: event.url,
+          title: event.title,
+          by: event.by,
+          sessionOnly: event.sessionOnly ?? false,
+          at: event.at,
+          outputSeq: event.outputSeq,
+        };
+        links.push(link);
+        // Under the prompt it was shared during; before any prompt, on its own.
+        const turn = turns.at(-1);
+        if (turn) {
+          turn.items.push(link);
+          turn.revision++;
+          linkTurns.set(event.id, turn);
+        } else {
+          earlyLinks.push(link);
+        }
+        break;
+      }
+      case 'link-removed': {
+        const link = links.find((l) => l.linkId === event.id);
+        if (link) link.url = null;
+        const turn = linkTurns.get(event.id);
+        if (turn) turn.revision++;
+        break;
+      }
       case 'usage-unavailable':
       case 'status-line':
       case 'git':
@@ -245,7 +299,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
   const sorted = [...files.values()].sort(
     (a, b) => Number(a.readOnly) - Number(b.readOnly) || a.path.localeCompare(b.path),
   );
-  return { turns, files: sorted, unavailable };
+  return { turns, links, earlyLinks, files: sorted, unavailable };
 }
 
 /** A short line describing what a tool call does, for its timeline entry. */
@@ -281,7 +335,10 @@ export function toolSummary(item: ToolItem): string {
 export function turnText(turn: Turn): string {
   const parts = [turn.prompt, turn.response ?? ''];
   for (const item of turn.items) {
-    parts.push(item.kind === 'tool' ? `${item.toolName} ${toolSummary(item)}` : item.text);
+    if (item.kind === 'tool') parts.push(`${item.toolName} ${toolSummary(item)}`);
+    // A link's key after # is not searched, as it is not shown.
+    else if (item.kind === 'link') parts.push(`${item.title ?? ''} ${item.url && !item.sessionOnly ? item.url : ''}`);
+    else parts.push(item.text);
   }
   return parts.join('\n');
 }

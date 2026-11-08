@@ -16,9 +16,11 @@ use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession, SessionEvent};
 use specdeck_core::sharing::{
-    Answer, HostSuggestion, MAX_VIEWERS, Sharing, SharingConfig, SharingEvent, SharingStatus,
+    Answer, HostLink, HostSuggestion, MAX_VIEWERS, Sharing, SharingConfig, SharingEvent,
+    SharingStatus,
 };
-use specdeck_protocol::control::{Participant, Role};
+use specdeck_protocol::control::{Participant, Role, SentLinkState};
+use specdeck_protocol::links::{LinkRefusal, MAX_LINK_TITLE_CHARS};
 use specdeck_protocol::timeline::{Entry, TimelineEvent};
 use specdeck_protocol::{AgentId, AgentStatus};
 
@@ -67,6 +69,11 @@ pub enum HostEvent {
         whole_files_possible: bool,
         /// Whether viewers can open whole code files.
         whole_files: bool,
+        /// Links can be shared; absent from sessions of the release before `shared-links`.
+        links_possible: bool,
+        links_allowed: bool,
+        /// Every link viewers sent in the session, oldest first.
+        viewer_links: Vec<HostLink>,
     },
     Sharing {
         state: SharingState,
@@ -100,6 +107,14 @@ pub enum HostEvent {
     Shared {
         whole_files: bool,
     },
+    /// Whether viewers may send links, after the host changed it.
+    LinksAllowed {
+        links: bool,
+    },
+    /// Every link viewers sent in the session, oldest first, on every change.
+    ViewerLinks {
+        links: Vec<HostLink>,
+    },
 }
 
 /// What the tray shows of the session; sent whenever one of these changes.
@@ -124,6 +139,25 @@ pub enum HostNotice {
     },
     /// A viewer suggested a prompt; the viewer's name.
     Suggestion(String),
+}
+
+/// Why the host's link was not shared, in plain words. The window checks first, so the host
+/// rarely sees these.
+fn refusal(refusal: LinkRefusal) -> String {
+    match refusal {
+        LinkRefusal::OwnMachine => "Viewers can't reach your computer, so links to localhost or \
+            127.0.0.1 can't be shared. Opening your app to viewers is not available yet."
+            .into(),
+        LinkRefusal::NotWeb => "Only web addresses starting with https:// can be shared.".into(),
+        LinkRefusal::Credentials => {
+            "Addresses with a user name or password can't be shared.".into()
+        }
+        LinkRefusal::TooLong => "That address is too long to share.".into(),
+        LinkRefusal::Malformed => "Paste a whole address, starting with https://.".into(),
+        LinkRefusal::Title => {
+            format!("A title is one line of at most {MAX_LINK_TITLE_CHARS} characters.")
+        }
+    }
 }
 
 /// Between typing a sent suggestion and submitting it.
@@ -180,6 +214,8 @@ struct Ui {
     web_viewer: bool,
     suggestions_allowed: bool,
     suggestions: Vec<HostSuggestion>,
+    links_allowed: bool,
+    viewer_links: Vec<HostLink>,
     events: Option<EventSink>,
     observer: Observer,
     last_summary: Option<Summary>,
@@ -234,6 +270,8 @@ pub struct HostRuntime {
     pub folder: PathBuf,
     /// The sharing service, fixed for the session.
     service: String,
+    /// The host's name, for links shared before the participant list arrives.
+    username: String,
     session: HostSession,
     sharing: Sharing,
     ui: Arc<Mutex<Ui>>,
@@ -277,7 +315,7 @@ impl HostRuntime {
             session.view(),
             SharingConfig {
                 signalling_url: options.signalling_url.clone(),
-                username: options.username,
+                username: options.username.clone(),
                 peer: options.peer,
                 viewer_limit: MAX_VIEWERS,
             },
@@ -293,6 +331,8 @@ impl HostRuntime {
             // As sharing starts them: on, except in terminal sessions.
             suggestions_allowed: options.agent != AgentId::Terminal,
             suggestions: Vec::new(),
+            links_allowed: true,
+            viewer_links: Vec::new(),
             events: None,
             observer,
             last_summary: None,
@@ -366,6 +406,16 @@ impl HostRuntime {
                         Some(SharingEvent::Shared { whole_files }) => {
                             shared.lock().unwrap().send(HostEvent::Shared { whole_files });
                         }
+                        Some(SharingEvent::LinksAllowed { links }) => {
+                            let mut ui = shared.lock().unwrap();
+                            ui.links_allowed = links;
+                            ui.send(HostEvent::LinksAllowed { links });
+                        }
+                        Some(SharingEvent::Links(links)) => {
+                            let mut ui = shared.lock().unwrap();
+                            ui.viewer_links = links.clone();
+                            ui.send(HostEvent::ViewerLinks { links });
+                        }
                         Some(SharingEvent::Suggestions(suggestions)) => {
                             let mut ui = shared.lock().unwrap();
                             // A new one is always added at the end.
@@ -400,6 +450,7 @@ impl HostRuntime {
             agent: options.agent,
             folder: options.folder,
             service: options.signalling_url,
+            username: options.username,
             session,
             sharing,
             ui,
@@ -445,6 +496,9 @@ impl HostRuntime {
                 suggestions: ui.suggestions.clone(),
                 whole_files_possible: self.agent.has_timeline(),
                 whole_files: self.session.whole_files(),
+                links_possible: true,
+                links_allowed: ui.links_allowed,
+                viewer_links: ui.viewer_links.clone(),
             };
             ui.events = Some(events);
             ui.send(snapshot);
@@ -572,6 +626,52 @@ impl HostRuntime {
             self.input("\r")?;
         }
         Ok(())
+    }
+
+    /// The host's name as the participant list shows it, for the links they share.
+    fn host_label(&self) -> String {
+        let ui = self.ui.lock().unwrap();
+        ui.participants
+            .iter()
+            .find(|p| p.role == Role::Host)
+            .map_or_else(|| self.username.clone(), |p| p.label.clone())
+    }
+
+    /// Shares the host's own link with everyone; refused in plain words when it is not a link
+    /// others can reach.
+    pub fn share_link(
+        &self,
+        url: &str,
+        title: Option<&str>,
+        session_only: bool,
+    ) -> Result<(), String> {
+        let by = self.host_label();
+        self.session.share_link(url, title, &by, session_only).map(drop).map_err(refusal)
+    }
+
+    /// Shares a viewer's waiting link with everyone as they sent it, or declines it. A link
+    /// that is not waiting, for example one already shared, is not shared again.
+    pub async fn answer_link(&self, viewer: u32, id: u32, share: bool) -> Result<(), String> {
+        let Some(link) = self.sharing.answer_link(viewer, id, share).await.ok().flatten() else {
+            return Err("That link has already been answered.".into());
+        };
+        if link.state != SentLinkState::Shared {
+            return Ok(());
+        }
+        self.session
+            .share_link(&link.url, link.title.as_deref(), &link.from, link.session_only)
+            .map(drop)
+            .map_err(refusal)
+    }
+
+    /// Removes a shared link: from now on nobody receives its address.
+    pub fn remove_link(&self, id: u32) {
+        self.session.remove_link(id);
+    }
+
+    /// Lets viewers send links, or stops them.
+    pub fn allow_links(&self, on: bool) {
+        self.sharing.allow_links(on);
     }
 
     /// Ends sharing and the agent. The session's files are deleted when the runtime is dropped,

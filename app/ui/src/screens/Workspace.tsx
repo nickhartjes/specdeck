@@ -81,6 +81,10 @@ interface Props {
   prompts?: { badge?: number; content: ReactNode };
   /** Whether the host shares whole code files now. */
   wholeFiles?: boolean;
+  /** Above the timeline: sharing links; absent where links can't be shared. */
+  linksBar?: ReactNode;
+  /** The host's: removes a shared link. */
+  onRemoveLink?: (linkId: number) => void;
 }
 
 type Pane = "files" | "session" | "timeline";
@@ -745,6 +749,8 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                 onStep={showTerminal}
                 onOpenChange={openChange}
                 onOpenScreenshot={openScreenshot}
+                linksBar={props.linksBar}
+                onRemoveLink={props.onRemoveLink}
               />
             </div>
           </aside>

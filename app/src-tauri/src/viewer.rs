@@ -1,6 +1,7 @@
 //! Viewing a shared session as the app sees it: the engine's viewer, with terminal records sent
 //! to the window over a binary channel and everything else as events.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -9,12 +10,15 @@ use specdeck_core::viewer::{
     CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession, ViewerStatus,
 };
 use specdeck_protocol::control::{
-    Outcome, PROTOCOL_VERSION, Participant, Suggestion, valid_suggestion,
+    Outcome, PROTOCOL_VERSION, Participant, SentLink, Suggestion, valid_suggestion,
 };
 use specdeck_protocol::invite::InviteCode;
+use specdeck_protocol::links::{check_link, valid_title};
 use specdeck_protocol::timeline::TimelineEvent;
 use specdeck_protocol::{AgentId, AgentStatus};
 use tauri::ipc::{Channel, InvokeResponseBody};
+
+use crate::links::LinkBook;
 
 use specdeck_protocol::terminal_stream::encode_records;
 
@@ -61,6 +65,14 @@ pub enum ViewEvent {
     Suggestions {
         mine: Vec<Suggestion>,
     },
+    /// Whether the host lets viewers send links.
+    LinksAllowed {
+        links: bool,
+    },
+    /// This viewer's links and what became of each.
+    Links {
+        mine: Vec<SentLink>,
+    },
     /// The session is over for this viewer; `reason` says why, for the window to explain.
     Ended {
         reason: EndReason,
@@ -86,6 +98,8 @@ pub enum EndReason {
 
 pub struct ViewerRuntime {
     session: ViewerSession,
+    /// The session's links, as they passed to the window.
+    links: Arc<Mutex<LinkBook>>,
 }
 
 impl ViewerRuntime {
@@ -106,8 +120,13 @@ impl ViewerRuntime {
             protocol_version: PROTOCOL_VERSION,
         };
         let (session, mut viewer_events) = ViewerSession::join(code, config);
+        let links = Arc::new(Mutex::new(LinkBook::default()));
+        let book = links.clone();
         tokio::spawn(async move {
             while let Some(event) = viewer_events.recv().await {
+                if let ViewerEvent::Timeline { event, .. } = &event {
+                    book.lock().unwrap().record(&event.entry);
+                }
                 let sent = match event {
                     ViewerEvent::Records(records) => {
                         terminal.send(InvokeResponseBody::Raw(encode_records(&records))).is_ok()
@@ -127,7 +146,7 @@ impl ViewerRuntime {
                 }
             }
         });
-        Self { session }
+        Self { session, links }
     }
 
     pub fn leave(&self) {
@@ -148,6 +167,29 @@ impl ViewerRuntime {
         }
         self.session.suggest(text);
         Ok(())
+    }
+
+    /// Sends the host a link to share; refused in plain words when the host would refuse it,
+    /// so a slip in the window never costs the viewer its connection. Sent in the normalized
+    /// form the host requires.
+    pub fn send_link(
+        &self,
+        url: String,
+        title: Option<String>,
+        session_only: bool,
+    ) -> Result<(), String> {
+        let url = check_link(url.trim()).map_err(|_| "That link can't be shared.".to_owned())?;
+        let title = title.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+        if title.as_deref().is_some_and(|t| !valid_title(t)) {
+            return Err("A title is one line of at most 120 characters.".into());
+        }
+        self.session.send_link(url, title, session_only);
+        Ok(())
+    }
+
+    /// The address of a link shared in this session, to open.
+    pub fn link(&self, id: u32) -> Result<String, String> {
+        self.links.lock().unwrap().openable(id)
     }
 
     /// Drops the connection and reconnects at once, keeping the viewer's place; refused while
@@ -176,6 +218,8 @@ fn translate(event: ViewerEvent) -> Option<ViewEvent> {
         ViewerEvent::RequestSent { id } => ViewEvent::RequestSent { id },
         ViewerEvent::Reply { id, outcome } => ViewEvent::Reply { id, outcome },
         ViewerEvent::Suggestions(mine) => ViewEvent::Suggestions { mine },
+        ViewerEvent::LinksAllowed { links } => ViewEvent::LinksAllowed { links },
+        ViewerEvent::Links(mine) => ViewEvent::Links { mine },
         ViewerEvent::Ended => ViewEvent::Ended { reason: EndReason::Closed },
         ViewerEvent::Refused(reason) => ViewEvent::Ended {
             reason: match reason {

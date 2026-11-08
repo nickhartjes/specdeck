@@ -286,6 +286,74 @@ describe('host screen', () => {
   });
 });
 
+describe('shared links on the host screen', () => {
+  it('shares a link with everyone from above the timeline', async () => {
+    const { bridge } = await setup();
+    await userEvent.click(screen.getByRole('button', { name: 'Share a link' }));
+    await userEvent.type(screen.getByLabelText('Address'), 'https://excalidraw.com/#room=a,b');
+    await userEvent.click(screen.getByRole('button', { name: 'Share with everyone' }));
+    expect(bridge.hostShareLink).toHaveBeenCalledWith('https://excalidraw.com/#room=a,b', null, true);
+    expect(await screen.findByRole('group', { name: 'Link: excalidraw.com' })).toBeInTheDocument();
+  });
+
+  it('shows a viewer’s waiting link whole, to share or decline', async () => {
+    const { bridge } = await setup();
+    const waiting = await screen.findByRole('listitem', { name: 'Sanne’s link' });
+    expect(waiting).toHaveTextContent('https://staging.example.com/s/demo');
+    await userEvent.click(within(waiting).getByRole('button', { name: 'Share' }));
+    expect(bridge.hostAnswerLink).toHaveBeenCalledWith(2, 9, true);
+    expect(await screen.findByRole('group', { name: 'Link: Staging: the new pill' })).toHaveTextContent('shared by Sanne');
+    expect(screen.queryByRole('list', { name: 'Links waiting for you' })).toBeNull();
+  });
+
+  it('declines a viewer’s link without sharing it', async () => {
+    const { bridge } = await setup();
+    const waiting = await screen.findByRole('listitem', { name: 'Sanne’s link' });
+    await userEvent.click(within(waiting).getByRole('button', { name: 'Decline' }));
+    expect(bridge.hostAnswerLink).toHaveBeenCalledWith(2, 9, false);
+    expect(bridge.hostShareLink).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: /^Link:/ })).toBeNull();
+  });
+
+  it('removes a shared link, and turns viewers’ links off in the sharing settings', async () => {
+    const { bridge } = await setup();
+    act(() => emit({ type: 'timeline', event: { outputSeq: 1, at: 1, kind: 'link', id: 4, url: 'https://example.com/', by: 'Nick' } }));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove link' }));
+    expect(bridge.hostRemoveLink).toHaveBeenCalledWith(4);
+    await userEvent.click(screen.getByRole('button', { name: 'Sharing settings' }));
+    const toggle = screen.getByRole('checkbox', { name: /Viewers can share links/ });
+    expect(toggle).toBeChecked();
+    await userEvent.click(toggle);
+    expect(bridge.hostAllowLinks).toHaveBeenCalledWith(false);
+  });
+
+  it('announces a viewer’s link without taking focus from the terminal', async () => {
+    await setup();
+    const link = { viewer: 3, id: 1, from: 'Mo', url: 'https://example.com/', title: null, sessionOnly: false, state: 'Waiting' as const };
+    act(() => emit({ type: 'viewer-links', links: [link] }));
+    expect(await screen.findByText(/Mo wants to share a link/)).toBeInTheDocument();
+  });
+
+  it('offers no links for a session of the previous release', async () => {
+    await setup();
+    const older: HostEvent = { ...snapshot() };
+    delete older.linksPossible;
+    delete older.linksAllowed;
+    delete older.viewerLinks;
+    act(() => emit(older));
+    expect(screen.queryByRole('button', { name: 'Share a link' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Sharing settings' }));
+    expect(screen.queryByRole('checkbox', { name: /Viewers can share links/ })).toBeNull();
+  });
+
+  it('shares links in a terminal session too', async () => {
+    await setup();
+    act(() => emit({ ...snapshot(), agent: 'terminal', timelineSupported: false, suggestionsPossible: false, wholeFilesPossible: false }));
+    expect(screen.getByRole('button', { name: 'Share a link' })).toBeInTheDocument();
+  });
+});
+
 /** The demo's snapshot, as a session of this release sends it. */
 function snapshot(): Extract<HostEvent, { type: 'snapshot' }> {
   return {
@@ -305,5 +373,8 @@ function snapshot(): Extract<HostEvent, { type: 'snapshot' }> {
     suggestionsPossible: true,
     suggestionsAllowed: true,
     suggestions: demoSuggestions,
+    linksPossible: true,
+    linksAllowed: true,
+    viewerLinks: [],
   };
 }

@@ -65,12 +65,24 @@ export interface Bridge {
   hostShareCode(wholeFiles: boolean): Promise<void>;
   /** Types `text` (the suggestion, maybe edited) into the agent's prompt and submits it, or declines the suggestion when `text` is null. */
   hostAnswerSuggestion(viewerId: number, id: number, text: string | null): Promise<void>;
+  /** Shares the host's own link with everyone; `url` is checked again on the Rust side. */
+  hostShareLink(url: string, title: string | null, sessionOnly: boolean): Promise<void>;
+  /** Shares a viewer's waiting link with everyone as they sent it, or declines it. */
+  hostAnswerLink(viewerId: number, id: number, share: boolean): Promise<void>;
+  /** Removes a shared link: from now on nobody receives its address. */
+  hostRemoveLink(id: number): Promise<void>;
+  /** Lets viewers send links, or stops them. */
+  hostAllowLinks(on: boolean): Promise<void>;
   hostClose(): Promise<void>;
   /** Joins through `server`, from a link the user agreed to, or their own service when null. */
   joinSession(code: string, server: string | null, terminal: TerminalSink, events: (event: ViewEvent) => void): Promise<void>;
   leaveSession(): Promise<void>;
   /** Suggests a prompt to the host of the watched session; fails for text the host would refuse. */
   suggestPrompt(text: string): Promise<void>;
+  /** Sends the host of the watched session a link to share; fails for a link the host would refuse. */
+  sendLink(url: string, title: string | null, sessionOnly: boolean): Promise<void>;
+  /** Opens shared link `id` of this window's session in the default browser; never an address the window names. */
+  openLink(id: number): Promise<void>;
   /** The join link for this window that opened the app or came in since, once; null when there is none. */
   takeJoinLink(): Promise<JoinLink | null>;
   /** The host, join or recent-folder command a new window opened with, once; null when there is none. */

@@ -14,6 +14,7 @@ declare module 'specdeck-web-wasm' {
     onControl(bytes: Uint8Array): unknown;
     onStream(bytes: Uint8Array): unknown;
     suggest(text: string): unknown;
+    sendLink(url: string, title: string | null | undefined, sessionOnly: boolean): unknown;
     unansweredRequests(): unknown;
   }
   export function parseJoinLink(link: string): { code: string; service?: string } | undefined;

@@ -5,6 +5,7 @@ use specdeck_session::runtime as host;
 mod adapter;
 mod browser;
 mod client;
+mod links;
 mod menu;
 mod migrate;
 mod notify;
@@ -1067,6 +1068,83 @@ async fn suggest_prompt(
     }
 }
 
+/// Shares the host's own link with everyone in the session.
+#[tauri::command]
+async fn host_share_link(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    url: String,
+    title: Option<String>,
+    session_only: bool,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.share_link(url, title, session_only))
+}
+
+/// Shares a viewer's waiting link with everyone, or declines it.
+#[tauri::command]
+async fn host_answer_link(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    viewer_id: u32,
+    id: u32,
+    share: bool,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.answer_link(viewer_id, id, share))
+}
+
+#[tauri::command]
+async fn host_remove_link(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    id: u32,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.remove_link(id))
+}
+
+#[tauri::command]
+async fn host_allow_links(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    on: bool,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.allow_links(on))
+}
+
+/// Sends the host of the session this window watches a link to share.
+#[tauri::command]
+async fn send_link(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    url: String,
+    title: Option<String>,
+    session_only: bool,
+) -> Result<(), String> {
+    let session = state.sessions.lock().unwrap().of_window(window.label());
+    match session {
+        Some((_, Session::Viewer(viewer))) => viewer.send_link(url, title, session_only),
+        _ => Err("This window does not watch a session.".into()),
+    }
+}
+
+/// Opens link `id` of this window's session in the default browser (`shared-links` design
+/// decision 6). The window names the link, never an address, and the webview has no opener
+/// permission of its own.
+#[tauri::command]
+async fn open_shared_link(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    id: u32,
+) -> Result<(), String> {
+    let session = state.sessions.lock().unwrap().of_window(window.label());
+    let url = match session {
+        Some((_, Session::Host(host))) => host.link(id)?,
+        Some((_, Session::Viewer(viewer))) => viewer.link(id)?,
+        None => return Err("This window shows no session.".into()),
+    };
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn host_close(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
     let id = app.state::<AppState>().sessions.lock().unwrap().of_window(window.label());
@@ -2124,6 +2202,12 @@ pub fn run() {
             host_share_code,
             host_answer_suggestion,
             suggest_prompt,
+            host_share_link,
+            host_answer_link,
+            host_remove_link,
+            host_allow_links,
+            send_link,
+            open_shared_link,
             host_close,
             join_session,
             leave_session,

@@ -36,6 +36,10 @@ const TURN_SECRET: &str = "Marker-Turn-Secret";
 const SUGGESTION_MARKER: &str = "Marker-Suggestion-Text";
 const CODE_PATH_MARKER: &str = "marker-code-path.rs";
 const CODE_TEXT_MARKER: &str = "Marker-Code-Text";
+const LINK_PATH_MARKER: &str = "marker-link-path";
+const LINK_KEY_MARKER: &str = "Marker-Link-Key";
+const LINK_TITLE_MARKER: &str = "Marker-Link-Title";
+const LINK_SITE_MARKER: &str = "marker-link-site.example";
 
 /// A fake Claude Code: prints the output marker, and on the line "go" reports a prompt, a tool
 /// call and a written code file holding the other markers through its hooks. Then echoes lines.
@@ -193,6 +197,32 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     assert!(sharing.answer_suggestion(suggestion.viewer, suggestion.id, edited).await.unwrap());
     sharing.allow_suggestions(false);
     until(&mut events, &mut text, |_, e| *e == ViewerEvent::Allowed { suggestions: false }).await;
+
+    // Links: the viewer sends one, which the host shares; the host shares one of its own and
+    // removes it, and turns viewers' links off.
+    let link = format!("https://{LINK_SITE_MARKER}/{LINK_PATH_MARKER}#room={LINK_KEY_MARKER}");
+    viewer.send_link(link.clone(), Some(LINK_TITLE_MARKER.into()), true);
+    let sent = tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(SharingEvent::Links(list)) = sharing_events.recv().await
+                && let Some(first) = list.into_iter().next()
+            {
+                return first;
+            }
+        }
+    })
+    .await
+    .expect("no link");
+    let sent = sharing.answer_link(sent.viewer, sent.id, true).await.unwrap().unwrap();
+    session.share_link(&sent.url, sent.title.as_deref(), &sent.from, sent.session_only).unwrap();
+    let own = session.share_link(&link, Some(LINK_TITLE_MARKER), HOST_NAME, true).unwrap();
+    session.remove_link(own);
+    until(&mut events, &mut text, |_, e| {
+        matches!(e, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::LinkRemoved { .. }))
+    })
+    .await;
+    sharing.allow_links(false);
+    until(&mut events, &mut text, |_, e| *e == ViewerEvent::LinksAllowed { links: false }).await;
     // Past a traffic report, so verbose events are in.
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     viewer.leave();
@@ -213,6 +243,10 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "host.code_sharing",
         "host.viewer_request",
         "host.suggestion_answered",
+        "host.link_answered",
+        "host.link_shared",
+        "host.link_removed",
+        "host.links_allowed",
         "viewer.request_sent",
         "viewer.request_reply",
         "host.traffic",
@@ -235,6 +269,10 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         SUGGESTION_MARKER,
         CODE_PATH_MARKER,
         CODE_TEXT_MARKER,
+        LINK_PATH_MARKER,
+        LINK_KEY_MARKER,
+        LINK_TITLE_MARKER,
+        LINK_SITE_MARKER,
         TURN_SECRET,
         code.as_str(),
         "127.0.0.1",

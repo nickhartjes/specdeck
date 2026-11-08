@@ -14,7 +14,7 @@ use std::time::Duration;
 use datachannel::ConnectionState;
 use serde::Serialize;
 use specdeck_protocol::control::{
-    self, Outcome as ReplyOutcome, Participant, RefusalReason, Suggestion, ViewerMessage,
+    self, Outcome as ReplyOutcome, Participant, RefusalReason, SentLink, Suggestion, ViewerMessage,
     ViewerRequest,
 };
 use specdeck_protocol::frames::Record;
@@ -88,6 +88,12 @@ pub enum ViewerEvent {
     Shared {
         whole_files: bool,
     },
+    /// Whether the host lets viewers send links.
+    LinksAllowed {
+        links: bool,
+    },
+    /// This viewer's links and what became of each.
+    Links(Vec<SentLink>),
     /// The connection dropped; the viewer is reconnecting.
     Reconnecting,
     /// Not admitted; final.
@@ -211,6 +217,13 @@ impl ViewerSession {
     /// [`ViewerEvent::RequestSent`]; while disconnected it is sent once the viewer is back.
     pub fn suggest(&self, text: String) {
         let _ = self.control.send(Control::Request(ViewerRequest::Suggest { text }));
+    }
+
+    /// Sends the host a link to share, as [`suggest`](Self::suggest) does. `url` must be in the
+    /// normalized form `check_link` gives, or the host disconnects this viewer.
+    pub fn send_link(&self, url: String, title: Option<String>, session_only: bool) {
+        let request = ViewerRequest::ShareLink { url, title, session_only };
+        let _ = self.control.send(Control::Request(request));
     }
 
     /// Drops the connection as a network outage of `outage` would, then reconnects, keeping the
@@ -563,6 +576,8 @@ impl Viewer {
             }
             ControlUpdate::Suggestions(mine) => ViewerEvent::Suggestions(mine),
             ControlUpdate::Shared { whole_files } => ViewerEvent::Shared { whole_files },
+            ControlUpdate::LinksAllowed { links } => ViewerEvent::LinksAllowed { links },
+            ControlUpdate::Links(mine) => ViewerEvent::Links(mine),
             ControlUpdate::Refused(reason) => {
                 return Some(Outcome::Final(ViewerEvent::Refused(reason)));
             }
@@ -576,8 +591,11 @@ impl Viewer {
     /// Numbers a request and keeps it until the host answers; returns the message to send.
     fn queue_request(&mut self, request: ViewerRequest) -> ViewerMessage {
         let kind = request.kind();
-        let ViewerRequest::Suggest { text } = &request;
-        diag::viewer_request_sent(kind, text.len());
+        let bytes = match &request {
+            ViewerRequest::Suggest { text } => text.len(),
+            ViewerRequest::ShareLink { url, .. } => url.len(),
+        };
+        diag::viewer_request_sent(kind, bytes);
         let (id, message) = self.state.send_request(request);
         let _ = self.events.send(ViewerEvent::RequestSent { id });
         message

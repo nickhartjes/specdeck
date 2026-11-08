@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, X } from 'lucide-react';
-import type { TimelineModel, ToolItem, Turn } from '../model/timeline';
+import type { LinkItem, TimelineModel, ToolItem, Turn } from '../model/timeline';
 import { SHOWN_IN_PART, toolSummary } from '../model/timeline';
 import { liveLine, screenshotOf, summarize, type Step, type SummaryEntry } from '../model/steps';
 import type { Steps } from '../api/types';
@@ -9,6 +9,7 @@ import { formatTokens } from '../model/statusbar';
 import { Markdown } from './Markdown';
 import { asksTheHost, interactionBody, PermissionBadge } from './HostInteractions';
 import { ScreenshotThumbnail } from './Screenshot';
+import { LinkCard } from './LinkCard';
 
 interface Props {
   model: TimelineModel;
@@ -34,6 +35,10 @@ interface Props {
   onOpenChange?: (path: string, toolUseId: string) => void;
   /** Opens a call's screenshot full size in a tab; kept rather than a preview with `keep`. */
   onOpenScreenshot?: OpenScreenshot;
+  /** Above the timeline: sharing links, and the links waiting on the host (`shared-links`). */
+  linksBar?: ReactNode;
+  /** The host's: removes a shared link. */
+  onRemoveLink?: (linkId: number) => void;
 }
 
 /** What selecting a step does: its first changed file in a tab, else the terminal at its line. */
@@ -42,7 +47,7 @@ type OpenScreenshot = (item: ToolItem, keep: boolean) => void;
 
 const TIME = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 
-export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump, onStep, onOpenChange, onOpenScreenshot }: Props) {
+export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump, onStep, onOpenChange, onOpenScreenshot, linksBar, onRemoveLink }: Props) {
   const select = useCallback<Select>(
     (item) => {
       const change = item.changes[0];
@@ -90,24 +95,35 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
     if (current) document.getElementById(`turn-${current}`)?.scrollIntoView({ block: 'center' });
   }, [current]);
 
-  if (!timelineSupported && terminal) {
-    return (
-      <div className="empty">
-        <History aria-hidden />
-        <strong>A terminal session has no timeline</strong>
-        <span>The terminal shows everything.</span>
-      </div>
-    );
-  }
+  const linkCards = (links: LinkItem[]) =>
+    links.map((link) => <LinkCard key={link.id} link={link} onRemove={onRemoveLink} />);
+
+  // Without a timeline the note stays, and the session's links are listed below it.
   if (!timelineSupported) {
     return (
-      <div className="empty">
-        <History aria-hidden />
-        <strong>No timeline for {agentName}</strong>
-        <span>
-          SpecDeck builds the timeline of prompts, tool calls and file changes from Claude Code's events. For {agentName}, the
-          terminal shows everything.
-        </span>
+      <div ref={list}>
+        {terminal ? (
+          <div className="empty">
+            <History aria-hidden />
+            <strong>A terminal session has no timeline</strong>
+            <span>The terminal shows everything.</span>
+          </div>
+        ) : (
+          <div className="empty">
+            <History aria-hidden />
+            <strong>No timeline for {agentName}</strong>
+            <span>
+              SpecDeck builds the timeline of prompts, tool calls and file changes from Claude Code's events. For {agentName}, the
+              terminal shows everything.
+            </span>
+          </div>
+        )}
+        {linksBar}
+        {model.links.length > 0 && (
+          <section aria-label="Shared links" className="links-early">
+            {linkCards(model.links)}
+          </section>
+        )}
       </div>
     );
   }
@@ -138,6 +154,12 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
           </select>
         </div>
       )}
+      {linksBar}
+      {model.earlyLinks.length > 0 && (
+        <section aria-label="Links shared before the first prompt" className="links-early">
+          {linkCards(model.earlyLinks)}
+        </section>
+      )}
       {model.unavailable && (
         <div className="banner warning" role="status">
           <AlertTriangle aria-hidden />
@@ -166,6 +188,7 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
               onJump={onJump}
               onSelect={select}
               onOpenScreenshot={onOpenScreenshot}
+              onRemoveLink={onRemoveLink}
             />
           ))}
           {live && lastTurn && <LiveLine turn={lastTurn} plansBefore={plansBeforeLast} agentName={agentName} />}
@@ -261,6 +284,7 @@ interface TurnProps {
   onJump: (seq: number) => void;
   onSelect: Select;
   onOpenScreenshot?: OpenScreenshot;
+  onRemoveLink?: (linkId: number) => void;
 }
 
 // Long sessions have hundreds of turns: render only the ones that changed. The model is rebuilt
@@ -273,7 +297,7 @@ const TurnView = memo(
     (Object.keys(next) as (keyof TurnProps)[]).every((key) => key === 'turn' || key === 'summary' || prev[key] === next[key]),
 );
 
-function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, onJump, onSelect, onOpenScreenshot }: TurnProps) {
+function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, onJump, onSelect, onOpenScreenshot, onRemoveLink }: TurnProps) {
   const texts = turn.items.filter((item) => item.kind === 'text');
   const showResponse = turn.response && !texts.some((item) => item.text.trim() === turn.response?.trim());
   return (
@@ -297,6 +321,8 @@ function TurnBody({ turn, summary, latest, onReadPlan, number, match, current, o
           <p key={item.id} className="notice">
             <Hand aria-hidden /> {item.text}
           </p>
+        ) : item.kind === 'link' ? (
+          <LinkCard key={item.id} link={item} onRemove={onRemoveLink} />
         ) : (
           <ToolView key={item.id} item={item} showChanges={latest} onSelect={onSelect} onOpenScreenshot={onOpenScreenshot} />
         ),

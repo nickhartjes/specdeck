@@ -72,6 +72,19 @@ describe('accessibility', () => {
     expect(results.violations.map((v) => v.id)).toEqual([]);
   });
 
+  it('shared links: the waiting link, the share dialog and a link card', async () => {
+    app('host');
+    await screen.findByText('7K2M-9QXH-4TPA');
+    await screen.findByRole('list', { name: 'Links waiting for you' });
+    expect(await violations()).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: 'Share a link' }));
+    expect(await violations()).toEqual([]);
+    await userEvent.type(screen.getByLabelText('Address'), 'https://excalidraw.com/#room=a,b');
+    await userEvent.click(screen.getByRole('button', { name: 'Share with everyone' }));
+    await screen.findByRole('group', { name: 'Link: excalidraw.com' });
+    expect(await violations()).toEqual([]);
+  });
+
   it('viewer screen, joined', async () => {
     app('start');
     await userEvent.type(await screen.findByLabelText('Invite code'), '7K2M9QXH4TPA');

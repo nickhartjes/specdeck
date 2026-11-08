@@ -208,6 +208,22 @@ pub enum Entry {
         path: String,
         text: Option<String>,
     },
+    /// A link shared with everyone in the session (`shared-links`); `url` is `None` once the
+    /// host removed it. `id` counts from 1 within the session, `by` is the label of whoever
+    /// shared it. Protocol version 5: never sent to older viewers, which cannot decode it.
+    Link {
+        id: u32,
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        by: String,
+        #[serde(default)]
+        session_only: bool,
+    },
+    /// The host removed the link `id`; its `Link` entry no longer carries the address.
+    LinkRemoved {
+        id: u32,
+    },
     /// An OpenSpec change the agent works on; each one replaces the previous for that change.
     Plan {
         change: String,
@@ -526,12 +542,54 @@ mod tests {
 
     #[test]
     fn an_unknown_kind_cannot_be_decoded() {
-        // Why `FileText` is held back from version 3 viewers: their apps decode every event into
-        // `TimelineEvent`, and a kind they do not know fails the whole frame.
+        // Why `FileText` is held back from version 3 viewers, and `Link` and `LinkRemoved` from
+        // version 4: their apps decode every event into `TimelineEvent`, and a kind they do not
+        // know fails the whole frame.
         let json = serde_json::json!({
             "outputSeq": 1, "at": 2, "kind": "no-such-kind", "promptId": "p"
         });
         assert!(serde_json::from_value::<TimelineEvent>(json).is_err());
+    }
+
+    #[test]
+    fn links_and_their_removal() {
+        let link = Entry::Link {
+            id: 1,
+            url: Some("https://excalidraw.com/#room=a,b".into()),
+            title: Some("Draw".into()),
+            by: "Nick".into(),
+            session_only: true,
+        };
+        let json = serde_json::json!({
+            "kind": "link", "id": 1, "url": "https://excalidraw.com/#room=a,b",
+            "title": "Draw", "by": "Nick", "sessionOnly": true
+        });
+        assert_eq!(serde_json::to_value(&link).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), link);
+        let removed = serde_json::json!({ "kind": "link-removed", "id": 1 });
+        assert_eq!(serde_json::to_value(Entry::LinkRemoved { id: 1 }).unwrap(), removed);
+        let gone = serde_json::json!({ "kind": "link", "id": 1, "url": null, "by": "Nick" });
+        assert!(matches!(
+            serde_json::from_value::<Entry>(gone).unwrap(),
+            Entry::Link { url: None, title: None, session_only: false, .. }
+        ));
+    }
+
+    #[test]
+    fn links_are_never_cut() {
+        let event = TimelineEvent {
+            output_seq: 1,
+            at: 2,
+            entry: Entry::Link {
+                id: 1,
+                url: Some(format!("https://example.com/{}", "a".repeat(2000))),
+                title: Some("t".repeat(120)),
+                by: "n".repeat(64),
+                session_only: false,
+            },
+            truncated: false,
+        };
+        assert_eq!(fit(event.clone(), MAX_EVENT_JSON_BYTES), event);
     }
 
     #[test]

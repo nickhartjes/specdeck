@@ -118,6 +118,12 @@ function fakeCore(): FakeCore {
       core.unanswered.push(request);
       return request;
     },
+    sendLink: (url) => {
+      if (!url.startsWith('https://')) throw new Error('That link can’t be shared.');
+      const request = { id: core.unanswered.length + 1, message: new Uint8Array([3, core.unanswered.length + 1, 1]) };
+      core.unanswered.push(request);
+      return request;
+    },
     unansweredRequests: () => core.unanswered,
     unanswered: [],
   };
@@ -227,6 +233,25 @@ describe('web viewer connection', () => {
     second.peer.channel('control').receive([0]);
     // The fake core never removed them, so both go again; the real one drops answered ones.
     expect(second.peer.channel('control').sent.slice(1)).toEqual([new Uint8Array([3, 1]), new Uint8Array([3, 2])]);
+  });
+
+  it('sends links to the host and passes on what became of them', async () => {
+    const core = fakeCore();
+    const mine = [{ id: 1, url: 'https://example.com/', title: null, sessionOnly: false, state: 'Waiting' as const }];
+    core.controls.push(welcome, { type: 'links-allowed', links: true }, { type: 'links', mine });
+    const { sockets, peers, events, connection } = setup(core);
+    const { peer } = await reachHost(sockets, peers);
+    const control = peer.channel('control');
+    control.open();
+    control.receive([0]);
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'links-allowed', links: true });
+    connection.sendLink('https://example.com/', null, false);
+    expect(events.at(-1)).toEqual({ type: 'request-sent', id: 1 });
+    expect(control.sent.at(-1)).toEqual(new Uint8Array([3, 1, 1]));
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'links', mine });
+    expect(() => connection.sendLink('http://localhost:3000/', null, false)).toThrow('can’t be shared');
   });
 
   it('says the code is invalid when its room does not exist', async () => {
