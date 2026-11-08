@@ -2,7 +2,25 @@
 // open /?demo=start, /?demo=host or /?demo=viewer) and for component tests. Never used by the app.
 
 import type { Bridge, TerminalSink } from './bridge';
-import type { DiagnosticsStatus, FileKind, HostEvent, HostLink, HostSuggestion, Participant, Profile, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from './types';
+import type {
+  Card,
+  DiagnosticsStatus,
+  FileKind,
+  HostEvent,
+  HostLink,
+  HostSuggestion,
+  Participant,
+  Profile,
+  ReadState,
+  ReadView,
+  SentLink,
+  SharedFileInfo,
+  Suggestion,
+  TimelineEvent,
+  ViewEvent,
+  VoteView,
+} from './types';
+import { spreadOf } from '../model/asks';
 import { formatCode } from '../model/code';
 import { applyAppearance } from '../appearance';
 
@@ -17,7 +35,7 @@ export const demoProfile: Profile = {
   ],
   lastAgent: 'claude-code',
   notifications: true,
-  viewerNotifications: { plans: true, documents: true, finished: false },
+  viewerNotifications: { plans: true, documents: true, finished: false, reads: true, estimates: true },
   view: null,
   layout: null,
   translucent: false,
@@ -377,9 +395,40 @@ export function demoBridge(screen: string): Bridge {
     { viewer: 2, id: 9, from: 'Sanne', url: 'https://staging.example.com/s/demo', title: 'Staging: the new pill', sessionOnly: false, state: 'Waiting' },
   ];
   const myLinks: SentLink[] = [];
+  let viewerRead: ReadView | null = null;
+  let viewerVote: VoteView | null = null;
   let nextLink = 1;
   const shareLink = (url: string, title: string | null, by: string, sessionOnly: boolean) => {
     const event: TimelineEvent = { ...at(9), kind: 'link', id: nextLink++, url, ...(title ? { title } : {}), by, sessionOnly };
+    hostEvents?.({ type: 'timeline', event });
+    viewerEvents?.({ type: 'timeline', event });
+  };
+  // Asks: the demo viewers answer a read request and vote a little while after the host asks.
+  let read: ReadView | null = null;
+  let vote: VoteView | null = null;
+  let nextAsk = 1;
+  const VIEWERS = [1, 2, 3];
+  const sendAsks = () => hostEvents?.({ type: 'asks', read, vote });
+  const answerLater = (ms: number, id: number, viewer: number, state: ReadState, question?: string) =>
+    setTimeout(() => {
+      if (read?.id !== id) return;
+      read = {
+        ...read,
+        people: read.people.map(([p, s]) => [p, p === viewer ? state : s]),
+        questions: question ? [...read.questions, [viewer, question]] : read.questions,
+      };
+      sendAsks();
+    }, ms);
+  const voteLater = (ms: number, id: number, round: number, viewer: number) =>
+    setTimeout(() => {
+      if (vote?.id !== id || vote.round !== round || vote.revealed) return;
+      vote = { ...vote, voted: [...vote.voted.filter((p) => p !== viewer), viewer] };
+      sendAsks();
+    }, ms);
+  // What the demo viewers voted, once revealed.
+  const demoVotes: Card[] = [{ value: 2 }, { value: 3 }, 'unsure'];
+  const startRound = (id: number, round: number) => VIEWERS.forEach((viewer, i) => voteLater(1500 * (i + 1), id, round, viewer));
+  const sendBoth = (event: TimelineEvent) => {
     hostEvents?.({ type: 'timeline', event });
     viewerEvents?.({ type: 'timeline', event });
   };
@@ -444,6 +493,8 @@ export function demoBridge(screen: string): Bridge {
         linksPossible: true,
         linksAllowed: true,
         viewerLinks: hostLinks,
+        asksPossible: true,
+        asks: { read, vote },
       });
       hostEvents = events;
       setTimeout(() => terminal(terminalStream()), 50);
@@ -492,6 +543,58 @@ export function demoBridge(screen: string): Bridge {
       viewerEvents?.({ type: 'timeline', event });
     },
     hostAllowLinks: async (links) => hostEvents?.({ type: 'links-allowed', links }),
+    hostAskToRead: async (target, label, limitS) => {
+      if (read) throw new Error('One is open already. Close it first.');
+      const id = nextAsk++;
+      read = { id, target, label, limitS, leftMs: limitS ? limitS * 1000 : null, people: VIEWERS.map((p) => [p, 'reading']), mine: 'reading', questions: [] };
+      sendAsks();
+      answerLater(2000, id, 1, 'ready');
+      answerLater(4000, id, 2, 'question', 'Why three missed heartbeats and not two?');
+    },
+    hostEndRead: async () => {
+      if (!read) throw new Error('No read request is open.');
+      const count = (state: ReadState) => read!.people.filter(([, s]) => s === state).length;
+      sendBoth({ ...at(11), kind: 'read-done', id: read.id, target: read.target, label: read.label, ready: count('ready'), questions: count('question'), of: read.people.length, timeUp: false });
+      read = null;
+      sendAsks();
+    },
+    hostStartVote: async (task, cards) => {
+      if (vote) throw new Error('One is open already. Close it first.');
+      const id = nextAsk++;
+      vote = { id, round: 1, task, cards, voted: [], mine: null, revealed: null, older: [] };
+      sendAsks();
+      startRound(id, 1);
+    },
+    hostCastVote: async (card) => {
+      if (!vote || vote.revealed) throw new Error('The votes are revealed already.');
+      vote = { ...vote, mine: card, voted: card === null ? vote.voted.filter((p) => p !== 0) : [...vote.voted.filter((p) => p !== 0), 0] };
+      sendAsks();
+    },
+    hostRevealVotes: async () => {
+      if (!vote) throw new Error('No vote is open.');
+      const voted = vote.voted;
+      const revealed: [number, Card][] = VIEWERS.map((p, i): [number, Card] => [p, demoVotes[i]!]).filter(([p]) => voted.includes(p));
+      if (vote.mine !== null) revealed.unshift([0, vote.mine]);
+      vote = { ...vote, revealed };
+      sendAsks();
+    },
+    hostVoteAgain: async () => {
+      if (!vote) throw new Error('No vote is open.');
+      vote = { ...vote, round: vote.round + 1, voted: [], mine: null, revealed: null };
+      sendAsks();
+      startRound(vote.id, vote.round);
+    },
+    hostStopVote: async () => {
+      vote = null;
+      sendAsks();
+    },
+    hostKeepEstimate: async (card) => {
+      if (!vote?.revealed) throw new Error('Reveal the votes first.');
+      const spread = spreadOf(vote.revealed.map(([, c]) => c));
+      sendBoth({ ...at(12), kind: 'estimated', id: vote.id, task: vote.task, cards: vote.cards, kept: card, low: spread?.low ?? null, high: spread?.high ?? null, votes: vote.revealed.length });
+      vote = null;
+      sendAsks();
+    },
     hostClose: async () => {},
     joinSession: async (_code, _server, terminal: TerminalSink, events: (event: ViewEvent) => void) => {
       setTimeout(() => {
@@ -526,12 +629,37 @@ export function demoBridge(screen: string): Bridge {
         events({ type: 'shared-files', files: sharedFiles });
         events({ type: 'links-allowed', links: params.get('links') !== 'off' });
         events({ type: 'links', mine: [] });
+        // ?ask=read or ?ask=vote shows the host's ask as a viewer sees it.
+        if (params.get('ask') === 'read') {
+          viewerRead = { id: 1, target: { document: { path: 'openspec/changes/heartbeat/design.md' } }, label: 'design.md', limitS: 300, leftMs: 300_000, people: [[1, 'ready'], [2, 'reading'], [3, 'reading']], mine: 'reading', questions: [] };
+          events({ type: 'read-request', open: viewerRead });
+        } else if (params.get('ask') === 'vote') {
+          viewerVote = { id: 2, round: 1, task: 'Show unreachable after three missed heartbeats', cards: 'story-points', voted: [0, 1], mine: null, revealed: null, older: [] };
+          events({ type: 'vote', open: viewerVote });
+        }
         // A viewer takes the host's size from the stream's resize records, as from the engine.
         terminal(resizeRecord(cols, rows));
         terminal(terminalStream());
       }, 300);
     },
     leaveSession: async () => {},
+    answerRead: async (ask, answer) => {
+      if (viewerRead?.id !== ask) throw new Error('That read request is closed.');
+      const id = nextRequest++;
+      viewerEvents?.({ type: 'answer-sent', id });
+      const state: ReadState = typeof answer === 'string' ? answer : 'question';
+      viewerRead = { ...viewerRead, mine: answer, people: viewerRead.people.map(([p, s]) => [p, p === 2 ? state : s]) };
+      viewerEvents?.({ type: 'reply', id, outcome: 'Received' });
+      viewerEvents?.({ type: 'read-request', open: viewerRead });
+    },
+    castVote: async (ask, round, card) => {
+      if (viewerVote?.id !== ask || viewerVote.round !== round) throw new Error('That vote is closed.');
+      const id = nextRequest++;
+      viewerEvents?.({ type: 'answer-sent', id });
+      viewerVote = { ...viewerVote, mine: card, voted: card === null ? viewerVote.voted.filter((p) => p !== 2) : [...viewerVote.voted.filter((p) => p !== 2), 2] };
+      viewerEvents?.({ type: 'reply', id, outcome: 'Received' });
+      viewerEvents?.({ type: 'vote', open: viewerVote });
+    },
     suggestPrompt: async (text) => {
       const id = nextRequest++;
       viewerEvents?.({ type: 'request-sent', id });

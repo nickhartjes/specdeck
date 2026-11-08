@@ -72,7 +72,7 @@ Agents report their state through the terminal (the [Program Status Protocol](ht
 
 ## Get called back
 
-You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session).
+You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. It also tells you when the host [asks you to read something or to estimate](/specdeck/guide/read-and-estimate/). Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session).
 
 ### Notifications in the browser
 

@@ -73,8 +73,8 @@ export interface RunningSession {
   controllable: boolean;
 }
 
-/** A kind of notification a viewer can switch on or off; read and vote requests will add theirs. */
-export type ViewerNotificationKind = 'plans' | 'documents' | 'finished';
+/** A kind of notification a viewer can switch on or off; `reads` and `estimates` are the host's asks. */
+export type ViewerNotificationKind = 'plans' | 'documents' | 'finished' | 'reads' | 'estimates';
 
 export type ViewerNotifications = Record<ViewerNotificationKind, boolean>;
 
@@ -263,7 +263,68 @@ export type TimelineEvent = Stamp &
     | { kind: 'link'; id: number; url: string | null; title?: string; by: string; sessionOnly?: boolean }
     /** The host removed link `id`. */
     | { kind: 'link-removed'; id: number }
+    /** A read request closed: how many of those who could answer were ready or had a question. No names or question texts. */
+    | { kind: 'read-done'; id: number; target: ReadTarget; label: string; ready: number; questions: number; of: number; timeUp: boolean }
+    /** The host kept an estimate: the lowest and highest value card voted (null when every vote was ? or ☕). No names. */
+    | { kind: 'estimated'; id: number; task: string; cards: CardSet; kept: Card; low: Card | null; high: Card | null; votes: number }
   );
+
+/** What the host asks everyone to read; `ReadTarget` in crates/protocol. `changes` are the timeline events after `fromSeq` (a prompt) up to `toSeq`. */
+export type ReadTarget =
+  | { document: { path: string } }
+  | { code: { path: string } }
+  | { shared: { file: number } }
+  | { changes: { fromSeq: number; toSeq: number } };
+
+/** The cards of a vote: story points (1, 2, 3, 5, 8, 13) or T-shirt sizes (XS to XL), both with ? and ☕. */
+export type CardSet = 'story-points' | 't-shirt';
+
+/** A card: `value` indexes into its set's value cards. */
+export type Card = { value: number } | 'unsure' | 'break';
+
+/** A viewer's answer to a read request. */
+export type ReadAnswer = 'reading' | 'ready' | { question: { text: string | null } };
+
+/** How everyone sees a participant during a read request; `older-app` can't answer. */
+export type ReadState = 'reading' | 'ready' | 'question' | 'older-app';
+
+/** The open read request as one participant sees it. */
+export interface ReadView {
+  id: number;
+  target: ReadTarget;
+  label: string;
+  /** 0 for no limit. */
+  limitS: number;
+  /** Time left when it was sent; null without a limit. */
+  leftMs: number | null;
+  /** Each participant asked, by id, the host left out. */
+  people: [number, ReadState][];
+  /** This participant's own answer, with their own question's text. */
+  mine: ReadAnswer;
+  /** Every question's text by participant id: only in the host's view. */
+  questions: [number, string][];
+}
+
+/** The open vote as one participant sees it: no vote's value but their own before the reveal. */
+export interface VoteView {
+  id: number;
+  round: number;
+  task: string;
+  cards: CardSet;
+  /** Who has voted this round, by participant id, 0 for the host. */
+  voted: number[];
+  mine: Card | null;
+  /** Every vote by participant id, once revealed. */
+  revealed: [number, Card][] | null;
+  /** Participants on an older app, which can't vote. */
+  older: number[];
+}
+
+/** The host's asks as the host's window shows them. */
+export interface HostAsks {
+  read: ReadView | null;
+  vote: VoteView | null;
+}
 
 export type SharingState = 'connecting' | 'ready' | 'unavailable';
 
@@ -366,6 +427,9 @@ export type HostEvent =
       linksAllowed?: boolean;
       /** Every link viewers sent, oldest first. */
       viewerLinks?: HostLink[];
+      /** Absent from sessions of the previous release, which can't ask to read or estimate. */
+      asksPossible?: boolean;
+      asks?: HostAsks;
     }
   | { type: 'sharing'; state: SharingState; code: string | null }
   /** What viewers may send, after the host changed it. */
@@ -380,6 +444,8 @@ export type HostEvent =
   | { type: 'links-allowed'; links: boolean }
   /** Every link viewers sent, oldest first, on every change. */
   | { type: 'viewer-links'; links: HostLink[] }
+  /** The open read request and vote, on every change. */
+  | ({ type: 'asks' } & HostAsks)
   /** Whether the sharing service serves the web viewer, once checked. */
   | { type: 'web-viewer'; available: boolean }
   | { type: 'participants'; participants: Participant[] }
@@ -431,6 +497,12 @@ export type ViewEvent =
   | { type: 'links-allowed'; links: boolean }
   /** This viewer's links and what became of each. */
   | { type: 'links'; mine: SentLink[] }
+  /** The host's open read request; null once it closed. Never sent by a host of the previous release. */
+  | { type: 'read-request'; open: ReadView | null }
+  /** The host's open vote; null once it closed. */
+  | { type: 'vote'; open: VoteView | null }
+  /** An answer or vote was numbered; its reply carries this id. */
+  | { type: 'answer-sent'; id: number }
   | { type: 'ended'; reason: EndReason };
 
 /** The terminal's state for diagnostics: enums and numbers only, never its content. */

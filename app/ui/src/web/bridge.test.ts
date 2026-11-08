@@ -129,6 +129,15 @@ describe('web bridge', () => {
     await expect(page.openLink(1)).rejects.toThrow('not in this session');
   });
 
+  it('answers and votes only while in a session, and never asks', async () => {
+    const page = bridge();
+    await expect(page.answerRead(1, 'ready')).rejects.toThrow('not in a session');
+    await expect(page.castVote(1, 1, { value: 2 })).rejects.toThrow('not in a session');
+    await expect(page.hostAskToRead({ document: { path: 'design.md' } }, 'design.md', 0)).rejects.toThrow('only watch');
+    await expect(page.hostStartVote('A task', 't-shirt')).rejects.toThrow('only watch');
+    await expect(page.hostKeepEstimate({ value: 1 })).rejects.toThrow('only watch');
+  });
+
   it('opens a shared link in a new tab without access back, and only after the check', () => {
     const links = new Map<number, string>();
     const at = { outputSeq: 0, at: 0 };
@@ -206,7 +215,7 @@ describe('notifications in the browser', () => {
     const page = bridge({ storage, notifications: browser.platform });
     const profile = await page.setNotifications(true);
     expect(profile.notifications).toBe(true);
-    expect(profile.viewerNotifications).toEqual({ plans: true, documents: true, finished: false });
+    expect(profile.viewerNotifications).toEqual({ plans: true, documents: true, finished: false, reads: true, estimates: true });
     expect(browser.asked).toBe(1);
     await page.viewerNotify('plans', 'Plan add-login is ready for review', 'Claude Code wrote proposal.');
     expect(browser.shown).toEqual([['Plan add-login is ready for review', 'Claude Code wrote proposal.']]);
@@ -225,15 +234,15 @@ describe('notifications in the browser', () => {
     browser.away = true;
     await page.viewerNotify('finished', 'Claude Code finished', '');
     expect(browser.shown).toEqual([]);
-    await page.setViewerNotifications({ plans: true, documents: true, finished: true });
+    await page.setViewerNotifications({ plans: true, documents: true, finished: true, reads: true, estimates: true });
     await page.viewerNotify('finished', 'Claude Code finished', '');
     expect(browser.shown).toEqual([['Claude Code finished', '']]);
   });
 
   it('keep the kinds in the browser', async () => {
     const storage = memoryStorage();
-    await bridge({ storage, notifications: null }).setViewerNotifications({ plans: false, documents: true, finished: true });
-    expect((await bridge({ storage, notifications: null }).getProfile()).viewerNotifications).toEqual({ plans: false, documents: true, finished: true });
+    await bridge({ storage, notifications: null }).setViewerNotifications({ plans: false, documents: true, finished: true, reads: true, estimates: true });
+    expect((await bridge({ storage, notifications: null }).getProfile()).viewerNotifications).toEqual({ plans: false, documents: true, finished: true, reads: true, estimates: true });
   });
 
   it('stay off when the browser refuses, or has none', async () => {

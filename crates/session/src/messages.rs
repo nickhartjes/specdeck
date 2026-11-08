@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use specdeck_core::browser::{BrowserAction, BrowserResult};
 use specdeck_core::environment::Environment;
 use specdeck_protocol::AgentId;
+use specdeck_protocol::asks::{Card, CardSet, ReadTarget};
 
 use crate::runtime::HostNotice;
 
@@ -133,6 +134,34 @@ pub enum Command {
     /// Whether viewers may send links.
     AllowLinks {
         links: bool,
+    },
+    /// Asks everyone to read `target` (`read-and-estimate`), with a limit of 0 (none), 120, 300
+    /// or 600 seconds; refused with [`Event::Failed`] when one is open or the target is not in
+    /// the session.
+    AskToRead {
+        target: ReadTarget,
+        label: String,
+        limit_s: u16,
+    },
+    /// Go on: closes the read request, which adds its timeline entry.
+    EndRead,
+    /// Asks everyone how big `task` is, voting with `cards`.
+    StartVote {
+        task: String,
+        cards: CardSet,
+    },
+    /// The host's own vote; `None` takes it back.
+    CastVote {
+        card: Option<Card>,
+    },
+    RevealVotes,
+    /// After the reveal: a new round with the same task and cards.
+    VoteAgain,
+    /// Closes the vote and keeps nothing.
+    StopVote,
+    /// After the reveal: closes the vote keeping `card`, which adds its timeline entry.
+    KeepEstimate {
+        card: Card,
     },
     /// Asks for [`Event::Status`].
     Status,
@@ -289,6 +318,48 @@ mod tests {
             serde_json::from_str::<Command>(allow).unwrap(),
             Command::AllowLinks { links: false }
         );
+        let ask = r#"{"type":"ask-to-read","target":{"shared":{"file":2}},"label":"notes.md","limitS":120}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(ask).unwrap(),
+            Command::AskToRead {
+                target: ReadTarget::Shared { file: 2 },
+                label: "notes.md".into(),
+                limit_s: 120
+            }
+        );
+        let changes = r#"{"type":"ask-to-read","target":{"changes":{"fromSeq":4,"toSeq":9}},"label":"The changes in the last prompt","limitS":0}"#;
+        assert!(matches!(
+            serde_json::from_str::<Command>(changes).unwrap(),
+            Command::AskToRead { target: ReadTarget::Changes { from_seq: 4, to_seq: 9 }, .. }
+        ));
+        let vote = r#"{"type":"start-vote","task":"Show unreachable","cards":"t-shirt"}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(vote).unwrap(),
+            Command::StartVote { task: "Show unreachable".into(), cards: CardSet::TShirt }
+        );
+        let cast = r#"{"type":"cast-vote","card":{"value":2}}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(cast).unwrap(),
+            Command::CastVote { card: Some(Card::Value(2)) }
+        );
+        let back = r#"{"type":"cast-vote","card":null}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(back).unwrap(),
+            Command::CastVote { card: None }
+        );
+        let keep = r#"{"type":"keep-estimate","card":"unsure"}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(keep).unwrap(),
+            Command::KeepEstimate { card: Card::Unsure }
+        );
+        for (json, command) in [
+            (r#"{"type":"end-read"}"#, Command::EndRead),
+            (r#"{"type":"reveal-votes"}"#, Command::RevealVotes),
+            (r#"{"type":"vote-again"}"#, Command::VoteAgain),
+            (r#"{"type":"stop-vote"}"#, Command::StopVote),
+        ] {
+            assert_eq!(serde_json::from_str::<Command>(json).unwrap(), command);
+        }
         let notice = Event::Notice { notice: HostNotice::ViewerJoined("Anna".into()) };
         let json = serde_json::to_string(&notice).unwrap();
         assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), notice);

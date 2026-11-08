@@ -24,6 +24,7 @@ export default defineConfig({
             'guide/join',
             'guide/follow',
             'guide/documents',
+            'guide/read-and-estimate',
             'guide/browser',
             'guide/settings',
             'guide/keyboard',
