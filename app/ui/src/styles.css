@@ -433,14 +433,21 @@ button { font: inherit; color: inherit; }
 .requests:empty { display: none; }
 .panes { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); }
 .panes.dragging, .panes.dragging * { cursor: col-resize; user-select: none; }
-.pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); }
+/* The column is the pane's width: an implicit column grows to the widest content, such as a header
+   whose tabs don't fit, and the pane then cuts everything off at its right edge (#86). */
+.pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); background: var(--surface); }
 .pane[hidden], .tab-area[hidden] { display: none; }
 .pane.files-pane { background: var(--surface-sunken); }
 .pane-head { display: flex; align-items: center; gap: 4px; min-height: 38px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); }
 .pane-head .spacer { flex: 1; }
 .pane-title { margin: 0; font-size: 12.5px; font-weight: 700; }
-.pane-tabs { display: flex; gap: 2px; align-self: stretch; }
-.pane-tab { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-muted); cursor: pointer; }
+.pane-tabs { display: flex; gap: 2px; align-self: stretch; min-width: 0; }
+.pane-tab { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-muted); cursor: pointer; }
+.pane-tab .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The files panel's three tabs fit its usual width (230); narrower, the names shorten. */
+.files-pane .pane-head { padding-right: 2px; }
+.files-pane .pane-tabs { gap: 0; }
+.files-pane .pane-tab { gap: 4px; padding: 0 3px; }
 .pane-tab:hover { color: var(--text); }
 .pane-tab[aria-selected="true"] { color: var(--text); font-weight: 700; border-bottom-color: var(--text); }
 .pane-tab .count { color: var(--text-faint); font-weight: 400; font-size: 11.5px; }
