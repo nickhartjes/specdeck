@@ -279,7 +279,8 @@ describe('files the agent touched', () => {
     expect(tabNames()).toEqual(['Terminal, read-only', 'index.ts, preview']);
     const tab = screen.getByRole('tabpanel', { name: 'index.ts' });
     expect(within(tab).getByText('Change 1 of 1 · show in terminal')).toBeInTheDocument();
-    expect(within(tab).getByText('routes.use(health);')).toBeInTheDocument();
+    // Highlighted, so the line is split into coloured spans.
+    expect(tab).toHaveTextContent('routes.use(health);');
   });
 
   it('opens a document whole, and remembers it was read', () => {
@@ -300,6 +301,48 @@ describe('files the agent touched', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cargo.toml, read' }));
     expect(terminal.handle.scrollToSeq).toHaveBeenCalledWith(7, true);
     expect(screen.getByRole('tab', { name: 'Terminal, read-only' })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('whole files', () => {
+  /** Two code files the agent created, with their whole text shared. */
+  function codeTimeline(): TimelineEvent[] {
+    const write = (n: number, id: string, path: string, text: string): TimelineEvent[] => [
+      { ...at(n), kind: 'tool-call', promptId: 'p1', toolUseId: id, toolName: 'Write', input: { file_path: path } },
+      { ...at(n), kind: 'tool-result', promptId: 'p1', toolUseId: id, status: 'succeeded' },
+      { ...at(n), kind: 'file-change', promptId: 'p1', toolUseId: id, path, change: 'created', hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, lines: [`+${text}`] }] },
+      { ...at(n), kind: 'file-text', promptId: 'p1', toolUseId: id, path, text },
+    ];
+    return [{ ...at(1), kind: 'prompt', promptId: 'p1', text: 'write' }, ...write(2, 'w1', 'src/a.rs', 'fn a() {}'), ...write(3, 'w2', 'src/b.rs', 'fn b() {}')];
+  }
+  const showing = (name: string) => within(screen.getByRole('tabpanel', { name })).getByRole('button', { name: 'Whole file, changes marked' }).getAttribute('aria-pressed');
+
+  it('opens a code file on its changes, and keeps the view chosen for it', async () => {
+    renderWorkspace({ timeline: codeTimeline(), wholeFiles: true });
+    fireEvent.click(screen.getByRole('button', { name: 'src/a.rs, new' }));
+    expect(showing('a.rs')).toBe('false');
+    await userEvent.click(within(screen.getByRole('tabpanel', { name: 'a.rs' })).getByRole('button', { name: 'Whole file, changes marked' }));
+    expect(showing('a.rs')).toBe('true');
+    // Switching the view keeps the preview tab.
+    expect(tabNames()).toEqual(['Terminal, read-only', 'a.rs']);
+    await userEvent.click(screen.getByRole('button', { name: 'Close a.rs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'src/a.rs, new' }));
+    expect(showing('a.rs')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'src/b.rs, new' }));
+    expect(showing('b.rs')).toBe('false');
+  });
+
+  it('shows the change of a step, and keeps the view chosen for the file', async () => {
+    renderWorkspace({ timeline: codeTimeline(), wholeFiles: true });
+    fireEvent.click(screen.getByRole('button', { name: 'src/a.rs, new' }));
+    await userEvent.click(within(screen.getByRole('tabpanel', { name: 'a.rs' })).getByRole('button', { name: 'Whole file, changes marked' }));
+    const prompt = screen.getByRole('article', { name: 'Prompt 1' });
+    await userEvent.click(within(prompt).getAllByText('Write')[0]!);
+    expect(showing('a.rs')).toBe('false');
+    expect(screen.getByRole('tabpanel', { name: 'a.rs' }).querySelector('.flash')).not.toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Close a.rs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'src/a.rs, new' }));
+    expect(showing('a.rs')).toBe('true');
   });
 });
 

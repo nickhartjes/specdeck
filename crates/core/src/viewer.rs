@@ -84,6 +84,10 @@ pub enum ViewerEvent {
     },
     /// This viewer's suggestions and what became of each.
     Suggestions(Vec<Suggestion>),
+    /// Whether the host shares whole code files.
+    Shared {
+        whole_files: bool,
+    },
     /// The connection dropped; the viewer is reconnecting.
     Reconnecting,
     /// Not admitted; final.
@@ -558,6 +562,7 @@ impl Viewer {
                 ViewerEvent::Reply { id, outcome }
             }
             ControlUpdate::Suggestions(mine) => ViewerEvent::Suggestions(mine),
+            ControlUpdate::Shared { whole_files } => ViewerEvent::Shared { whole_files },
             ControlUpdate::Refused(reason) => {
                 return Some(Outcome::Final(ViewerEvent::Refused(reason)));
             }

@@ -6,6 +6,7 @@ import init, { WebViewer, parseJoinLink } from 'specdeck-web-wasm';
 import { BridgeContext } from '../api/bridge';
 import { applyAppearance } from '../appearance';
 import '../styles.css';
+import '../highlight.css';
 import { storedAppearance, webBridge } from './bridge';
 import type { ControlUpdate, Request, StreamUpdate, ViewerCore } from './connection';
 import { WebApp, takeHashCode } from './WebApp';

@@ -1033,6 +1033,15 @@ async fn host_allow_suggestions(
     with_host(&state, &window, |host| host.allow_suggestions(on))
 }
 
+#[tauri::command]
+async fn host_share_code(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    whole_files: bool,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.share_code(whole_files))
+}
+
 /// Sends a waiting suggestion as `text` (edited or not), or declines it when `text` is absent.
 #[tauri::command]
 async fn host_answer_suggestion(
@@ -2113,6 +2122,7 @@ pub fn run() {
             host_remove_viewer,
             host_set_viewer_limit,
             host_allow_suggestions,
+            host_share_code,
             host_answer_suggestion,
             suggest_prompt,
             host_close,

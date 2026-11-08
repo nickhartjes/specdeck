@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TimelineEvent } from '../api/types';
-import { buildDocuments, compareBlocks, splitBlocks } from './documents';
+import { blocksWithLines, buildDocuments, compareBlocks, sourceMarks, splitBlocks } from './documents';
 
 describe('document blocks', () => {
   it('splits Markdown into headings, paragraphs, list items and whole code blocks', () => {
@@ -12,6 +12,23 @@ describe('document blocks', () => {
     const read = '# Design\n\n## Shell\n\nzsh, bash, sh.\n\n## Texts\n\nA confirmation step.';
     const now = '# Design\n\n## Shell\n\nzsh, bash, sh.\n\n## Texts\n\nNo extra step.\n\n## Risks\n\nNone.';
     expect(compareBlocks(read, now).map(({ mark }) => mark)).toEqual([null, null, null, null, 'changed', 'new', 'new']);
+  });
+
+  it('knows the lines of each block', () => {
+    const text = '# Title\n\nFirst\nstill first.\n\n```\na\n\nb\n```\n- item';
+    expect(blocksWithLines(text).map(({ first, last }) => [first, last])).toEqual([
+      [0, 0],
+      [2, 3],
+      [5, 9],
+      [10, 10],
+    ]);
+  });
+
+  it('marks the source lines of the blocks the formatted document marks', () => {
+    const read = '# Design\n\nA confirmation step.';
+    const now = '# Design\n\nNo extra step,\nnone at all.\n\n## Risks';
+    expect(sourceMarks(read, now)).toEqual([null, null, 'changed', 'changed', null, 'new']);
+    expect(sourceMarks(null, now).every((mark) => mark === null)).toBe(true);
   });
 
   it('marks nothing for a first read', () => {
@@ -44,5 +61,19 @@ describe('documents and plans from the timeline', () => {
       ['a', 1],
       ['b', 0],
     ]);
+  });
+
+  it('keeps the whole text of code files by tool call, apart from documents', () => {
+    const { documents, codeTexts } = buildDocuments([
+      ...events,
+      { ...at(7), kind: 'file-text', promptId: 'p3', toolUseId: 't4', path: 'src/a.rs', text: 'fn a() {}' },
+      { ...at(8), kind: 'file-text', promptId: 'p3', toolUseId: 't5', path: 'src/a.rs', text: null },
+    ]);
+    expect([...codeTexts.get('src/a.rs')!]).toEqual([
+      ['t4', 'fn a() {}'],
+      ['t5', null],
+    ]);
+    expect(documents.has('src/a.rs')).toBe(false);
+    expect(documents.size).toBe(2);
   });
 });

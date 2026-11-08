@@ -34,9 +34,11 @@ const PROMPT_MARKER: &str = "Marker-Prompt-Text";
 const PATH_MARKER: &str = "marker-tool-path.rs";
 const TURN_SECRET: &str = "Marker-Turn-Secret";
 const SUGGESTION_MARKER: &str = "Marker-Suggestion-Text";
+const CODE_PATH_MARKER: &str = "marker-code-path.rs";
+const CODE_TEXT_MARKER: &str = "Marker-Code-Text";
 
-/// A fake Claude Code: prints the output marker, and on the line "go" reports a prompt and a
-/// tool call holding the other markers through its hooks. Then echoes lines.
+/// A fake Claude Code: prints the output marker, and on the line "go" reports a prompt, a tool
+/// call and a written code file holding the other markers through its hooks. Then echoes lines.
 const AGENT: &str = r#"#!/bin/sh
 [ "$1" = "--settings" ] || { echo "no settings"; exit 9; }
 url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$2" | head -n 1)
@@ -45,6 +47,9 @@ echo "ready Marker-Terminal-Output"
 read go
 post '{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"Marker-Prompt-Text"}'
 post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Read","tool_use_id":"r","tool_input":{"file_path":"marker-tool-path.rs"}}'
+post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"marker-code-path.rs"}}'
+echo 'const C: &str = "Marker-Code-Text";' > "$(dirname "$0")/marker-code-path.rs"
+post '{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"marker-code-path.rs"},"tool_response":{"filePath":"marker-code-path.rs","originalFile":null,"content":"x"}}'
 echo posted
 while read line; do echo "got:$line"; done
 "#;
@@ -153,9 +158,12 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     );
     let mut text = String::new();
     until(&mut events, &mut text, |text, _| text.contains(OUTPUT_MARKER)).await;
+    // Whole code files on, so a code file's text crosses too.
+    session.share_whole_files(true);
+    until(&mut events, &mut text, |_, e| *e == ViewerEvent::Shared { whole_files: true }).await;
     session.input(b"go\r").unwrap();
     until(&mut events, &mut text, |_, event| {
-        matches!(event, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::ToolCall { .. }))
+        matches!(event, ViewerEvent::Timeline { event, .. } if matches!(&event.entry, Entry::FileText { text: Some(text), .. } if text.contains(CODE_TEXT_MARKER)))
     })
     .await;
 
@@ -202,6 +210,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "viewer.attempt_ended",
         "host.viewer_left",
         "host.requests_allowed",
+        "host.code_sharing",
         "host.viewer_request",
         "host.suggestion_answered",
         "viewer.request_sent",
@@ -224,6 +233,8 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         PATH_MARKER,
         "Marker-Typed-Line",
         SUGGESTION_MARKER,
+        CODE_PATH_MARKER,
+        CODE_TEXT_MARKER,
         TURN_SECRET,
         code.as_str(),
         "127.0.0.1",

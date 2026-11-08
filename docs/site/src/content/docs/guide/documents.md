@@ -13,4 +13,6 @@ Each document opens in a tab of its own. A document of a plan links the plan's o
 
 A document tab marks the parts that changed since you last read it as **New** or **Changed**; turn **Highlight changes since you last read it** off to read without the marks. A document you open for the first time has no marks. Very large documents (over 200 KB) cannot be shown whole; the tab shows their changes instead.
 
+A document opens **Formatted**. Switch it to **Source** to see the Markdown as written, with line numbers and highlighted syntax; the same parts are marked as new or changed there, line by line. Switching keeps your place in the document, and the next document you open is formatted again.
+
 Plan cards come from the OpenSpec CLI on the host's computer. Without it, SpecDeck recognises OpenSpec's default layout (proposal, specs, design and tasks).

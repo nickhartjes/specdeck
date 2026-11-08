@@ -10,10 +10,11 @@
 use specdeck_local::{Compat, Frame, Protocol, compat};
 use specdeck_session::messages::{Command, Event};
 
-/// Commands added in this release (`viewer-to-host-channel`), which a session of the release
-/// before it does not know. Its snapshot has no `suggestionsPossible`, so the window offers none
-/// of them; this keeps a stray one from reaching it. Remove a release later.
-const NEW_COMMANDS: [&str; 2] = ["allow-requests", "answer-suggestion"];
+/// Commands added in this release (`viewer-to-host-channel`, `files-documents-and-code`), which a
+/// session of the release before it does not know. Its snapshot has no `suggestionsPossible` or
+/// `wholeFilesPossible`, so the window offers none of them; this keeps a stray one from reaching
+/// it. Remove a release later.
+const NEW_COMMANDS: [&str; 3] = ["allow-requests", "answer-suggestion", "share-code"];
 
 /// `command` as a session of release `peer` understands it, or None when it cannot take it.
 pub fn command(peer: Protocol, command: &Command) -> Option<Frame> {
@@ -178,11 +179,14 @@ mod tests {
             id: 1,
             answer: specdeck_session::messages::SuggestionAnswer::Decline,
         };
+        let share = Command::ShareCode { whole_files: true };
         assert!(command(previous, &allow).is_none());
         assert!(command(previous, &answer).is_none());
+        assert!(command(previous, &share).is_none());
         assert!(command(previous, &Command::Status).is_some());
         assert!(command(Protocol::own(), &allow).is_some());
         assert!(command(Protocol::own(), &answer).is_some());
+        assert!(command(Protocol::own(), &share).is_some());
     }
 
     #[test]

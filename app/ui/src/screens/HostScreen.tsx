@@ -8,6 +8,7 @@ import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
 import { LayoutControls } from '../components/LayoutMenu';
 import { PeopleButton } from '../components/PeopleButton';
+import { SharingSettings } from '../components/SharingSettings';
 import { choose, type Layout } from '../model/layout';
 import { useLayout } from './useLayout';
 import { useMenu } from '../menu/menu';
@@ -51,6 +52,10 @@ interface State {
   suggestions: HostSuggestion[];
   /** The latest suggestion to arrive while the window is open, to announce. */
   arrived: HostSuggestion | null;
+  /** False for sessions without a timeline and sessions of the previous release. */
+  wholeFilesPossible: boolean;
+  /** Whether viewers can open whole code files. */
+  wholeFiles: boolean;
 }
 
 const initial: State = {
@@ -71,6 +76,8 @@ const initial: State = {
   suggestionsAllowed: false,
   suggestions: [],
   arrived: null,
+  wholeFilesPossible: false,
+  wholeFiles: false,
 };
 
 export function hostReducer(state: State, event: HostEvent | { type: 'limit'; limit: number }): State {
@@ -85,9 +92,13 @@ export function hostReducer(state: State, event: HostEvent | { type: 'limit'; li
         suggestionsPossible: event.suggestionsPossible ?? false,
         suggestionsAllowed: event.suggestionsAllowed ?? false,
         suggestions: event.suggestions ?? [],
+        wholeFilesPossible: event.wholeFilesPossible ?? false,
+        wholeFiles: event.wholeFiles ?? false,
       };
     case 'allowed':
       return { ...state, suggestionsAllowed: event.suggestions };
+    case 'shared':
+      return { ...state, wholeFiles: event.wholeFiles };
     case 'suggestions': {
       const newest = event.suggestions.at(-1);
       const arrived = event.suggestions.length > state.suggestions.length && newest?.state === 'Waiting' ? newest : state.arrived;
@@ -221,6 +232,14 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
             dispatch({ type: 'limit', limit });
             void bridge.hostSetViewerLimit(limit);
           }}
+          agentName={agentName}
+        />
+        <SharingSettings
+          wholeFiles={
+            state.wholeFilesPossible
+              ? { on: state.wholeFiles, onChange: (on) => void bridge.hostShareCode(on).catch((e) => showToast(errorMessage(e))) }
+              : undefined
+          }
           suggestions={
             state.suggestionsPossible
               ? { allowed: state.suggestionsAllowed, onChange: (on) => void bridge.hostAllowSuggestions(on).catch((e) => showToast(errorMessage(e))) }
@@ -273,6 +292,7 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
         onResize={onResize}
         onThemeColors={onThemeColors}
         onTerminalState={onTerminalState}
+        wholeFiles={state.wholeFiles}
         prompts={
           state.suggestionsPossible
             ? {

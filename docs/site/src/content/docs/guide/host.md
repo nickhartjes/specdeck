@@ -28,13 +28,15 @@ Settings are the same for every window: your name, sharing service, layout and z
 - **The whole session so far.** Anyone who joins later can scroll back to the start of the terminal and the timeline, as the note under the invite code says.
 - **The terminal**: everything the agent or shell prints. Claude Code itself prints part of what it reads and writes, such as the first lines of a file it creates, and that is shared like any other output.
 - **With Claude Code, the timeline**: your prompts, Claude's responses, the tools it uses, and diffs of the files it creates or changes in the session folder. Markdown files in the session folder can also be read whole.
+- **Whole code files, only if you choose so.** By default viewers see only the changes Claude makes to code. In the **sharing settings** (the sliders button at the top), **Code viewers can open** can be set to **Changed files, whole, with changes marked**. From then on, each code file Claude creates or changes in the session folder is sent whole with its change, up to 200 KB, and viewers can open it with the changes marked. Turning it off again stops sending them; what was already sent stays with the viewers who got it. Every session starts with only the changes.
+- **Never sent whole**, whatever you choose: files outside the session folder (also through a symlink), files git ignores, private files such as `.env`, keys and certificates (`*.pem`, `*.key`, `id_rsa`), `.npmrc` and `.netrc`, files that are not text, and files Claude only read. Their changes are still shown as diffs, as before, except for files outside the session folder.
 - **In the timeline, files outside the session folder only by name.** When the agent reads or changes a file elsewhere, such as Claude Code's own notes under `~/.claude/`, the timeline shows that it happened and the file's path, starting with `~` in your home folder, but no diff and no text. What the agent prints about it in the terminal is still shared.
 - **Shell commands as Claude typed them**, including any paths in them.
 
 Start the session in the folder you mean to share, not a folder above it: the timeline does not show changes elsewhere in a git repository.
 
 :::caution[Anything in the terminal is shared]
-SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a command prints while people watch, for example by not asking the agent to show `.env` files.
+SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a command prints while people watch, for example by not asking the agent to show `.env` files. This holds whatever **Code viewers can open** is set to: a file Claude reads or prints in the terminal is shared as it appears there.
 :::
 
 ## While you host
@@ -45,6 +47,8 @@ SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a com
 | Stop people from joining with the current code | Select the **new code** button next to the invite code. People already watching stay; share the new code with anyone still to join |
 | Remove someone | Select the avatars, then **Remove** next to their name, and confirm. They are disconnected immediately, and the invite code changes so they cannot rejoin with it |
 | Limit the number of viewers | Select the avatars and set **Max viewers** (1 to 20). Lowering it never disconnects anyone already watching |
+| Let viewers open whole code files | Select the **sharing settings** button (sliders) and set **Code viewers can open**. It applies to changes Claude makes from then on |
+| Let viewers suggest prompts, or stop them | Select the **sharing settings** button and switch **Viewers can suggest prompts**. Nothing a viewer suggests reaches the agent until you send it |
 | End the session for everyone | Select **End session** and confirm. The agent or shell stops and the invite code stops working |
 
 The status next to the folder name shows what the agent is doing: **working**, **waiting for input**, or **exited**. For omp, Codex, Grok and pi it shows working or waiting when the agent reports it, and **Live** otherwise; OpenCode always shows **Live**, because its activity is not shared; a terminal session also shows **Live**, and **Shell exited** once you exit the shell. When Claude Code asks your permission, for example to run a command, the status shows **waiting** and the timeline shows the question, so viewers see why it paused.

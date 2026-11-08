@@ -14,12 +14,13 @@ use serde::Serialize;
 use specdeck_protocol::control::{
     self, HostMessage, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
     REQUESTS_PROTOCOL_VERSION, RefusalReason, Role, Suggestion, SuggestionState, ViewerMessage,
-    ViewerRequest,
+    ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
 };
 use specdeck_protocol::frames::{Frame, MAX_FRAME_BYTES, Record, SessionKey};
 use specdeck_protocol::invite::{InviteCode, InviteKeys};
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
 use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage, SignalPayload};
+use specdeck_protocol::timeline::Entry;
 use specdeck_protocol::{AgentId, AgentStatus};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{oneshot, watch};
@@ -76,6 +77,10 @@ pub enum SharingEvent {
     },
     /// Every suggestion in the session, oldest first, on every change.
     Suggestions(Vec<HostSuggestion>),
+    /// Whether the host shares whole code files, after it changed.
+    Shared {
+        whole_files: bool,
+    },
 }
 
 /// A viewer's suggestion as the host sees it.
@@ -301,6 +306,9 @@ struct Host {
     last_departure: Option<Departure>,
     traffic: diag::Traffic,
     requests: Requests,
+    /// Whether whole code files are shared, as last told to viewers; follows the session's
+    /// setting ([`SessionView::whole_files`]).
+    whole_files: bool,
 }
 
 /// What viewers may send and what they sent: the switches, each viewer's rate limit and the
@@ -461,6 +469,7 @@ impl Host {
             last_departure: None,
             traffic: diag::Traffic::default(),
             requests,
+            whole_files: false,
         }
     }
 
@@ -506,6 +515,7 @@ impl Host {
                 _ = tokio::time::sleep_until(next_attempt), if server_rx.is_none() => {}
                 _ = traffic.tick() => self.traffic.report_host(),
             }
+            self.sync_whole_files();
             self.pump_all();
             let retry_in =
                 server_rx.is_none().then(|| next_attempt.saturating_duration_since(Instant::now()));
@@ -830,7 +840,9 @@ impl Host {
                 let _ = slot.peer.send(Channel::Control, &control::encode(&welcome));
                 let allowed =
                     HostMessage::Allowed { suggestions: self.requests.suggestions_allowed() };
-                send_newer(slot, &allowed);
+                send_newer(slot, REQUESTS_PROTOCOL_VERSION, &allowed);
+                let shared = HostMessage::Shared { whole_files: self.whole_files };
+                send_newer(slot, WHOLE_FILES_PROTOCOL_VERSION, &shared);
                 self.send_mine(identity.id);
                 self.broadcast_participants();
             }
@@ -866,7 +878,7 @@ impl Host {
             .map_or_else(String::new, |p| p.label);
         let (outcome, added) = self.requests.receive(viewer, id, request, from, Instant::now());
         if let Some(slot) = self.slots.get_mut(connection) {
-            send_newer(slot, &HostMessage::Reply { id, outcome });
+            send_newer(slot, REQUESTS_PROTOCOL_VERSION, &HostMessage::Reply { id, outcome });
         }
         if added {
             self.send_mine(viewer);
@@ -881,9 +893,24 @@ impl Host {
         let on = self.requests.suggestions_allowed();
         let allowed = HostMessage::Allowed { suggestions: on };
         for slot in self.slots.values_mut() {
-            send_newer(slot, &allowed);
+            send_newer(slot, REQUESTS_PROTOCOL_VERSION, &allowed);
         }
         let _ = self.events.send(SharingEvent::Allowed { suggestions: on });
+    }
+
+    /// Tells viewers and the host's window when the session's whole-files setting changed.
+    fn sync_whole_files(&mut self) {
+        let on = self.view.whole_files();
+        if on == self.whole_files {
+            return;
+        }
+        self.whole_files = on;
+        diag::host_code_sharing(on);
+        let shared = HostMessage::Shared { whole_files: on };
+        for slot in self.slots.values_mut() {
+            send_newer(slot, WHOLE_FILES_PROTOCOL_VERSION, &shared);
+        }
+        let _ = self.events.send(SharingEvent::Shared { whole_files: on });
     }
 
     /// Whether the suggestion was waiting; only then is the answer recorded.
@@ -901,7 +928,7 @@ impl Host {
         let message = HostMessage::Suggestions { mine: self.requests.mine(viewer) };
         for slot in self.slots.values_mut() {
             if slot.admitted.as_ref().is_some_and(|a| a.id == viewer) {
-                send_newer(slot, &message);
+                send_newer(slot, REQUESTS_PROTOCOL_VERSION, &message);
             }
         }
     }
@@ -1076,11 +1103,11 @@ impl Host {
     }
 }
 
-/// Sends a message added in protocol version 3 to an admitted viewer that can read it. Every
-/// such message goes through here: a version 2 viewer that got one could not decode it and
+/// Sends a message added in protocol version `since` to an admitted viewer that can read it.
+/// Every such message goes through here: an older viewer that got one could not decode it and
 /// would reconnect over and over.
-fn send_newer(slot: &mut Slot, message: &HostMessage) {
-    if slot.admitted.as_ref().is_some_and(|a| a.protocol >= REQUESTS_PROTOCOL_VERSION) {
+fn send_newer(slot: &mut Slot, since: u32, message: &HostMessage) {
+    if slot.admitted.as_ref().is_some_and(|a| a.protocol >= since) {
         let _ = slot.peer.send(Channel::Control, &control::encode(message));
     }
 }
@@ -1116,6 +1143,13 @@ fn pump(
     for event in view.timeline_from(admitted.event_cursor) {
         if sink.queued() >= HIGH_WATER {
             break;
+        }
+        // An older viewer cannot decode a code file's text; it sees a gap, which it accepts.
+        if admitted.protocol < WHOLE_FILES_PROTOCOL_VERSION
+            && matches!(event.entry, Entry::FileText { .. })
+        {
+            admitted.event_cursor += 1;
+            continue;
         }
         let frame = key.encode(&Frame::Event { seq: admitted.event_cursor as u64, event });
         // Events are fitted when they happen; one still too large would be refused and drop

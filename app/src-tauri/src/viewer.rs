@@ -44,6 +44,10 @@ pub enum ViewEvent {
     Allowed {
         suggestions: bool,
     },
+    /// Whether the host shares whole code files.
+    Shared {
+        whole_files: bool,
+    },
     /// A request was numbered; its replies carry this id.
     RequestSent {
         id: u32,
@@ -168,6 +172,7 @@ fn translate(event: ViewerEvent) -> Option<ViewEvent> {
         ViewerEvent::Status(status) => ViewEvent::Status { status },
         ViewerEvent::Reconnecting => ViewEvent::Reconnecting,
         ViewerEvent::Allowed { suggestions } => ViewEvent::Allowed { suggestions },
+        ViewerEvent::Shared { whole_files } => ViewEvent::Shared { whole_files },
         ViewerEvent::RequestSent { id } => ViewEvent::RequestSent { id },
         ViewerEvent::Reply { id, outcome } => ViewEvent::Reply { id, outcome },
         ViewerEvent::Suggestions(mine) => ViewEvent::Suggestions { mine },

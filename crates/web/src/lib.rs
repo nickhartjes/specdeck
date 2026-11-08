@@ -51,6 +51,9 @@ enum Control {
     Allowed {
         suggestions: bool,
     },
+    Shared {
+        whole_files: bool,
+    },
     Reply {
         id: u32,
         outcome: Outcome,
@@ -186,7 +189,7 @@ impl WebViewer {
     }
 
     /// What a message on the control channel means: `{ type: "welcome" | "participants" |
-    /// "status" | "refused" | "ended" | "allowed" | "reply" | "suggestions" | "retry", ... }`.
+    /// "status" | "refused" | "ended" | "allowed" | "reply" | "suggestions" | "shared" | "retry", ... }`.
     #[wasm_bindgen(js_name = onControl)]
     pub fn on_control(&mut self, bytes: &[u8]) -> JsValue {
         to_js(&match self.state.on_control(bytes) {
@@ -205,6 +208,7 @@ impl WebViewer {
             ControlUpdate::Allowed { suggestions } => Control::Allowed { suggestions },
             ControlUpdate::Reply { id, outcome } => Control::Reply { id, outcome },
             ControlUpdate::Suggestions(mine) => Control::Suggestions { mine },
+            ControlUpdate::Shared { whole_files } => Control::Shared { whole_files },
             ControlUpdate::Retry => Control::Retry,
         })
     }

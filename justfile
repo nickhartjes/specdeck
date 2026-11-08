@@ -149,8 +149,9 @@ local-dev: local-up
     pnpm --filter @specdeck/ui dev </dev/null >.local-dev/vite.log 2>&1 &
     until curl -sf http://localhost:5173 >/dev/null; do sleep 0.25; done
     SPECDECK_PROFILE=host pnpm tauri dev --config '{"build":{"beforeDevCommand":null}}' </dev/null 2>&1 | tee .local-dev/host.log &
-    # The viewer is a second instance of the same debug build.
-    until pgrep -f target/debug/specdeck-app >/dev/null; do sleep 0.5; done
+    # The viewer is a second instance of the same debug build, started once tauri dev has built
+    # it: an app process from an earlier build would otherwise start the viewer on the old binary.
+    until grep -q 'Running.*target/debug/specdeck-app' .local-dev/host.log 2>/dev/null; do sleep 0.5; done
     SPECDECK_PROFILE=viewer target/debug/specdeck-app </dev/null 2>&1 | tee .local-dev/viewer.log &
     echo "SpecDeck (host) and SpecDeck (viewer) are starting. Close this with Ctrl+C."
     wait

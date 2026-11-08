@@ -9,15 +9,19 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::{AgentId, AgentStatus};
 
 /// Bumped on every protocol change. Version 3 added requests from viewers (`Send`) and the host's
-/// answers to them (`Allowed`, `Reply`, `Suggestions`).
-pub const PROTOCOL_VERSION: u32 = 3;
+/// answers to them (`Allowed`, `Reply`, `Suggestions`); version 4 the whole text of code files
+/// (the `FileText` timeline entry) and the host's setting for it (`Shared`).
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// The oldest viewer protocol a host admits. Older viewers watch only: the host never sends them
 /// a message their version cannot read.
-pub const MIN_VIEWER_PROTOCOL_VERSION: u32 = 2;
+pub const MIN_VIEWER_PROTOCOL_VERSION: u32 = 3;
 
 /// The first protocol version that can send requests to the host.
 pub const REQUESTS_PROTOCOL_VERSION: u32 = 3;
+
+/// The first protocol version that reads whole code files: `FileText` entries and `Shared`.
+pub const WHOLE_FILES_PROTOCOL_VERSION: u32 = 4;
 
 /// Longest username accepted, in characters.
 pub const MAX_USERNAME_CHARS: usize = 64;
@@ -114,6 +118,10 @@ pub enum HostMessage {
     /// admission and on every change; only to that viewer.
     Suggestions {
         mine: Vec<Suggestion>,
+    },
+    /// Whether the host shares whole code files (version 4): on admission and on every change.
+    Shared {
+        whole_files: bool,
     },
 }
 
@@ -341,6 +349,7 @@ mod tests {
                     Suggestion { id: 3, text: "c".into(), state: SuggestionState::Declined },
                 ],
             },
+            HostMessage::Shared { whole_files: true },
         ];
         for message in messages {
             assert_eq!(decode_host(&encode(&message)), Ok(message));
@@ -361,8 +370,9 @@ mod tests {
     }
 
     #[test]
-    fn version_2_messages_keep_their_bytes() {
-        // Hosts still admit version 2 viewers, so these encodings must not change.
+    fn older_messages_keep_their_bytes() {
+        // Hosts still admit version 3 viewers, so these encodings, unchanged since version 2,
+        // must not change.
         assert_eq!(encode(&ViewerMessage::Leave), [2]);
         assert_eq!(encode(&ViewerMessage::Resend { from_output_seq: 9 }), [1, 9]);
         let hello = ViewerMessage::Hello {
@@ -375,6 +385,10 @@ mod tests {
         assert_eq!(encode(&hello), [0, 2, 2, b'a', b'b', 0, 1, 1, 0]);
         assert_eq!(encode(&HostMessage::SessionEnded), [4]);
         assert_eq!(encode(&HostMessage::Status { status: AgentStatus::Working }), [3, 1]);
+        assert_eq!(encode(&HostMessage::Allowed { suggestions: true }), [5, 1]);
+        assert_eq!(encode(&HostMessage::Reply { id: 4, outcome: Outcome::Off }), [6, 4, 1]);
+        // `Shared` comes after every version 3 message.
+        assert_eq!(encode(&HostMessage::Shared { whole_files: true }), [8, 1]);
     }
 
     #[test]
@@ -442,10 +456,15 @@ mod tests {
 
     #[test]
     fn version_check_names_the_side_that_must_update() {
-        assert_eq!(check_version(2, 3, 2), Ok(()));
-        assert_eq!(check_version(2, 3, 3), Ok(()));
-        assert_eq!(check_version(2, 3, 1), Err(RefusalReason::ViewerOutdated));
-        assert_eq!(check_version(2, 3, 4), Err(RefusalReason::HostOutdated));
+        assert_eq!(check_version(3, 4, 3), Ok(()));
+        assert_eq!(check_version(3, 4, 4), Ok(()));
+        assert_eq!(check_version(3, 4, 2), Err(RefusalReason::ViewerOutdated));
+        assert_eq!(check_version(3, 4, 5), Err(RefusalReason::HostOutdated));
+        assert_eq!(
+            check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 3),
+            Ok(()),
+            "the previous release's viewers are admitted"
+        );
         assert_eq!(
             check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, PROTOCOL_VERSION),
             Ok(())

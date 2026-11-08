@@ -2,8 +2,9 @@
 
 The wire protocol between a host and its viewers. Both sides use this crate; it does no I/O. Design background: decisions 7 and 8 in [`design.md`](../../openspec/changes/archive/2026-10-31-native-shared-session-mvp/design.md).
 
-Current version: `PROTOCOL_VERSION = 3` ([`src/control.rs`](src/control.rs)). Hosts admit viewers from `MIN_VIEWER_PROTOCOL_VERSION = 2` up to their own version.
+Current version: `PROTOCOL_VERSION = 4` ([`src/control.rs`](src/control.rs)). Hosts admit viewers from `MIN_VIEWER_PROTOCOL_VERSION = 3` up to their own version: one version back.
 
+- Version 4 added the whole text of code files: the `file-text` timeline entry and the host's setting for it (`Shared`). Version 3 viewers are admitted and watch as before, suggestions included: the host never sends them a `file-text` event or `Shared`. It skips such an event for them, which they see as a gap in the event sequence, as they already accept.
 - Version 3 added requests from viewers to the host (`Send`) and the host's answers (`Allowed`, `Reply`, `Suggestions`). Version 2 viewers are admitted and watch read-only: the host never sends them a version 3 message, which they could not decode and would answer by reconnecting.
 - Version 2 added Codex, Grok and pi to the agents; postcard encodes the agent by its index, so apps that speak version 1 cannot read a `Welcome` for them.
 
@@ -51,8 +52,9 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `Allowed` (v3) | `suggestions` | What viewers may send; on admission and on every change |
 | `Reply` (v3) | `id`, `outcome` | To the sender only: `Received`, `Off` (the host has turned that kind off) or `RateLimited` (3 at once, then 1 every 10 seconds per viewer, not reset by reconnecting) |
 | `Suggestions` (v3) | `mine[]` (`id`, `text`, `state`) | To one viewer: their own suggestions in this session, `Waiting`, `Sent { edited }` or `Declined`; on admission and on every change |
+| `Shared` (v4) | `whole_files` | Whether the host shares whole code files; on admission and on every change |
 
-Messages marked v3 are sent only to viewers admitted with version 3 or later.
+Messages marked v3 or v4 are sent only to viewers admitted with that version or later.
 
 ### Handshake
 
@@ -65,6 +67,7 @@ viewer                                      host
   | <-- Welcome {..., session_public_key} ----  |
   | <-- Participants, Status -----------------  |
   | <-- Allowed, Suggestions (v3 viewers) ----  |
+  | <-- Shared (v4 viewers) ------------------  |
   | <== history, then live records and ======  |
   |     timeline events on `stream`             |
 ```
@@ -118,6 +121,8 @@ A viewer that was admitted reconnects through the session's **rejoin room** (fro
 | `tool-result` | A tool finished: `succeeded`, `failed` (with `error`) or `not-run` |
 | `file-change` | A file created or edited, with diff hunks |
 | `file-read` | A file the agent read |
+| `document` | The whole text of a Markdown file the agent created or changed, after its `file-change`; `text` is null when too large |
+| `file-text` (v4) | The whole text of a code file the agent created or changed, after its `file-change`, only while the host shares whole code files; `text` is null when too large. Never sent to version 3 viewers |
 | `timeline-unavailable` | Structured events cannot be captured; the terminal mirror still works |
 | `timeline-available` | Events arrive again |
 

@@ -222,6 +222,8 @@ export type TimelineEvent = Stamp &
     | { kind: 'file-read'; promptId: string; toolUseId: string; path: string }
     | { kind: 'attention'; message: string }
     | { kind: 'document'; promptId: string; toolUseId: string; path: string; text: string | null }
+    /** A code file's whole text after its change, while the host shares whole code files; null when too large. */
+    | { kind: 'file-text'; promptId: string; toolUseId: string; path: string; text: string | null }
     | { kind: 'plan'; change: string; documents: PlanDocument[]; tasks: { done: number; total: number } }
     | { kind: 'timeline-unavailable'; reason: string }
     | { kind: 'timeline-available' }
@@ -287,12 +289,17 @@ export type HostEvent =
       suggestionsPossible?: boolean;
       suggestionsAllowed?: boolean;
       suggestions?: HostSuggestion[];
+      /** False for sessions without a timeline; absent from sessions of the previous release, which never share whole code files. */
+      wholeFilesPossible?: boolean;
+      wholeFiles?: boolean;
     }
   | { type: 'sharing'; state: SharingState; code: string | null }
   /** What viewers may send, after the host changed it. */
   | { type: 'allowed'; suggestions: boolean }
   /** Every suggestion in the session, oldest first, on every change. */
   | { type: 'suggestions'; suggestions: HostSuggestion[] }
+  /** Whether viewers can open whole code files, after the host changed it. */
+  | { type: 'shared'; wholeFiles: boolean }
   /** Whether the sharing service serves the web viewer, once checked. */
   | { type: 'web-viewer'; available: boolean }
   | { type: 'participants'; participants: Participant[] }
@@ -330,6 +337,8 @@ export type ViewEvent =
   | { type: 'reply'; id: number; outcome: RequestOutcome }
   /** This viewer's suggestions and what became of each. */
   | { type: 'suggestions'; mine: Suggestion[] }
+  /** Whether the host shares whole code files; never sent by a host of the previous release. */
+  | { type: 'shared'; wholeFiles: boolean }
   | { type: 'ended'; reason: EndReason };
 
 /** The terminal's state for diagnostics: enums and numbers only, never its content. */

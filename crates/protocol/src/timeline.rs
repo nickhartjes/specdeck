@@ -50,7 +50,7 @@ fn json_len(event: &TimelineEvent) -> usize {
 fn shrink(entry: &mut Entry, allowed: usize) {
     match entry {
         Entry::FileChange { hunks, .. } => keep_lines(hunks, allowed),
-        Entry::Document { text, .. } => *text = None,
+        Entry::Document { text, .. } | Entry::FileText { text, .. } => *text = None,
         Entry::Prompt { text, .. }
         | Entry::Message { text, .. }
         | Entry::Response { text, .. }
@@ -194,6 +194,15 @@ pub enum Entry {
     /// The whole text of a Markdown file the agent just created or changed, sent right after its
     /// `FileChange`; `None` when it is too large to send.
     Document {
+        prompt_id: String,
+        tool_use_id: String,
+        path: String,
+        text: Option<String>,
+    },
+    /// The whole text of a code file the agent just created or changed, sent right after its
+    /// `FileChange` while the host shares whole code files; `None` when it is too large to send.
+    /// Protocol version 4: never sent to older viewers, which cannot decode it.
+    FileText {
         prompt_id: String,
         tool_use_id: String,
         path: String,
@@ -496,6 +505,51 @@ mod tests {
             })
         );
         assert_eq!(serde_json::to_value(document(None)).unwrap()["text"], Value::Null);
+    }
+
+    #[test]
+    fn code_files_carry_their_text_or_null_when_too_large() {
+        let file = |text: Option<&str>| Entry::FileText {
+            prompt_id: "p".into(),
+            tool_use_id: "t".into(),
+            path: "src/main.rs".into(),
+            text: text.map(Into::into),
+        };
+        let json = serde_json::json!({
+            "kind": "file-text", "promptId": "p", "toolUseId": "t",
+            "path": "src/main.rs", "text": "fn main() {}"
+        });
+        assert_eq!(serde_json::to_value(file(Some("fn main() {}"))).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), file(Some("fn main() {}")));
+        assert_eq!(serde_json::to_value(file(None)).unwrap()["text"], Value::Null);
+    }
+
+    #[test]
+    fn an_unknown_kind_cannot_be_decoded() {
+        // Why `FileText` is held back from version 3 viewers: their apps decode every event into
+        // `TimelineEvent`, and a kind they do not know fails the whole frame.
+        let json = serde_json::json!({
+            "outputSeq": 1, "at": 2, "kind": "no-such-kind", "promptId": "p"
+        });
+        assert!(serde_json::from_value::<TimelineEvent>(json).is_err());
+    }
+
+    #[test]
+    fn a_large_code_file_is_sent_without_its_text() {
+        let event = TimelineEvent {
+            output_seq: 1,
+            at: 2,
+            entry: Entry::FileText {
+                prompt_id: "p".into(),
+                tool_use_id: "t".into(),
+                path: "src/big.rs".into(),
+                text: Some("x".repeat(300 * 1024)),
+            },
+            truncated: false,
+        };
+        let fitted = fit(event, MAX_EVENT_JSON_BYTES);
+        assert!(fitted.truncated);
+        assert!(matches!(fitted.entry, Entry::FileText { text: None, .. }));
     }
 
     #[test]

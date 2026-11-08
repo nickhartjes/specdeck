@@ -420,6 +420,66 @@ read line; echo "got:$line"; read line; exit 4"#,
 }
 
 #[tokio::test]
+async fn code_files_are_sent_whole_only_while_the_host_shares_them() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    // Writes `a.rs`, waits for the test to turn whole files on, then writes `b.rs` and `.env`.
+    fake_agent(
+        bin.path(),
+        "claude",
+        r#"url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$2" | head -n 1)
+post() { curl -s -o /dev/null -X POST -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -d "$1" "$url"; }
+post '{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"code"}'
+write() { post "{\"hook_event_name\":\"PreToolUse\",\"prompt_id\":\"p1\",\"tool_name\":\"Write\",\"tool_use_id\":\"$1\",\"tool_input\":{\"file_path\":\"$2\"}}"
+  printf '%b' "$3" > "$2"
+  post "{\"hook_event_name\":\"PostToolUse\",\"prompt_id\":\"p1\",\"tool_name\":\"Write\",\"tool_use_id\":\"$1\",\"tool_input\":{\"file_path\":\"$2\"},\"tool_response\":{\"filePath\":\"$2\",\"originalFile\":null,\"content\":\"x\"}}"; }
+write t1 "$PWD/a.rs" 'fn a() {}\n'
+while [ ! -e "$PWD/go" ]; do sleep 0.05; done
+write t2 "$PWD/b.rs" 'fn b() {}\n'
+write t3 "$PWD/.env" 'TOKEN=secret\n'
+echo posted
+exit 0"#,
+    );
+
+    let (session, mut events) = HostSession::start(
+        config(AgentId::ClaudeCode, folder.path(), data.path()),
+        &env(bin.path()),
+    )
+    .await
+    .unwrap();
+    assert!(!session.whole_files(), "off when a session starts");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !session
+            .timeline()
+            .iter()
+            .any(|e| matches!(&e.entry, Entry::FileChange { path, .. } if path == "a.rs"))
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("no change of a.rs");
+    session.share_whole_files(true);
+    std::fs::write(folder.path().join("go"), "").unwrap();
+    next_matching(&mut events, |e| matches!(e, SessionEvent::Exited { .. })).await;
+
+    let entries: Vec<Entry> = session.timeline().into_iter().map(|e| e.entry).collect();
+    let texts: Vec<(String, Option<String>)> = entries
+        .iter()
+        .filter_map(|e| match e {
+            Entry::FileText { path, text, .. } => Some((path.clone(), text.clone())),
+            _ => None,
+        })
+        .collect();
+    // `a.rs` changed while whole files were off, and `.env` is private.
+    assert_eq!(texts, [("b.rs".to_owned(), Some("fn b() {}\n".to_owned()))]);
+    let at = entries.iter().position(|e| matches!(e, Entry::FileText { .. })).unwrap();
+    assert!(matches!(&entries[at - 1], Entry::FileChange { path, .. } if path == "b.rs"));
+    session.close();
+}
+
+#[tokio::test]
 async fn openspec_documents_and_plans_reach_the_timeline() {
     let bin = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();

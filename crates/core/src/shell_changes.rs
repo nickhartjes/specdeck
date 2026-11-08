@@ -12,6 +12,7 @@ use serde_json::Value;
 use specdeck_protocol::timeline::{DiffHunk, FileChangeKind};
 use tempfile::TempDir;
 
+use crate::code_files;
 use crate::documents::{self, DocumentText};
 use crate::environment::Environment;
 use crate::hooks::HookPayload;
@@ -37,8 +38,10 @@ pub struct CommandChanges {
     pub prompt_id: String,
     pub tool_use_id: String,
     pub files: Vec<ChangedFile>,
-    /// The text the command left in the documents it created or changed.
-    pub documents: Vec<DocumentText>,
+    /// The text the command left in the documents it created or changed and, while the host
+    /// shares whole code files, in the other text files. Code files still have to pass
+    /// [`code_files::CodeFiles::may_send`].
+    pub texts: Vec<DocumentText>,
 }
 
 pub struct ShellChanges {
@@ -71,9 +74,10 @@ impl ShellChanges {
         })
     }
 
-    /// Snapshots around shell calls; returns what a finished call changed, if anything. Must run
-    /// before the hook is answered, so the "before" snapshot precedes the command.
-    pub fn observe(&self, payload: &HookPayload) -> Option<CommandChanges> {
+    /// Snapshots around shell calls; returns what a finished call changed, if anything, with the
+    /// text of code files too when `whole_files`. Must run before the hook is answered, so the
+    /// "before" snapshot precedes the command.
+    pub fn observe(&self, payload: &HookPayload, whole_files: bool) -> Option<CommandChanges> {
         let text = |key: &str| payload.get(key).and_then(Value::as_str);
         if !SHELL_TOOLS.contains(&text("tool_name")?) {
             return None;
@@ -99,17 +103,26 @@ impl ShellChanges {
                     _ => before.1,
                 };
                 let files = inner.snapshots.diff(&base, &after);
-                let documents = files
+                let texts = files
                     .iter()
                     .filter(|file| file.change != FileChangeKind::Deleted)
-                    .filter(|file| documents::is_document(&file.path))
-                    .filter_map(|file| inner.snapshots.document(&after, &file.path))
+                    .filter_map(|file| {
+                        if documents::is_document(&file.path) {
+                            inner.snapshots.text(&after, &file.path, |bytes| {
+                                Some(String::from_utf8_lossy(&bytes).into_owned())
+                            })
+                        } else if whole_files {
+                            inner.snapshots.text(&after, &file.path, code_files::decode)
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
                 (!files.is_empty()).then(|| CommandChanges {
                     prompt_id: text("prompt_id").unwrap_or_default().to_owned(),
                     tool_use_id: tool_use_id.to_owned(),
                     files,
-                    documents,
+                    texts,
                 })
             }
             _ => None,
@@ -266,8 +279,14 @@ impl Snapshots {
             .unwrap_or_default()
     }
 
-    /// The text of the document at absolute `path` in snapshot `tree`.
-    fn document(&self, tree: &str, path: &str) -> Option<DocumentText> {
+    /// The text of the file at absolute `path` in snapshot `tree`, made text by `decode`; `None`
+    /// when `decode` refuses it, and without text when it is too large.
+    fn text(
+        &self,
+        tree: &str,
+        path: &str,
+        decode: impl Fn(Vec<u8>) -> Option<String>,
+    ) -> Option<DocumentText> {
         let name = self.relative(path)?;
         let object = format!("{tree}:{name}");
         let size: u64 = String::from_utf8_lossy(&self.git(&["cat-file", "-s", &object])?)
@@ -277,7 +296,7 @@ impl Snapshots {
         let text = if size > documents::MAX_DOCUMENT_BYTES {
             None
         } else {
-            Some(String::from_utf8_lossy(&self.git(&["cat-file", "blob", &object])?).into_owned())
+            Some(decode(self.git(&["cat-file", "blob", &object])?)?)
         };
         Some(DocumentText { path: path.to_owned(), text })
     }
@@ -412,11 +431,11 @@ mod tests {
     fn reports_what_a_command_created_changed_and_deleted() {
         let repo = Repo::new();
         let tracker = repo.tracker();
-        assert_eq!(tracker.observe(&hook("PreToolUse", "Bash", "t1")), None);
+        assert_eq!(tracker.observe(&hook("PreToolUse", "Bash", "t1"), false), None);
         repo.write("a.txt", "one\n2\nthree\n");
         repo.write("src/new.rs", "fn main() {}\n");
         std::fs::remove_file(repo.dir.path().join("gone.txt")).unwrap();
-        let changes = tracker.observe(&hook("PostToolUse", "Bash", "t1")).unwrap();
+        let changes = tracker.observe(&hook("PostToolUse", "Bash", "t1"), false).unwrap();
         assert_eq!((changes.prompt_id.as_str(), changes.tool_use_id.as_str()), ("p1", "t1"));
         assert_eq!(
             files(Some(changes)),
@@ -436,13 +455,16 @@ mod tests {
     fn a_failed_command_still_reports_its_changes_and_other_tools_are_ignored() {
         let repo = Repo::new();
         let tracker = repo.tracker();
-        tracker.observe(&hook("PreToolUse", "Bash", "t1"));
+        tracker.observe(&hook("PreToolUse", "Bash", "t1"), false);
         repo.write("a.txt", "changed\n");
-        assert_eq!(tracker.observe(&hook("PostToolUse", "Edit", "t1")), None);
-        assert_eq!(files(tracker.observe(&hook("PostToolUseFailure", "Bash", "t1"))).len(), 1);
+        assert_eq!(tracker.observe(&hook("PostToolUse", "Edit", "t1"), false), None);
+        assert_eq!(
+            files(tracker.observe(&hook("PostToolUseFailure", "Bash", "t1"), false)).len(),
+            1
+        );
         // Nothing changed: nothing to report.
-        tracker.observe(&hook("PreToolUse", "Bash", "t2"));
-        assert_eq!(tracker.observe(&hook("PostToolUse", "Bash", "t2")), None);
+        tracker.observe(&hook("PreToolUse", "Bash", "t2"), false);
+        assert_eq!(tracker.observe(&hook("PostToolUse", "Bash", "t2"), false), None);
     }
 
     #[test]
@@ -458,10 +480,10 @@ mod tests {
         let (index, objects_before) =
             (std::fs::read(repo.dir.path().join(".git/index")).unwrap(), objects());
         let tracker = repo.tracker();
-        tracker.observe(&hook("PreToolUse", "Bash", "t1"));
+        tracker.observe(&hook("PreToolUse", "Bash", "t1"), false);
         repo.write("untracked.txt", "new\n");
         repo.write("a.txt", "edited\n");
-        assert_eq!(files(tracker.observe(&hook("PostToolUse", "Bash", "t1"))).len(), 2);
+        assert_eq!(files(tracker.observe(&hook("PostToolUse", "Bash", "t1"), false)).len(), 2);
         assert_eq!(std::fs::read(repo.dir.path().join(".git/index")).unwrap(), index);
         assert_eq!(objects(), objects_before);
         // The private snapshots go with the tracker.
@@ -484,12 +506,12 @@ mod tests {
     fn overlapping_commands_report_each_change_once() {
         let repo = Repo::new();
         let tracker = repo.tracker();
-        tracker.observe(&hook("PreToolUse", "Bash", "t1"));
-        tracker.observe(&hook("PreToolUse", "Bash", "t2"));
+        tracker.observe(&hook("PreToolUse", "Bash", "t1"), false);
+        tracker.observe(&hook("PreToolUse", "Bash", "t2"), false);
         repo.write("a.txt", "by one\n");
-        let first = files(tracker.observe(&hook("PostToolUse", "Bash", "t1")));
+        let first = files(tracker.observe(&hook("PostToolUse", "Bash", "t1"), false));
         repo.write("b.txt", "by two\n");
-        let second = files(tracker.observe(&hook("PostToolUse", "Bash", "t2")));
+        let second = files(tracker.observe(&hook("PostToolUse", "Bash", "t2"), false));
         assert_eq!(first.iter().map(|f| f.0.clone()).collect::<Vec<_>>(), [repo.path("a.txt")]);
         assert_eq!(second.iter().map(|f| f.0.clone()).collect::<Vec<_>>(), [repo.path("b.txt")]);
     }
@@ -501,33 +523,33 @@ mod tests {
         let sub = repo.dir.path().join("sub");
         let tracker =
             ShellChanges::new(&sub, repo.data.path(), &Environment::from_process()).unwrap();
-        tracker.observe(&hook("PreToolUse", "Bash", "t1"));
+        tracker.observe(&hook("PreToolUse", "Bash", "t1"), false);
         repo.write("sub/inner.txt", "y\n");
         repo.write("a.txt", "outside\n");
         // Untracked and not ignored, next to the session folder.
         repo.write(".env", "TOKEN=secret\n");
-        let paths: Vec<String> = files(tracker.observe(&hook("PostToolUse", "Bash", "t1")))
+        let paths: Vec<String> = files(tracker.observe(&hook("PostToolUse", "Bash", "t1"), false))
             .into_iter()
             .map(|f| f.0)
             .collect();
         assert_eq!(paths, [sub.join("inner.txt").to_string_lossy().into_owned()]);
 
         // Only outside: nothing at all.
-        tracker.observe(&hook("PreToolUse", "Bash", "t2"));
+        tracker.observe(&hook("PreToolUse", "Bash", "t2"), false);
         repo.write("a.txt", "outside again\n");
-        assert_eq!(tracker.observe(&hook("PostToolUse", "Bash", "t2")), None);
+        assert_eq!(tracker.observe(&hook("PostToolUse", "Bash", "t2"), false), None);
     }
 
     #[test]
     fn large_changes_are_limited() {
         let repo = Repo::new();
         let tracker = repo.tracker();
-        tracker.observe(&hook("PreToolUse", "Bash", "t1"));
+        tracker.observe(&hook("PreToolUse", "Bash", "t1"), false);
         for i in 0..MAX_DIFFED_FILES + 2 {
             repo.write(&format!("many/{i:03}.txt"), "x\n");
         }
         repo.write("a.txt", &"line\n".repeat(MAX_DIFF_LINES + 1));
-        let changed = files(tracker.observe(&hook("PostToolUse", "Bash", "t1")));
+        let changed = files(tracker.observe(&hook("PostToolUse", "Bash", "t1"), false));
         assert_eq!(changed.len(), MAX_DIFFED_FILES + 3);
         assert!(
             changed.iter().filter(|f| f.2.is_empty()).count() >= 3,
@@ -545,15 +567,15 @@ mod tests {
         repo.git(&["add", "."]);
         repo.git(&["commit", "-q", "-m", "docs"]);
         let tracker = repo.tracker();
-        tracker.observe(&hook("PreToolUse", "Bash", "t1"));
+        tracker.observe(&hook("PreToolUse", "Bash", "t1"), false);
         repo.write("plan.md", "# Plan\n\nA new step.\n");
         repo.write("big.md", &"x".repeat(crate::documents::MAX_DOCUMENT_BYTES as usize + 1));
         repo.write("a.txt", "not a document\n");
         std::fs::remove_file(repo.dir.path().join("old.md")).unwrap();
         // Changed again after the command: the text is the one the command left.
-        let changes = tracker.observe(&hook("PostToolUse", "Bash", "t1")).unwrap();
+        let changes = tracker.observe(&hook("PostToolUse", "Bash", "t1"), false).unwrap();
         repo.write("plan.md", "# Later\n");
-        let mut documents = changes.documents;
+        let mut documents = changes.texts;
         documents.sort_by(|a, b| a.path.cmp(&b.path));
         assert_eq!(
             documents,
@@ -565,6 +587,37 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn code_files_come_with_their_text_only_while_whole_files_are_shared() {
+        let repo = Repo::new();
+        repo.write("src/a.rs", "fn a() {}\n");
+        repo.git(&["add", "."]);
+        repo.git(&["commit", "-q", "-m", "code"]);
+        let tracker = repo.tracker();
+        let run = |id: &str, whole_files: bool, change: &dyn Fn()| {
+            tracker.observe(&hook("PreToolUse", "Bash", id), whole_files);
+            change();
+            let mut texts =
+                tracker.observe(&hook("PostToolUse", "Bash", id), whole_files).unwrap().texts;
+            texts.sort_by(|a, b| a.path.cmp(&b.path));
+            texts
+        };
+        let texts = run("t1", true, &|| {
+            repo.write("src/a.rs", "fn a() { b() }\n");
+            std::fs::write(repo.dir.path().join("logo.png"), b"\x89PNG\0\0").unwrap();
+        });
+        assert_eq!(
+            texts,
+            vec![DocumentText {
+                path: repo.path("src/a.rs"),
+                text: Some("fn a() { b() }\n".into())
+            }],
+            "binary content has no text"
+        );
+        let texts = run("t2", false, &|| repo.write("src/a.rs", "fn a() {}\n"));
+        assert_eq!(texts, vec![]);
     }
 
     #[test]

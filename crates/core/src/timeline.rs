@@ -10,7 +10,7 @@ use specdeck_protocol::timeline::{
     Answer, DiffHunk, Entry, FileChangeKind, Permission, TimelineEvent, ToolOutcome, ToolStatus,
 };
 
-use crate::documents::DocumentText;
+use crate::documents::{self, DocumentText};
 use crate::hooks::HookPayload;
 use crate::screenshots;
 use crate::session_folder::SessionFolder;
@@ -415,26 +415,36 @@ impl TimelineBuilder {
             .collect()
     }
 
-    /// `entries` with each document's text right after the change that produced it. A document
-    /// is only sent with a change of its own, and never for a deletion.
-    pub fn with_documents(&self, entries: Vec<Entry>, documents: Vec<DocumentText>) -> Vec<Entry> {
-        if documents.is_empty() {
+    /// `entries` with each file's text right after the change that produced it: a `Document` for
+    /// Markdown, a `FileText` for a code file. A text is only sent with a change of its own, never
+    /// for a deletion, and never for a file outside the session folder.
+    pub fn with_texts(&self, entries: Vec<Entry>, texts: Vec<DocumentText>) -> Vec<Entry> {
+        if texts.is_empty() {
             return entries;
         }
-        let mut out = Vec::with_capacity(entries.len() + documents.len());
+        let mut out = Vec::with_capacity(entries.len() + texts.len());
         for entry in entries {
             let document = match &entry {
                 Entry::FileChange { prompt_id, tool_use_id, path, change, .. }
                     if *change != FileChangeKind::Deleted =>
                 {
-                    documents.iter().find(|doc| self.display_path(&doc.path) == *path).map(|doc| {
-                        Entry::Document {
-                            prompt_id: prompt_id.clone(),
-                            tool_use_id: tool_use_id.clone(),
-                            path: path.clone(),
-                            text: doc.text.clone(),
-                        }
-                    })
+                    texts
+                        .iter()
+                        .filter(|doc| self.folder.contains(&doc.path))
+                        .find(|doc| self.display_path(&doc.path) == *path)
+                        .map(|doc| {
+                            let (prompt_id, tool_use_id, path, text) = (
+                                prompt_id.clone(),
+                                tool_use_id.clone(),
+                                path.clone(),
+                                doc.text.clone(),
+                            );
+                            if documents::is_document(&doc.path) {
+                                Entry::Document { prompt_id, tool_use_id, path, text }
+                            } else {
+                                Entry::FileText { prompt_id, tool_use_id, path, text }
+                            }
+                        })
                 }
                 _ => None,
             };
@@ -711,8 +721,14 @@ mod tests {
             change("src/server.ts", FileChangeKind::Edited),
             change("old.md", FileChangeKind::Deleted),
             change("big.md", FileChangeKind::Created),
+            change("src/gone.rs", FileChangeKind::Deleted),
+            change("~/notes.rs", FileChangeKind::Edited),
         ];
         let documents = vec![
+            DocumentText { path: "/work/src/server.ts".into(), text: Some("export {}".into()) },
+            // Deleted, and outside the session folder: never sent.
+            DocumentText { path: "/work/src/gone.rs".into(), text: Some("fn gone()".into()) },
+            DocumentText { path: "/home/nick/notes.rs".into(), text: Some("secret".into()) },
             DocumentText { path: "/work/big.md".into(), text: None },
             DocumentText { path: "/work/docs/plan.md".into(), text: Some("# Plan".into()) },
             // A document without a change of its own is never sent.
@@ -724,7 +740,7 @@ mod tests {
             path: path.into(),
             text: text.map(Into::into),
         };
-        let with = builder.with_documents(entries.clone(), documents);
+        let with = builder.with_texts(entries.clone(), documents);
         assert_eq!(
             with,
             [
@@ -732,9 +748,17 @@ mod tests {
                 entries[1].clone(),
                 document("docs/plan.md", Some("# Plan")),
                 entries[2].clone(),
+                Entry::FileText {
+                    prompt_id: "p".into(),
+                    tool_use_id: "t".into(),
+                    path: "src/server.ts".into(),
+                    text: Some("export {}".into()),
+                },
                 entries[3].clone(),
                 entries[4].clone(),
                 document("big.md", None),
+                entries[5].clone(),
+                entries[6].clone(),
             ]
         );
     }
@@ -1049,7 +1073,7 @@ mod tests {
             prompt_id: "p".into(),
             tool_use_id: "b".into(),
             files: vec![file("/work/a.rs"), file("/repo/.env")],
-            documents: Vec::new(),
+            texts: Vec::new(),
         });
         let hunks: Vec<usize> = entries
             .into_iter()

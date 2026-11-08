@@ -63,6 +63,10 @@ pub enum HostEvent {
         suggestions_allowed: bool,
         /// Every suggestion in the session, oldest first.
         suggestions: Vec<HostSuggestion>,
+        /// False for sessions without a timeline, which have no file changes to share whole.
+        whole_files_possible: bool,
+        /// Whether viewers can open whole code files.
+        whole_files: bool,
     },
     Sharing {
         state: SharingState,
@@ -91,6 +95,10 @@ pub enum HostEvent {
     /// Every suggestion in the session, oldest first, on every change.
     Suggestions {
         suggestions: Vec<HostSuggestion>,
+    },
+    /// Whether viewers can open whole code files, after the host changed it.
+    Shared {
+        whole_files: bool,
     },
 }
 
@@ -355,6 +363,9 @@ impl HostRuntime {
                             ui.suggestions_allowed = suggestions;
                             ui.send(HostEvent::Allowed { suggestions });
                         }
+                        Some(SharingEvent::Shared { whole_files }) => {
+                            shared.lock().unwrap().send(HostEvent::Shared { whole_files });
+                        }
                         Some(SharingEvent::Suggestions(suggestions)) => {
                             let mut ui = shared.lock().unwrap();
                             // A new one is always added at the end.
@@ -432,6 +443,8 @@ impl HostRuntime {
                 suggestions_possible: self.agent != AgentId::Terminal,
                 suggestions_allowed: ui.suggestions_allowed,
                 suggestions: ui.suggestions.clone(),
+                whole_files_possible: self.agent.has_timeline(),
+                whole_files: self.session.whole_files(),
             };
             ui.events = Some(events);
             ui.send(snapshot);
@@ -528,6 +541,12 @@ impl HostRuntime {
     /// Lets viewers suggest prompts, or stops them; terminal sessions never allow it.
     pub fn allow_suggestions(&self, on: bool) {
         self.sharing.allow_suggestions(on);
+    }
+
+    /// Shares the whole text of code files the agent changes from now on, or stops; sharing then
+    /// tells viewers and the window.
+    pub fn share_whole_files(&self, on: bool) {
+        self.session.share_whole_files(on);
     }
 
     /// Declines a waiting suggestion, or types `text` into the agent's prompt and submits it. A

@@ -54,8 +54,22 @@ describe('accessibility', () => {
     await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
     expect(await violations()).toEqual([]);
     await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Sharing settings' }));
+    expect(await violations()).toEqual([]);
+    await userEvent.keyboard('{Escape}');
     await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
     expect(await violations()).toEqual([]);
+  });
+
+  it('a code file in a tab, with the switch for its whole file', async () => {
+    app('host');
+    await screen.findByText('7K2M-9QXH-4TPA');
+    await userEvent.click(screen.getByRole('tab', { name: /Code/ }));
+    await userEvent.click(screen.getByRole('button', { name: /src\/routes\/index\.ts/ }));
+    // The tab panel only: the tab bar's own markup is checked with the host screen.
+    const panel = screen.getByRole('tabpanel', { name: 'index.ts' });
+    const results = await axe.run(panel, { rules: { 'color-contrast': { enabled: false } } });
+    expect(results.violations.map((v) => v.id)).toEqual([]);
   });
 
   it('viewer screen, joined', async () => {
