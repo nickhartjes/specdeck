@@ -51,4 +51,16 @@ describe('a diff without hunks', () => {
     render(<DiffView change={change('assets/logo.png')} />);
     expect(screen.getByText('No diff to show')).toBeInTheDocument();
   });
+
+  it('highlights the code of a change and keeps its text', () => {
+    const edit: FileChange = {
+      ...change('src/session.rs'),
+      hunks: [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [' fn a() {', '-    old()', '+    new() // why', ' }'] }],
+    };
+    const { container } = render(<DiffView change={edit} />);
+    const lines = container.querySelectorAll('.line');
+    expect([...lines].map((line) => line.lastElementChild!.textContent)).toEqual(['fn a() {', '    old()', '    new() // why', '}']);
+    expect(lines[0]!.querySelector('.tok-kw')!.textContent).toBe('fn');
+    expect(lines[2]!.querySelector('.tok-com')!.textContent).toBe('// why');
+  });
 });

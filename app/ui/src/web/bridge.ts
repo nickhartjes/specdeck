@@ -153,6 +153,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     hostRemoveViewer: notInTheWebViewer,
     hostSetViewerLimit: notInTheWebViewer,
     hostAllowSuggestions: notInTheWebViewer,
+    hostShareCode: notInTheWebViewer,
     hostAnswerSuggestion: notInTheWebViewer,
     hostClose: notInTheWebViewer,
     joinSession: async (code, server, terminal, events) => {

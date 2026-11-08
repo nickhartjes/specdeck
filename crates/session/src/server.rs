@@ -376,6 +376,10 @@ async fn run(
             runtime.allow_suggestions(suggestions);
             Ok(())
         }
+        Command::ShareCode { whole_files } => {
+            runtime.share_whole_files(whole_files);
+            Ok(())
+        }
         Command::AnswerSuggestion { viewer_id, id, answer } => {
             let text = match answer {
                 SuggestionAnswer::Send { text } => Some(text),

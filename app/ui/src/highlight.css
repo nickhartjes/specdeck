@@ -1,0 +1,85 @@
+/* Code outside the terminal: numbered lines, the marks of what changed, and syntax colours
+   (files-documents-and-code design decision 8). Kept apart from styles.css; the colours follow
+   the light and dark palettes, by the OS and by a theme chosen in the app. */
+
+:root {
+  --tok-kw: #9a3412;
+  --tok-str: #2a6e4c;
+  --tok-com: #6b7d80;
+  --tok-num: #1f5f99;
+  --tok-fn: #5b4b9e;
+  --tok-type: #0f6e74;
+  --tok-tag: #9a3412;
+  --tok-attr: #7a5a00;
+  --tok-punct: #4a5f5c;
+  --tok-prop: #0f6e74;
+  --tok-var: #7a5a00;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --tok-kw: #f0a070;
+    --tok-str: #93d6aa;
+    --tok-com: #7d918d;
+    --tok-num: #8cc4f0;
+    --tok-fn: #c0b2f2;
+    --tok-type: #7fd3d0;
+    --tok-tag: #f0a070;
+    --tok-attr: #e3c46a;
+    --tok-punct: #a0b2ae;
+    --tok-prop: #7fd3d0;
+    --tok-var: #e3c46a;
+  }
+}
+
+:root[data-theme="dark"] {
+  --tok-kw: #f0a070;
+  --tok-str: #93d6aa;
+  --tok-com: #7d918d;
+  --tok-num: #8cc4f0;
+  --tok-fn: #c0b2f2;
+  --tok-type: #7fd3d0;
+  --tok-tag: #f0a070;
+  --tok-attr: #e3c46a;
+  --tok-punct: #a0b2ae;
+  --tok-prop: #7fd3d0;
+  --tok-var: #e3c46a;
+}
+
+.tok-kw { color: var(--tok-kw); }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num, .tok-const { color: var(--tok-num); }
+.tok-fn { color: var(--tok-fn); }
+.tok-type { color: var(--tok-type); }
+.tok-tag { color: var(--tok-tag); }
+.tok-attr { color: var(--tok-attr); }
+.tok-punct, .tok-op { color: var(--tok-punct); }
+.tok-prop { color: var(--tok-prop); }
+.tok-var { color: var(--tok-var); }
+.tok-title { font-weight: 700; }
+.tok-ins { color: var(--added-text); }
+.tok-del { color: var(--removed-text); }
+/* On a changed line of a diff, the line's own colour wins, so additions and removals stay clear. */
+.diff .line.add [class^="tok-"], .diff .line.del [class^="tok-"] { color: inherit; }
+
+.code-lines { font-family: var(--mono); font-size: 12px; line-height: 1.55; overflow-x: auto; padding: 8px 0 24px; }
+.code-lines .ln { display: grid; grid-template-columns: 48px 18px auto; white-space: pre; min-width: max-content; }
+.code-lines .ln .n { color: var(--text-faint); text-align: right; padding-right: 8px; user-select: none; }
+.code-lines .ln .m { user-select: none; font-weight: 700; text-align: center; }
+.code-lines .ln.mark-added { background: var(--added); }
+.code-lines .ln.mark-added .m { color: var(--added-text); }
+.code-lines .ln.mark-changed { background: var(--working-soft); }
+.code-lines .ln.mark-changed .m { color: var(--working); }
+.code-lines .removed { display: grid; grid-template-columns: 48px 18px auto; color: var(--removed-text); font-family: var(--font); font-size: 11px; line-height: 1.4; user-select: none; }
+.code-lines .removed .m { text-align: center; font-weight: 700; }
+.code-lines .removed .t { border-top: 2px dashed var(--removed-text); padding-left: 4px; }
+
+.toggle button.unavailable { color: var(--text-faint); cursor: not-allowed; }
+.whole-note { margin: 8px 16px 0; color: var(--text-muted); font-size: 12px; }
+
+/* The host's sharing settings, beside the people in the toolbar. */
+.sharing-menu { position: relative; }
+.sharing-panel { width: 340px; }
+.sharing-panel .setting { display: grid; gap: 4px; font-size: 12.5px; }
+.sharing-panel select { font: inherit; padding: 4px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text); }

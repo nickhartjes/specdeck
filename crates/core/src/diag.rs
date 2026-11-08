@@ -345,6 +345,11 @@ pub fn host_requests_allowed(suggestions: bool) {
     info!(suggestions, "host.requests_allowed");
 }
 
+/// The host shares whole code files, or stops: the setting only, never a path or text.
+pub fn host_code_sharing(whole_files: bool) {
+    info!(whole_files, "host.code_sharing");
+}
+
 /// Stream traffic of the last second, summed over all viewers. Verbose only.
 fn host_traffic(messages: u64, bytes: u64, max_queued: u64) {
     debug!(messages, bytes, max_queued, "host.traffic");

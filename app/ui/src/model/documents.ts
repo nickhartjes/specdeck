@@ -21,6 +21,11 @@ export interface Plan {
 export interface Documents {
   /** Every version of each document, by path, oldest first. */
   documents: Map<string, DocumentVersion[]>;
+  /**
+   * The whole text of code files after each change the host shared it for, by path and then by
+   * tool call; null when it was too large to send.
+   */
+  codeTexts: Map<string, Map<string, string | null>>;
   /** The latest state of each plan, the most recently changed first. */
   plans: Plan[];
 }
@@ -28,8 +33,13 @@ export interface Documents {
 export function buildDocuments(events: TimelineEvent[]): Documents {
   const documents = new Map<string, DocumentVersion[]>();
   const plans = new Map<string, Plan>();
+  const codeTexts = new Map<string, Map<string, string | null>>();
   for (const event of events) {
-    if (event.kind === 'document') {
+    if (event.kind === 'file-text') {
+      const texts = codeTexts.get(event.path) ?? new Map<string, string | null>();
+      texts.set(event.toolUseId, event.text);
+      codeTexts.set(event.path, texts);
+    } else if (event.kind === 'document') {
       const versions = documents.get(event.path) ?? [];
       versions.push({ version: versions.length, text: event.text, promptId: event.promptId, toolUseId: event.toolUseId });
       documents.set(event.path, versions);
@@ -39,23 +49,42 @@ export function buildDocuments(events: TimelineEvent[]): Documents {
       plans.set(event.change, { change: event.change, documents: event.documents, tasks: event.tasks });
     }
   }
-  return { documents, plans: [...plans.values()].reverse() };
+  return { documents, codeTexts, plans: [...plans.values()].reverse() };
 }
 
 const BLOCK_START = /^(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|```|~~~|\|)/;
 
+/** A top-level Markdown block, and the lines it takes in the text, counted from 0. */
+export interface Block {
+  text: string;
+  first: number;
+  last: number;
+}
+
 /** Top-level Markdown blocks: headings, paragraphs, list items, quotes, tables and code blocks. */
 export function splitBlocks(text: string): string[] {
-  const blocks: string[] = [];
+  return blocksWithLines(text).map((block) => block.text);
+}
+
+/** As {@link splitBlocks}, with the lines of each block, for marking them in the source. */
+export function blocksWithLines(text: string): Block[] {
+  const blocks: Block[] = [];
   let current: string[] = [];
+  let first = 0;
   let fence: string | null = null;
+  let index = -1;
   const flush = () => {
-    if (current.length) blocks.push(current.join('\n'));
+    if (current.length) blocks.push({ text: current.join('\n'), first, last: first + current.length - 1 });
     current = [];
   };
+  const add = (line: string) => {
+    if (!current.length) first = index;
+    current.push(line);
+  };
   for (const line of text.replace(/\r\n/g, '\n').split('\n')) {
+    index++;
     if (fence) {
-      current.push(line);
+      add(line);
       if (line.trimStart().startsWith(fence)) {
         fence = null;
         flush();
@@ -71,12 +100,12 @@ export function splitBlocks(text: string): string[] {
     if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
       flush();
       fence = trimmed.slice(0, 3);
-      current.push(line);
+      add(line);
       continue;
     }
     // A new heading or list item starts a block; indented lines continue the one before.
     if (!indented && BLOCK_START.test(trimmed) && !(trimmed.startsWith('|') && current[0]?.trimStart().startsWith('|'))) flush();
-    current.push(line);
+    add(line);
     if (/^#{1,6}\s/.test(trimmed)) flush();
   }
   flush();
@@ -117,4 +146,18 @@ export function compareBlocks(read: string | null, now: string): { block: string
     }
   }
   return after.map((block, index) => ({ block, mark: marks[index]! }));
+}
+
+/**
+ * Per line of `now`, the mark of the block it belongs to, so the source marks exactly what the
+ * formatted document marks.
+ */
+export function sourceMarks(read: string | null, now: string): Mark[] {
+  const marks: Mark[] = new Array<Mark>(now.replace(/\r\n/g, '\n').split('\n').length).fill(null);
+  const compared = compareBlocks(read, now);
+  blocksWithLines(now).forEach((block, i) => {
+    const mark = compared[i]?.mark ?? null;
+    if (mark) marks.fill(mark, block.first, block.last + 1);
+  });
+  return marks;
 }

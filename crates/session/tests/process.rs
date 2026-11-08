@@ -696,3 +696,79 @@ async fn a_session_started_without_the_browser_never_asks() {
     app.until_text(&mut terminal, "no browser").await;
     assert!(!app.log.iter().any(|f| f["control"]["type"] == "browser"));
 }
+
+/// A fake Claude Code that, on the line "edit", writes `a.rs` and reports it through its hooks.
+const EDITING_CLAUDE: &str = r#"#!/bin/sh
+[ "$1" = "--settings" ] || { echo "no settings"; read wait; exit; }
+url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$2" | head -n 1)
+post() { curl -s -o /dev/null -X POST -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -H 'Content-Type: application/json' --data-binary "$1" "$url"; }
+echo ready
+while read line; do
+  post "{\"hook_event_name\":\"PreToolUse\",\"prompt_id\":\"p1\",\"tool_name\":\"Write\",\"tool_use_id\":\"$line\",\"tool_input\":{\"file_path\":\"$PWD/a.rs\"}}"
+  echo "fn $line() {}" > "$PWD/a.rs"
+  post "{\"hook_event_name\":\"PostToolUse\",\"prompt_id\":\"p1\",\"tool_name\":\"Write\",\"tool_use_id\":\"$line\",\"tool_input\":{\"file_path\":\"$PWD/a.rs\"},\"tool_response\":{\"filePath\":\"$PWD/a.rs\",\"originalFile\":null,\"content\":\"x\"}}"
+  echo "edited:$line"
+done"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whole_code_files_follow_the_hosts_setting() {
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let bin = folder.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let claude = bin.join("claude");
+    std::fs::write(&claude, EDITING_CLAUDE).unwrap();
+    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let Command::Start { mut environment, .. } = start(folder.path(), &url) else { unreachable!() };
+    environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+    let mut process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let mut terminal = String::new();
+    app.send(&Command::Start {
+        agent: AgentId::ClaudeCode,
+        folder: folder.path().to_owned(),
+        cols: 200,
+        rows: 30,
+        username: "Nick".into(),
+        data_dir: folder.path().to_owned(),
+        signalling_url: url.clone(),
+        environment,
+        verbose: false,
+        browser: false,
+        screenshots: true,
+    })
+    .await;
+    app.until(&mut terminal, |event| matches!(event, Event::Started)).await;
+    app.send(&Command::Attach).await;
+    let snapshot = app
+        .until(
+            &mut terminal,
+            |e| matches!(e, Event::HostEvent { event } if event["type"] == "snapshot"),
+        )
+        .await;
+    let Event::HostEvent { event: snapshot } = snapshot else { unreachable!() };
+    assert_eq!(snapshot["wholeFilesPossible"], true);
+    assert_eq!(snapshot["wholeFiles"], false, "off when a session starts");
+    app.until_text(&mut terminal, "ready").await;
+
+    let file_text = |event: &Event| {
+        matches!(event, Event::HostEvent { event }
+            if event["type"] == "timeline" && event["event"]["kind"] == "file-text")
+    };
+    app.send(&Command::Input { data: "before\r".into() }).await;
+    app.until_text(&mut terminal, "edited:before").await;
+    app.send(&Command::ShareCode { whole_files: true }).await;
+    app.until(&mut terminal, |e| {
+        matches!(e, Event::HostEvent { event } if event["type"] == "shared" && event["wholeFiles"] == true)
+    })
+    .await;
+    app.send(&Command::Input { data: "after\r".into() }).await;
+    let text = app.until(&mut terminal, file_text).await;
+    let Event::HostEvent { event } = text else { unreachable!() };
+    assert_eq!(event["event"]["text"], "fn after() {}\n");
+    assert_eq!(event["event"]["toolUseId"], "after", "only the change made while it was on");
+
+    app.send(&Command::End).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;
+    process.exits().await;
+}

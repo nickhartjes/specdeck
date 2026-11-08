@@ -69,10 +69,13 @@ interface State {
   mine: Suggestion[];
   /** The latest request sent, and the host's reply once it came. */
   sent: { id: number; outcome: RequestOutcome | null } | null;
+  /** Whether the host shares whole code files; a host of the previous release never does. */
+  wholeFiles: boolean;
 }
 
 const initial: State = {
   suggestionsAllowed: null,
+  wholeFiles: false,
   mine: [],
   sent: null,
   phase: 'joining',
@@ -108,6 +111,8 @@ export function viewerReducer(state: State, event: ViewEvent): State {
       return state.sent?.id === event.id ? { ...state, sent: { id: event.id, outcome: event.outcome } } : state;
     case 'suggestions':
       return { ...state, mine: event.mine };
+    case 'shared':
+      return { ...state, wholeFiles: event.wholeFiles };
     case 'ended':
       return { ...state, phase: 'ended', ended: event.reason };
   }
@@ -242,6 +247,7 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
           onLayout={setLayout}
           timelineSupported={state.timelineSupported}
           timeline={state.timeline}
+          wholeFiles={state.wholeFiles}
           prompts={
             // Hosts that take no suggestions never say whether they allow them.
             state.suggestionsAllowed !== null && !terminal && state.phase !== 'ended'

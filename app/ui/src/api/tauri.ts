@@ -72,6 +72,7 @@ export const tauriBridge: Bridge = {
   hostRemoveViewer: (viewerId) => invoke('host_remove_viewer', { viewerId }),
   hostSetViewerLimit: (limit) => invoke('host_set_viewer_limit', { limit }),
   hostAllowSuggestions: (on) => invoke('host_allow_suggestions', { on }),
+  hostShareCode: (wholeFiles) => invoke('host_share_code', { wholeFiles }),
   hostAnswerSuggestion: (viewerId, id, text) => invoke('host_answer_suggestion', { viewerId, id, text }),
   hostClose: () => invoke('host_close'),
   joinSession: (code, server, terminal, events) =>

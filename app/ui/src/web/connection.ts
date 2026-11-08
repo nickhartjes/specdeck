@@ -23,6 +23,7 @@ export type ControlUpdate =
   | { type: 'allowed'; suggestions: boolean }
   | { type: 'reply'; id: number; outcome: RequestOutcome }
   | { type: 'suggestions'; mine: Suggestion[] }
+  | { type: 'shared'; wholeFiles: boolean }
   | { type: 'retry' };
 
 /** A numbered request and the control message that carries it. */
@@ -288,6 +289,9 @@ export class Connection {
               break;
             case 'suggestions':
               onEvent({ type: 'suggestions', mine: update.mine });
+              break;
+            case 'shared':
+              onEvent({ type: 'shared', wholeFiles: update.wholeFiles });
               break;
             case 'participants':
               onEvent({ type: 'participants', participants: update.participants });

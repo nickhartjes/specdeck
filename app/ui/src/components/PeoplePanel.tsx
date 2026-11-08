@@ -11,8 +11,6 @@ interface Props {
   onRemove?: (participant: Participant) => void;
   viewerLimit?: number;
   onViewerLimit?: (limit: number) => void;
-  /** Host only: whether viewers may suggest prompts, with its switch. */
-  suggestions?: { allowed: boolean; onChange: (on: boolean) => void };
   agentName?: string;
 }
 
@@ -20,7 +18,7 @@ export function initials(name: string): string {
   return name.trim().split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() || '?';
 }
 
-export function PeoplePanel({ participants, me, onRemove, viewerLimit, onViewerLimit, suggestions, agentName = 'the agent' }: Props) {
+export function PeoplePanel({ participants, me, onRemove, viewerLimit, onViewerLimit }: Props) {
   const [removing, setRemoving] = useState<Participant | null>(null);
   const viewers = participants.filter((p) => p.role === 'Viewer').length;
   return (
@@ -66,17 +64,6 @@ export function PeoplePanel({ participants, me, onRemove, viewerLimit, onViewerL
               <Plus size={13} aria-hidden />
             </button>
           </span>
-        </div>
-      )}
-      {suggestions && (
-        <div className="limit">
-          <label className="check" style={{ paddingTop: 0 }}>
-            <input type="checkbox" checked={suggestions.allowed} onChange={(event) => suggestions.onChange(event.target.checked)} />
-            <span>
-              Viewers can suggest prompts
-              <span className="field-hint"> · nothing reaches {agentName} until you send it</span>
-            </span>
-          </label>
         </div>
       )}
       {removing && (

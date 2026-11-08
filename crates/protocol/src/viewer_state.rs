@@ -60,6 +60,10 @@ pub enum ControlUpdate {
     },
     /// This viewer's suggestions and what became of each.
     Suggestions(Vec<Suggestion>),
+    /// Whether the host shares whole code files.
+    Shared {
+        whole_files: bool,
+    },
     /// The message could not be used; drop this connection and try again.
     Retry,
 }
@@ -161,6 +165,7 @@ impl ViewerState {
                 ControlUpdate::Reply { id, outcome }
             }
             HostMessage::Suggestions { mine } => ControlUpdate::Suggestions(mine),
+            HostMessage::Shared { whole_files } => ControlUpdate::Shared { whole_files },
         }
     }
 
@@ -392,6 +397,11 @@ mod tests {
         assert_eq!(
             viewer.on_control(&control::encode(&suggestions)),
             ControlUpdate::Suggestions(mine)
+        );
+        let shared = HostMessage::Shared { whole_files: true };
+        assert_eq!(
+            viewer.on_control(&control::encode(&shared)),
+            ControlUpdate::Shared { whole_files: true }
         );
     }
 

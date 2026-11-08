@@ -57,6 +57,8 @@ export interface Bridge {
   hostSetViewerLimit(limit: number): Promise<void>;
   /** Lets viewers suggest prompts, or stops them. */
   hostAllowSuggestions(on: boolean): Promise<void>;
+  /** Lets viewers open whole code files the agent changes from now on, or stops it. */
+  hostShareCode(wholeFiles: boolean): Promise<void>;
   /** Types `text` (the suggestion, maybe edited) into the agent's prompt and submits it, or declines the suggestion when `text` is null. */
   hostAnswerSuggestion(viewerId: number, id: number, text: string | null): Promise<void>;
   hostClose(): Promise<void>;

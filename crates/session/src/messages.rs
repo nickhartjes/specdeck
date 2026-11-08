@@ -76,6 +76,11 @@ pub enum Command {
     AllowRequests {
         suggestions: bool,
     },
+    /// Whether viewers can open whole code files: the text of code files the agent changes from
+    /// now on is kept and shared, or not (`files-documents-and-code`).
+    ShareCode {
+        whole_files: bool,
+    },
     /// The host's answer to a waiting suggestion; a sent one is typed into the agent's prompt.
     AnswerSuggestion {
         viewer_id: u32,
@@ -179,6 +184,11 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Command>(allow).unwrap(),
             Command::AllowRequests { suggestions: true }
+        );
+        let share = r#"{"type":"share-code","wholeFiles":true}"#;
+        assert_eq!(
+            serde_json::from_str::<Command>(share).unwrap(),
+            Command::ShareCode { whole_files: true }
         );
         let notice = Event::Notice { notice: HostNotice::ViewerJoined("Anna".into()) };
         let json = serde_json::to_string(&notice).unwrap();

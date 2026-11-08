@@ -12,7 +12,7 @@ import {
 import { ArrowDown, FileDiff, FileText, Image, SquareTerminal, X } from "lucide-react";
 import type { TimelineEvent, TerminalSnapshot } from "../api/types";
 import { Divider } from "../components/Divider";
-import { DiffTab } from "../components/DiffTab";
+import { DiffTab, type CodeView } from "../components/DiffTab";
 import { DocumentTab } from "../components/DocumentTab";
 import { ScreenshotTab, screenshotTitle } from "../components/Screenshot";
 import { FilesPanel, isDocument } from "../components/FilesPanel";
@@ -79,6 +79,8 @@ interface Props {
   onTerminalState?: (snapshot: TerminalSnapshot) => void;
   /** The Prompts tab beside the timeline: the viewer's suggestions or the host's inbox; absent where there are none. */
   prompts?: { badge?: number; content: ReactNode };
+  /** Whether the host shares whole code files now. */
+  wholeFiles?: boolean;
 }
 
 type Pane = "files" | "session" | "timeline";
@@ -158,6 +160,8 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
       (path: string, version: number) => void lastRead.set(path, version),
       [lastRead],
     );
+    // The view each code file was left on, for the session; a file not opened yet opens on its changes.
+    const [codeViews] = useState(() => new Map<string, CodeView>());
 
     // Overview puts a document in front: the newest plan's first document, else the newest document.
     const newestDocument = useMemo(() => {
@@ -607,6 +611,14 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                         }
                         focus={tab.focus}
                         onJump={showTerminal}
+                        texts={written.codeTexts.get(tab.path!)}
+                        wholeFiles={props.wholeFiles}
+                        host={host}
+                        view={codeViews.get(tab.path!) ?? "changes"}
+                        onView={(view) => {
+                          codeViews.set(tab.path!, view);
+                          keep(tab.id);
+                        }}
                       />
                     )}
                   </div>

@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client';
 import init, { WebViewer, parseJoinLink } from 'specdeck-web-wasm';
 import { BridgeContext } from '../api/bridge';
 import '../styles.css';
+import '../highlight.css';
 import { webBridge } from './bridge';
 import type { ControlUpdate, Request, StreamUpdate, ViewerCore } from './connection';
 import { WebApp, takeHashCode } from './WebApp';

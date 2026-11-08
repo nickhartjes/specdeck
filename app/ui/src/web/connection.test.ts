@@ -192,7 +192,13 @@ describe('web viewer connection', () => {
 
   it('sends suggestions once admitted, and those left unanswered again after a reconnect', async () => {
     const core = fakeCore();
-    core.controls.push(welcome, { type: 'allowed', suggestions: true }, { type: 'reply', id: 2, outcome: 'Received' }, { ...welcome, reconnected: true });
+    core.controls.push(
+      welcome,
+      { type: 'allowed', suggestions: true },
+      { type: 'shared', wholeFiles: true },
+      { type: 'reply', id: 2, outcome: 'Received' },
+      { ...welcome, reconnected: true },
+    );
     const { sockets, peers, events, connection } = setup(core);
     // Made before the connection is admitted: kept for later.
     connection.suggest('Add a test\r\nfor it');
@@ -205,6 +211,8 @@ describe('web viewer connection', () => {
     expect(control.sent.at(-1)).toEqual(new Uint8Array([3, 1]));
     control.receive([0]);
     expect(events.at(-1)).toEqual({ type: 'allowed', suggestions: true });
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'shared', wholeFiles: true });
     // Admitted: sent at once.
     connection.suggest('Fix it');
     expect(control.sent.at(-1)).toEqual(new Uint8Array([3, 2]));

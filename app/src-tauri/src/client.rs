@@ -145,6 +145,11 @@ impl SessionClient {
         self.send(&Command::AllowRequests { suggestions: on });
     }
 
+    /// Whether viewers can open whole code files.
+    pub fn share_code(&self, whole_files: bool) {
+        self.send(&Command::ShareCode { whole_files });
+    }
+
     /// Sends a waiting suggestion as `text`, which the host may have edited, or declines it
     /// (`None`).
     pub fn answer_suggestion(&self, viewer_id: u32, id: u32, text: Option<String>) {

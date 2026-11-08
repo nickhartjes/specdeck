@@ -8,8 +8,6 @@ interface Props {
   onRemove?: (participant: Participant) => void;
   viewerLimit?: number;
   onViewerLimit?: (limit: number) => void;
-  /** Host only: whether viewers may suggest prompts, with its switch; absent where they cannot. */
-  suggestions?: { allowed: boolean; onChange: (on: boolean) => void };
   agentName?: string;
 }
 
@@ -22,7 +20,7 @@ export function whoIsHere(participants: Participant[]): string {
 }
 
 /** The people in the session as avatars in the title bar; they open the people list. */
-export function PeopleButton({ participants, me, onRemove, viewerLimit, onViewerLimit, suggestions, agentName }: Props) {
+export function PeopleButton({ participants, me, onRemove, viewerLimit, onViewerLimit, agentName }: Props) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -80,7 +78,6 @@ export function PeopleButton({ participants, me, onRemove, viewerLimit, onViewer
             onRemove={onRemove}
             viewerLimit={viewerLimit}
             onViewerLimit={onViewerLimit}
-            suggestions={suggestions}
             agentName={agentName}
           />
         </div>

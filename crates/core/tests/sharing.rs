@@ -354,7 +354,7 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     hosted.session.input(b"later\r").unwrap();
 
     // The older viewer keeps following the session, admitted once and never told anything
-    // its version cannot read.
+    // its version cannot read. Version 3 reads requests, so it is told about suggestions.
     let mut newer_messages = Vec::new();
     tokio::time::timeout(WAIT, async {
         loop {
@@ -367,9 +367,7 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
                         }
                     }
                 }
-                ViewerEvent::Allowed { .. }
-                | ViewerEvent::Reply { .. }
-                | ViewerEvent::Suggestions(_)
+                ViewerEvent::Shared { .. }
                 | ViewerEvent::Reconnecting
                 | ViewerEvent::Welcome { .. } => newer_messages.push(event.clone()),
                 _ => {}
@@ -382,6 +380,104 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     .await
     .expect("the older viewer stopped following");
     assert!(newer_messages.is_empty(), "{newer_messages:?}");
+}
+
+/// A fake Claude Code that writes `a.rs` and reports it through its hooks on the line "edit",
+/// and echoes other lines.
+const EDIT_AGENT: &str = r#"#!/bin/sh
+[ "$1" = "--settings" ] || { echo "no settings"; exit 9; }
+url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$2" | head -n 1)
+post() { curl -s -o /dev/null -X POST -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -H 'Content-Type: application/json' --data-binary "$1" "$url"; }
+file="$(dirname "$0")/a.rs"
+echo ready
+while read line; do
+  if [ "$line" = edit ]; then
+    post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"a.rs"}}'
+    echo 'fn a() {}' > "$file"
+    post '{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"a.rs"},"tool_response":{"filePath":"a.rs","originalFile":null,"content":"fn a() {}\n"}}'
+    echo edited
+  else echo "got:$line"; fi
+done
+"#;
+
+fn is_file_text(event: &ViewerEvent) -> bool {
+    matches!(event, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::FileText { .. }))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whole_files_reach_only_viewers_that_can_read_them() {
+    let url = signalling().await;
+    let mut hosted = host_agent(&url, "nick", AgentId::ClaudeCode, "claude", EDIT_AGENT).await;
+    let code = ready(&mut hosted.events).await;
+    let (_older, mut older) = join_speaking(&url, &code, "anna", MIN_VIEWER_PROTOCOL_VERSION);
+    let mut seen_older = Seen::default();
+    until(&mut older, &mut seen_older, |seen, _| seen.text.contains("ready")).await;
+    let (_newer, mut newer) = join(&url, &code, "bob");
+    let mut seen_newer = Seen::default();
+    let shared =
+        until(&mut newer, &mut seen_newer, |_, e| matches!(e, ViewerEvent::Shared { .. })).await;
+    assert_eq!(shared, ViewerEvent::Shared { whole_files: false }, "off when a session starts");
+
+    hosted.session.share_whole_files(true);
+    until(&mut newer, &mut seen_newer, |_, e| *e == ViewerEvent::Shared { whole_files: true })
+        .await;
+    tokio::time::timeout(WAIT, async {
+        while !matches!(
+            hosted.events.recv().await,
+            Some(SharingEvent::Shared { whole_files: true })
+        ) {}
+    })
+    .await
+    .expect("the host's window is not told");
+
+    hosted.session.input(b"edit\r").unwrap();
+    let text = until(&mut newer, &mut seen_newer, |_, e| is_file_text(e)).await;
+    let ViewerEvent::Timeline { event, .. } = text else { unreachable!() };
+    assert_eq!(
+        event.entry,
+        Entry::FileText {
+            prompt_id: "p1".into(),
+            tool_use_id: "w".into(),
+            path: "a.rs".into(),
+            text: Some("fn a() {}\n".into()),
+        }
+    );
+
+    // The older viewer gets the change, never the text or the setting, and stays connected.
+    hosted.session.input(b"later\r").unwrap();
+    let mut changes = 0;
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let event = older.recv().await.expect("viewer stopped");
+            assert!(!is_file_text(&event), "a version 3 viewer got a file's text");
+            assert!(!matches!(event, ViewerEvent::Shared { .. }), "a version 3 viewer got Shared");
+            assert_ne!(event, ViewerEvent::Reconnecting, "the older viewer dropped");
+            match &event {
+                ViewerEvent::Timeline { event, .. } => {
+                    changes += usize::from(matches!(event.entry, Entry::FileChange { .. }));
+                }
+                ViewerEvent::Records(records) => {
+                    for record in records {
+                        if let Record::Output { bytes, .. } = record {
+                            seen_older.text.push_str(&String::from_utf8_lossy(bytes));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if seen_older.text.contains("got:later") && changes == 1 {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the older viewer stopped following");
+
+    // A viewer joining later learns the current setting and gets the text from the history.
+    let (_late, mut late) = join(&url, &code, "carl");
+    let mut seen_late = Seen::default();
+    until(&mut late, &mut seen_late, |_, e| *e == ViewerEvent::Shared { whole_files: true }).await;
+    until(&mut late, &mut seen_late, |_, e| is_file_text(e)).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

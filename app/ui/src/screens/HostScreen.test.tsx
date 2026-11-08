@@ -233,13 +233,26 @@ describe('host screen', () => {
     expect(bridge.hostInput).not.toHaveBeenCalled();
   });
 
-  it('turns suggestions on and off from the people list', async () => {
+  it('turns suggestions on and off from the sharing settings, not the people list', async () => {
     const { bridge } = await setup();
     await userEvent.click(screen.getByRole('button', { name: /^People:/ }));
+    expect(screen.queryByRole('checkbox', { name: /Viewers can suggest prompts/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Sharing settings' }));
     const toggle = screen.getByRole('checkbox', { name: /Viewers can suggest prompts/ });
     expect(toggle).toBeChecked();
     await userEvent.click(toggle);
     expect(bridge.hostAllowSuggestions).toHaveBeenCalledWith(false);
+  });
+
+  it('shares whole code files from the sharing settings, only the changes at first', async () => {
+    const { bridge } = await setup();
+    await userEvent.click(screen.getByRole('button', { name: 'Sharing settings' }));
+    const select = screen.getByRole('combobox', { name: 'Code viewers can open' });
+    expect(select).toHaveValue('changes');
+    await userEvent.selectOptions(select, 'whole');
+    expect(bridge.hostShareCode).toHaveBeenCalledWith(true);
+    expect(await screen.findByRole('combobox', { name: 'Code viewers can open' })).toHaveValue('whole');
+    expect(screen.getByText('Anything the terminal shows is shared either way.')).toBeInTheDocument();
   });
 
   it('announces a new suggestion without taking focus from the terminal', async () => {

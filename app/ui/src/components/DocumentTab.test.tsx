@@ -89,4 +89,29 @@ describe('document tab', () => {
     expect(screen.getByText('This document is too large to show whole. Its changes:')).toBeInTheDocument();
     expect(screen.getByLabelText('Changed big.md')).toHaveTextContent('new');
   });
+
+  it('opens formatted, and shows the Markdown as written with the same parts marked', async () => {
+    const { onKeep, container } = open(new Map([['design.md', 0]]));
+    expect(screen.getByRole('button', { name: 'Formatted' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(screen.getByRole('button', { name: 'Source' }));
+    expect(onKeep).toHaveBeenCalled();
+    const lines = [...container.querySelectorAll('.code-lines .ln')];
+    expect(lines.map((line) => line.querySelector('.n')!.textContent)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+    expect(lines[0]!.querySelector('.t')).toHaveTextContent('# Design');
+    // The formatted view marks "No extra step." as changed and the risks as new; so does the source.
+    expect(lines.map((line) => line.className.replace('ln', '').trim())).toEqual(['', '', '', '', 'mark-changed', '', 'mark-added', '', 'mark-added']);
+    expect(lines[4]).toHaveAttribute('title', 'Changed since you last read it');
+    await userEvent.click(screen.getByLabelText('Highlight changes since you last read it'));
+    expect(container.querySelectorAll('.code-lines .ln[class*="mark-"]')).toHaveLength(0);
+    await userEvent.click(screen.getByRole('button', { name: 'Formatted' }));
+    expect(screen.getByRole('heading', { name: 'Design', level: 1 })).toBeInTheDocument();
+  });
+
+  it('opens another document formatted', async () => {
+    const { rerender } = open(new Map());
+    await userEvent.click(screen.getByRole('button', { name: 'Source' }));
+    rerender(<></>);
+    open(new Map());
+    expect(screen.getByRole('button', { name: 'Formatted' })).toHaveAttribute('aria-pressed', 'true');
+  });
 });

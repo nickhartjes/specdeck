@@ -1,4 +1,7 @@
+import { useMemo } from 'react';
+import { highlightHunk, languageOf } from '../model/highlight';
 import { SHOWN_IN_PART, type FileChange } from '../model/timeline';
+import { CodeSpans } from './CodeLines';
 
 const LABELS = {
   created: { verb: 'Created', kind: 'new file' },
@@ -14,9 +17,13 @@ function outsideFolder(path: string): boolean {
   return path.startsWith('~') || path.startsWith('/') || path.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(path);
 }
 
-/** One change to one file, as unified diff hunks with line numbers. */
+/** One change to one file, as unified diff hunks with line numbers, highlighted. */
 export function DiffView({ change, showPath = true }: { change: FileChange; showPath?: boolean }) {
   const label = LABELS[change.change];
+  const highlighted = useMemo(() => {
+    const language = languageOf(change.path);
+    return change.hunks.map((hunk) => highlightHunk(hunk.lines, language));
+  }, [change.path, change.hunks]);
   return (
     <div className="diff" aria-label={`${label.verb} ${change.path}`}>
       {showPath && (
@@ -48,7 +55,9 @@ export function DiffView({ change, showPath = true }: { change: FileChange; show
                     <span className="n">{left}</span>
                     <span className="n">{right}</span>
                     <span className="sign">{sign === ' ' ? '' : sign}</span>
-                    <span>{line.slice(1)}</span>
+                    <span>
+                      <CodeSpans spans={highlighted[i]?.[j] ?? [{ text: line.slice(1), kind: null }]} />
+                    </span>
                   </div>
                 );
               })}

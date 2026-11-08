@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -19,6 +20,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::activity::{Activity, Change};
 use crate::browser::BrowserHandler;
+use crate::code_files::CodeFiles;
 use crate::documents::{self, DocumentText};
 use crate::environment::Environment;
 use crate::hooks::{self, HookEndpoint, HookPayload};
@@ -93,7 +95,10 @@ pub struct SessionView {
     timeline: Arc<RwLock<Vec<TimelineEvent>>>,
     status: Arc<Mutex<AgentStatus>>,
     size: Arc<Mutex<(u16, u16)>>,
-    /// Bumped whenever the timeline, the status or the size changes.
+    /// Whether the host shares whole code files: read while a hook is open, so a change made
+    /// while it is off keeps no whole text (`files-documents-and-code` design decision 3).
+    whole_files: Arc<AtomicBool>,
+    /// Bumped whenever the timeline, the status, the size or the whole-files setting changes.
     changes: Arc<watch::Sender<u64>>,
 }
 
@@ -124,6 +129,11 @@ impl SessionView {
         *self.size.lock().unwrap()
     }
 
+    /// Whether the host shares whole code files; off when a session starts.
+    pub fn whole_files(&self) -> bool {
+        self.whole_files.load(Ordering::SeqCst)
+    }
+
     /// Notifies when the timeline, the status or the size changes. New log records are
     /// notified by [`OutputLog::subscribe`].
     pub fn subscribe(&self) -> watch::Receiver<u64> {
@@ -142,6 +152,7 @@ impl SessionView {
             timeline: Arc::default(),
             status: Arc::new(Mutex::new(AgentStatus::Unknown)),
             size: Arc::new(Mutex::new((80, 24))),
+            whole_files: Arc::default(),
             changes: Arc::new(watch::channel(0).0),
         }
     }
@@ -179,6 +190,7 @@ impl HostSession {
         browser: Option<BrowserHandler>,
     ) -> Result<(Self, mpsc::UnboundedReceiver<SessionEvent>), LaunchError> {
         let (commands, command_rx) = mpsc::unbounded_channel();
+        let whole_files = Arc::new(AtomicBool::new(false));
         let io_error = |e: std::io::Error| LaunchError::Pty(e.to_string());
 
         // Claude Code reports its events through HTTP hooks registered with an extra settings file.
@@ -196,15 +208,22 @@ impl HostSession {
             let sender = commands.clone();
             let shell_changes = ShellChanges::new(&config.folder, &config.data_dir, env);
             let folder = SessionFolder::from_environment(&config.folder, env);
+            let code_files = CodeFiles::new(&config.folder, env);
+            let whole_files = whole_files.clone();
             let endpoint = HookEndpoint::start_with_browser(
                 move |payload| {
-                    let mut changes =
-                        shell_changes.as_ref().and_then(|shell| shell.observe(&payload));
-                    let mut texts: Vec<DocumentText> = changes
-                        .as_mut()
-                        .map(|c| std::mem::take(&mut c.documents))
-                        .unwrap_or_default();
+                    let whole_files = whole_files.load(Ordering::SeqCst);
+                    let mut changes = shell_changes
+                        .as_ref()
+                        .and_then(|shell| shell.observe(&payload, whole_files));
+                    let mut texts: Vec<DocumentText> =
+                        changes.as_mut().map(|c| std::mem::take(&mut c.texts)).unwrap_or_default();
+                    // One rule for every code file's text, from a shell command or a file tool.
+                    texts.retain(|text| {
+                        documents::is_document(&text.path) || code_files.may_send(&text.path)
+                    });
                     texts.extend(documents::from_file_tool(&payload, &folder));
+                    texts.extend(code_files.from_file_tool(&payload, whole_files));
                     let _ = sender.send(Command::Hook(payload, changes, texts));
                 },
                 browser,
@@ -257,6 +276,7 @@ impl HostSession {
             timeline: Arc::default(),
             status: Arc::new(Mutex::new(Activity::new(config.agent).status())),
             size: Arc::new(Mutex::new((config.cols, config.rows))),
+            whole_files: whole_files.clone(),
             changes: Arc::new(watch::channel(0).0),
         };
         let session = Self {
@@ -321,6 +341,21 @@ impl HostSession {
 
     pub fn status(&self) -> AgentStatus {
         *self.status.lock().unwrap()
+    }
+
+    /// Whether the host shares whole code files; off when a session starts.
+    pub fn whole_files(&self) -> bool {
+        self.view.whole_files()
+    }
+
+    /// Shares the whole text of code files the agent changes from now on, or stops sharing it.
+    /// What was already sent stays with the participants who received it. A session without a
+    /// timeline never shares them: it has no file changes to go with.
+    pub fn share_whole_files(&self, on: bool) {
+        let on = on && self.agent.has_timeline();
+        if self.view.whole_files.swap(on, Ordering::SeqCst) != on {
+            self.view.changed();
+        }
     }
 
     /// Terminal input from the host. The only way input reaches the agent.
@@ -566,7 +601,7 @@ impl Pump {
                         .into_iter()
                         .flatten(),
                 );
-                let entries = self.builder.with_documents(entries, texts);
+                let entries = self.builder.with_texts(entries, texts);
                 self.touch_plans(&entries);
                 let changes = match compact {
                     Some(started) => self.activity.on_compact(started),

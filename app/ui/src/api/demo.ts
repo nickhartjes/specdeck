@@ -361,6 +361,8 @@ export function demoBridge(screen: string): Bridge {
         suggestionsPossible: true,
         suggestionsAllowed: true,
         suggestions: hostSuggestions,
+        wholeFilesPossible: true,
+        wholeFiles: false,
       });
       hostEvents = events;
       setTimeout(() => terminal(terminalStream()), 50);
@@ -375,6 +377,9 @@ export function demoBridge(screen: string): Bridge {
     hostSetViewerLimit: async () => {},
     hostAllowSuggestions: async (on) => {
       hostEvents?.({ type: 'allowed', suggestions: on });
+    },
+    hostShareCode: async (wholeFiles) => {
+      hostEvents?.({ type: 'shared', wholeFiles });
     },
     hostAnswerSuggestion: async (viewerId, id, text) => {
       hostSuggestions = hostSuggestions.map((suggestion) =>
@@ -412,6 +417,7 @@ export function demoBridge(screen: string): Bridge {
         }
         viewerEvents = events;
         events({ type: 'allowed', suggestions: params.get('suggestions') !== 'off' });
+        events({ type: 'shared', wholeFiles: params.get('whole') === 'on' });
         events({ type: 'suggestions', mine: [] });
         // A viewer takes the host's size from the stream's resize records, as from the engine.
         terminal(resizeRecord(cols, rows));
