@@ -227,7 +227,7 @@ export type TimelineEvent = Stamp &
     | { kind: 'prompt'; promptId: string; text: string }
     | { kind: 'message'; promptId: string; messageId: string; text: string; final: boolean }
     | { kind: 'response'; promptId: string; text: string }
-    | { kind: 'tool-call'; promptId: string; toolUseId: string; toolName: string; input: Record<string, unknown>; target?: Target }
+    | { kind: 'tool-call'; promptId: string; toolUseId: string; toolName: string; input: Record<string, unknown>; target?: Target; targets?: (Target | null)[] }
     | {
         kind: 'tool-result';
         promptId: string;

@@ -1,0 +1,21 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 7,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "default",
+  "prompt_id": "68fb507b-b864-44aa-b5be-e27454f0b804",
+  "session_id": "b0e43ade-e28e-4f5a-a30c-a0943d699d7b",
+  "tool_input": {
+    "skill": "claude-in-chrome"
+  },
+  "tool_name": "Skill",
+  "tool_response": {
+    "commandName": "claude-in-chrome",
+    "success": true
+  },
+  "tool_use_id": "toolu_019oyH3G5FYg2Eg8eucnv6wR",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/b0e43ade-e28e-4f5a-a30c-a0943d699d7b.jsonl"
+}

@@ -1,0 +1,30 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 2,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "default",
+  "prompt_id": "3299b582-b40c-4d7e-9006-c5b1db7df2ed",
+  "session_id": "79bba932-87a4-4405-8603-7aba4ccf58e6",
+  "tool_input": {
+    "max_results": 6,
+    "query": "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__computer,mcp__claude-in-chrome__read_page,mcp__claude-in-chrome__tabs_create_mcp,mcp__claude-in-chrome__form_input"
+  },
+  "tool_name": "ToolSearch",
+  "tool_response": {
+    "matches": [
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "mcp__claude-in-chrome__navigate",
+      "mcp__claude-in-chrome__computer",
+      "mcp__claude-in-chrome__read_page",
+      "mcp__claude-in-chrome__tabs_create_mcp",
+      "mcp__claude-in-chrome__form_input"
+    ],
+    "query": "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__computer,mcp__claude-in-chrome__read_page,mcp__claude-in-chrome__tabs_create_mcp,mcp__claude-in-chrome__form_input",
+    "total_deferred_tools": 41
+  },
+  "tool_use_id": "toolu_014VPyeU6j8DzV6KHp7JaLpe",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/79bba932-87a4-4405-8603-7aba4ccf58e6.jsonl"
+}

@@ -39,6 +39,8 @@ export interface ToolItem {
   input: Record<string, unknown>;
   /** The element a click or typing in Claude's browser acts on. */
   target?: Target;
+  /** The elements of a call that acts on several, by position: a form's fields, a batch's actions. */
+  targets?: (Target | null)[];
   status: ToolStatus;
   error?: string;
   /** What the host decided or a helper reported, once known. */
@@ -205,6 +207,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
           toolName: event.toolName,
           input: event.input,
           ...(event.target && { target: event.target }),
+          ...(event.targets && { targets: event.targets }),
           status: 'running',
           changes: [],
           outputSeq: event.outputSeq,

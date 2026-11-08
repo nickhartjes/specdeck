@@ -1,0 +1,32 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 601,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "claude-in-chrome",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "68fb507b-b864-44aa-b5be-e27454f0b804",
+  "session_id": "b0e43ade-e28e-4f5a-a30c-a0943d699d7b",
+  "tool_input": {
+    "filter": "all",
+    "tabId": 482154943
+  },
+  "tool_name": "mcp__claude-in-chrome__read_page",
+  "tool_response": [
+    {
+      "text": "heading \"Sign in\" [ref_8]\nform [ref_9]\n label \"Email\" [ref_10]\n  textbox [ref_1] type=\"email\"\n label \"Password\" [ref_11]\n  textbox [ref_2] type=\"password\"\n label \"Code\" [ref_12]\n  textbox [ref_3] type=\"text\"\n textbox \"Card number\" [ref_4] type=\"text\"\n label \"Notes\" [ref_13]\n  textbox [ref_5]\n button \"Sign in\" [ref_6] type=\"submit\"\n button \"✕\" [ref_7] type=\"button\"\n\nViewport: 1364x772",
+      "type": "text"
+    },
+    {
+      "text": "\n\nTab Context:\n- Executed on tabId: 482154943\n- Available tabs:\n  • tabId 482154942: \"New tab\" (\"chrome://newtab/\")\n  • tabId 482154943: \"Sign in\" (\"http://127.0.0.1:5179/\")",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01KSj1M3DQsT7PU4EtPevjWK",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/b0e43ade-e28e-4f5a-a30c-a0943d699d7b.jsonl"
+}

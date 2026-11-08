@@ -178,6 +178,135 @@ describe("Claude's browser", () => {
   });
 });
 
+describe('other browsers', () => {
+  const text = (label: string): Target => ({ kind: 'text field', label, sensitive: false });
+  const email: Target = { kind: 'email field', label: 'Email', sensitive: false };
+  const password: Target = { kind: 'password field', label: 'Password', sensitive: true };
+  const signIn: Target = { kind: 'button', label: 'Sign in', sensitive: false };
+  const on = (toolName: string, input: Record<string, unknown>, acts: Pick<ToolItem, 'target' | 'targets'> = {}, status?: ToolStatus): ToolItem => ({
+    ...tool(toolName, input, status),
+    ...acts,
+  });
+  const playwright = (name: string, input: Record<string, unknown>, acts?: Pick<ToolItem, 'target' | 'targets'>) =>
+    on(`mcp__playwright__browser_${name}`, input, acts);
+  const chrome = (name: string, input: Record<string, unknown>, acts?: Pick<ToolItem, 'target' | 'targets'>) =>
+    on(`mcp__claude-in-chrome__${name}`, input, acts);
+
+  it('makes one step of a Playwright run, its typed text hidden', () => {
+    // The calls of `playwright-steps`, as the host sends them.
+    const [step] = steps([
+      playwright('navigate', { url: 'http://127.0.0.1:5179/' }),
+      playwright('snapshot', {}),
+      playwright('type', { element: 'Email field', target: 'e5' }, { target: text('Email') }),
+      playwright('type', { element: 'Password field', target: 'e7' }, { target: text('Password') }),
+      playwright('type', { element: 'Code field', target: 'e9' }, { target: text('Code') }),
+      playwright(
+        'fill_form',
+        { fields: [{ name: 'Card number', target: 'e10', type: 'textbox' }, { name: 'Notes', target: 'e12', type: 'textbox' }] },
+        { targets: [text('Card number'), text('Notes')] },
+      ),
+      playwright('click', { element: 'Unlabeled ✕ button', target: 'e14' }, { target: { kind: 'button', sensitive: false } }),
+      playwright('click', { element: 'Sign in button', target: 'e13' }, { target: signIn }),
+    ]);
+    expect(step!.label).toBe(
+      'Used its browser: opened 127.0.0.1:5179/, read the page, filled in “Email”, filled in “Password”, filled in “Code”, filled in “Card number” and “Notes”, clicked a button, clicked “Sign in”',
+    );
+  });
+
+  it("names an element by Claude's own words without a read", () => {
+    expect(steps([playwright('click', { element: 'Sign in button', target: 'e13' })])[0]!.label).toBe('Clicked Sign in button in its browser');
+    expect(steps([chrome('computer', { action: 'left_click', coordinate: [1, 2], action_summary: 'Submits the sign-in form' })])[0]!.label).toBe(
+      'Submits the sign-in form in its browser',
+    );
+    expect(steps([chrome('computer', { action: 'left_click', coordinate: [1, 2] })])[0]!.label).toBe('Clicked on the page in its browser');
+  });
+
+  it('shows typing into a known ordinary field, and fills in the rest', () => {
+    const [step] = steps([
+      chrome('computer', { action: 'left_click', ref: 'ref_4' }, { target: email }),
+      chrome('computer', { action: 'type', text: 'test@example.com' }, { target: email }),
+      chrome('computer', { action: 'left_click', ref: 'ref_6' }, { target: password }),
+      chrome('computer', { action: 'type' }, { target: password }),
+      chrome('computer', { action: 'type' }),
+      chrome('form_input', { ref: 'ref_8' }, { target: text('Code') }),
+      chrome('form_input', { ref: 'ref_20', value: true }, { target: { kind: 'checkbox', label: 'Remember me', sensitive: false } }),
+    ]);
+    expect(step!.label).toBe(
+      'Used its browser: clicked “Email”, typed into “Email”, clicked “Password”, filled in “Password”, filled in a field, filled in “Code”, set “Remember me”',
+    );
+  });
+
+  it('lists each action of a Claude in Chrome batch', () => {
+    // The login batch of `chrome-batch`, as the host sends it.
+    const batch = chrome(
+      'browser_batch',
+      {
+        actions: [
+          { name: 'computer', input: { action: 'left_click', ref: 'ref_1', action_summary: 'Focuses the Email field' } },
+          { name: 'computer', input: { action: 'type', text: 'test@example.com', action_summary: 'Types the test email address' } },
+          { name: 'computer', input: { action: 'left_click', ref: 'ref_2', action_summary: 'Focuses the Password field' } },
+          { name: 'computer', input: { action: 'type', action_summary: 'Types the test password' } },
+          { name: 'form_input', input: { ref: 'ref_3', value: '123456', action_summary: 'Sets the Code field' } },
+          { name: 'computer', input: { action: 'left_click', ref: 'ref_6', action_summary: 'Submits the sign-in form' } },
+        ],
+      },
+      { targets: [email, email, password, password, text('Code'), signIn] },
+    );
+    const [step] = steps([chrome('tabs_create_mcp', {}), batch]);
+    expect(step!.label).toBe(
+      'Used its browser: opened a tab, clicked “Email”, typed into “Email”, clicked “Password”, filled in “Password”, set “Code”, clicked “Sign in”',
+    );
+    expect(steps([{ ...batch, status: 'running' }])[0]!.live).toBe('using its browser: clicking “Sign in”');
+  });
+
+  it('names the other tools in plain words', () => {
+    const labels = [
+      playwright('navigate_back', {}),
+      playwright('press_key', { key: 'Enter' }),
+      playwright('take_screenshot', {}),
+      playwright('hover', { element: 'Menu', target: 'e3' }),
+      playwright('select_option', { element: 'Size', target: 'e4', values: ['L'] }),
+      playwright('click', { element: 'Row', target: 'e5', doubleClick: true }),
+      playwright('tabs', { action: 'new' }),
+      playwright('evaluate', { function: '() => 1' }),
+      playwright('network_requests', {}),
+      chrome('read_page', { tabId: 1 }),
+      chrome('tabs_context_mcp', {}),
+      chrome('computer', { action: 'key', text: 'Tab' }),
+      chrome('computer', { action: 'scroll' }),
+      chrome('gif_creator', {}),
+    ].map((call) => steps([call])[0]!.label);
+    expect(labels).toEqual([
+      'Went back a page in its browser',
+      'Pressed Enter in its browser',
+      'Took a screenshot in its browser',
+      'Hovered over Menu in its browser',
+      'Chose an option in Size in its browser',
+      'Double-clicked Row in its browser',
+      'Opened a tab in its browser',
+      'Ran a script on the page in its browser',
+      'Used browser_network_requests in its browser',
+      'Read the page in its browser',
+      'Looked at its tabs in its browser',
+      'Pressed Tab in its browser',
+      'Scrolled the page in its browser',
+      'Used gif_creator in its browser',
+    ]);
+    // A server with another tool name is no browser.
+    expect(steps([tool('mcp__playwright__something_else', {})])[0]!.label).toBe('Used mcp__playwright__something_else');
+  });
+
+  it("says typed into for an older host's call that still has its text", () => {
+    expect(steps([playwright('type', { element: 'Email field', target: 'e5', text: 'a@b.c' })])[0]!.label).toBe('Typed into Email field in its browser');
+    expect(steps([chrome('computer', { action: 'type', text: 'a@b.c' })])[0]!.label).toBe('Typed into the page in its browser');
+  });
+
+  it("joins SpecDeck's own browser calls in one step", () => {
+    const [step] = steps([tool('mcp__specdeck__navigate', { url: 'http://localhost:5173/' }), playwright('snapshot', {})]);
+    expect(step!.label).toBe('Used its browser: opened localhost:5173/, read the page');
+  });
+});
+
 describe('screenshots', () => {
   const shot = (address: string): Screenshot => ({ kind: 'screenshot', image: { mediaType: 'image/jpeg', data: 'x', width: 8, height: 5 }, address });
   const browser = (name: string, outcome?: Screenshot) => ({ ...tool(`mcp__specdeck__${name}`, {}), ...(outcome && { outcome }) });
