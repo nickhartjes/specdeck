@@ -54,9 +54,11 @@ The server reads its settings from the environment (see [`crates/server/src/main
 
 TURN is UDP only: the app's WebRTC library (libdatachannel with libjuice) does not support TURN over TCP or TLS. Viewers on networks that block UDP entirely cannot connect.
 
-Kubernetes Services cannot declare port ranges, so [`base/coturn.yaml`](base/coturn.yaml) lists every relay port. Each relayed viewer uses a relay port on the host's side and possibly one on its own side, so 20 ports cover about 10 relayed viewers at once; widen `--min-port`/`--max-port` and the Service's port list together. How the cluster exposes UDP (LoadBalancer, NodePort, host network) has to be agreed with the cluster operators; adjust the Service type accordingly.
+Kubernetes Services cannot declare port ranges, so [`base/coturn.yaml`](base/coturn.yaml) lists every relay port. Each relayed viewer uses a relay port on the host's side and possibly one on its own side, so 20 ports cover about 10 relayed viewers at once; widen `--min-port`/`--max-port`, the Service's port list and `--total-quota` together. How the cluster exposes UDP (LoadBalancer, NodePort, host network) has to be agreed with the cluster operators; adjust the Service type accordingly.
 
-coturn refuses to relay to private and link-local address ranges (`--denied-peer-ip`), so TURN credentials cannot be used to reach services inside the cluster. The one exception is the pod's own address, so two relayed peers can meet on the same coturn.
+coturn refuses to relay to private, link-local and other special-purpose ranges, IPv4 and IPv6 alike (`--denied-peer-ip`), so TURN credentials cannot be used to reach services inside the cluster. The one exception is the pod's own address, so two relayed peers can meet on the same coturn.
+
+coturn's quotas keep one credential or one session from taking the whole relay: 40 allocations per credential (`--user-quota`), as many in total as there are relay ports (`--total-quota`), and 20 Mbit/s per allocation (`--max-bps`, which coturn counts in bytes per second). The relay's total bandwidth is then at most `--total-quota` × 20 Mbit/s; a smaller relay range lowers it. coturn's `--bps-capacity` is not set: it reserves `--max-bps` twice for every allocation, so it limits how many allocations fit rather than throughput.
 
 ## Unprivileged pods
 

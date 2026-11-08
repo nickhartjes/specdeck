@@ -33,6 +33,11 @@ export const END_MESSAGES: Record<EndReason, { title: string; text: string; keep
     text: 'Check your internet connection, then try again.',
     retry: true,
   },
+  'service-busy': {
+    title: 'The sharing service is busy',
+    text: 'It is serving as many sessions as it can. Try again in a few minutes.',
+    retry: true,
+  },
   'network-blocked': {
     title: 'Your network does not allow the connection',
     text: 'SpecDeck connects over UDP, which some company networks block. Try another network, such as your phone’s hotspot.',

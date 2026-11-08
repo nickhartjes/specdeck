@@ -131,6 +131,14 @@ describe('viewer screen', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('UDP');
   });
 
+  it('explains a busy sharing service and offers to try again', () => {
+    setup();
+    act(() => emit({ type: 'ended', reason: 'service-busy' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('The sharing service is busy');
+    expect(screen.getByRole('alert')).toHaveTextContent('Try again in a few minutes');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+
   it('leaves', async () => {
     const { bridge, onLeave } = setup();
     join();

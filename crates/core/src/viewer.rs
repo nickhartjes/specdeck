@@ -98,6 +98,8 @@ pub enum ViewerEvent {
     RateLimited,
     /// The signalling service cannot be reached; final.
     ServiceUnavailable,
+    /// The signalling service is at a capacity limit; final.
+    ServiceBusy,
     /// No connection could be made, for example because the network blocks UDP; final.
     CannotConnect,
     /// The host closed the session; final.
@@ -113,6 +115,7 @@ impl ViewerEvent {
                 | ViewerEvent::InvalidCode
                 | ViewerEvent::RateLimited
                 | ViewerEvent::ServiceUnavailable
+                | ViewerEvent::ServiceBusy
                 | ViewerEvent::CannotConnect
                 | ViewerEvent::Ended
         )
@@ -347,6 +350,18 @@ impl Viewer {
         }
     }
 
+    /// Creates the peer connection and its offer; `None` when it cannot be created.
+    fn offer(&self, ice_servers: &[String], events: &UnboundedSender<PeerEvent>) -> Option<Peer> {
+        let config = PeerConfig { ice_servers: ice_servers.to_vec(), ..self.config.peer.clone() };
+        let peer = Peer::offer(&config, events.clone()).ok()?;
+        let number = peer.number();
+        self.status.send_modify(|status| {
+            status.peer = Some(number);
+            status.state = Some(LinkState::New);
+        });
+        Some(peer)
+    }
+
     /// One connection: signalling, peer connection, then the session until it ends or drops.
     async fn attempt(&mut self, control: &mut UnboundedReceiver<Control>) -> Outcome {
         let Ok((signalling, mut server)) =
@@ -363,13 +378,13 @@ impl Viewer {
         // authenticating with its resume token, which keeps working after the code changed.
         let (room, auth_key) = self.state.room_and_key();
         self.status.send_modify(|status| status.signalling_connected = true);
-        signalling.send(ClientMessage::TurnCredentials);
+        // TURN credentials come after joining: the service gives them only to members.
+        signalling.send(ClientMessage::Join { room: room.clone() });
 
         let mut ice_servers = self.config.peer.ice_servers.clone();
         let mut connection: Option<String> = None;
         let mut peer: Option<Peer> = None;
         let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
-        let mut joined_sent = false;
         let mut connected = false;
         let mut signalling_closed = false;
         let mut traffic = diag::traffic_interval();
@@ -419,38 +434,35 @@ impl Viewer {
                             self.status.send_modify(|status| status.signalling_connected = false);
                         }
                     }
+                    // The offer is made once the relay is known: with its credentials, or without.
                     Some(ServerMessage::TurnCredentials { urls, username, credential, .. }) => {
                         ice_servers.extend(urls.iter().filter_map(|url| turn_url_with_credentials(url, &username, &credential)));
-                        if !joined_sent {
-                            joined_sent = true;
-                            signalling.send(ClientMessage::Join { room: room.clone() });
+                        if connection.is_some() && peer.is_none() {
+                            match self.offer(&ice_servers, &peer_tx) {
+                                Some(new_peer) => peer = Some(new_peer),
+                                None => return Outcome::Retry(AttemptEnd::PeerCreateFailed),
+                            }
                         }
                     }
                     Some(ServerMessage::Error { code }) => match code {
-                        ErrorCode::TurnUnavailable if !joined_sent => {
-                            joined_sent = true;
-                            signalling.send(ClientMessage::Join { room: room.clone() });
+                        ErrorCode::TurnUnavailable if connection.is_some() && peer.is_none() => {
+                            match self.offer(&ice_servers, &peer_tx) {
+                                Some(new_peer) => peer = Some(new_peer),
+                                None => return Outcome::Retry(AttemptEnd::PeerCreateFailed),
+                            }
                         }
                         // After the host closed the session its room is gone.
                         ErrorCode::RoomNotFound if self.state.admitted_once() => return Outcome::Final(ViewerEvent::Ended),
                         ErrorCode::RoomNotFound => return Outcome::Final(ViewerEvent::InvalidCode),
                         ErrorCode::RateLimited => return Outcome::Final(ViewerEvent::RateLimited),
+                        // Before the first admission a full service is final; later, keep trying.
+                        ErrorCode::ServerBusy if self.state.admitted_once() => return Outcome::Retry(AttemptEnd::ServiceBusy),
+                        ErrorCode::ServerBusy => return Outcome::Final(ViewerEvent::ServiceBusy),
                         _ => {}
                     },
                     Some(ServerMessage::Joined { connection: id }) => {
-                        let config = PeerConfig { ice_servers: ice_servers.clone(), ..self.config.peer.clone() };
-                        match Peer::offer(&config, peer_tx.clone()) {
-                            Ok(new_peer) => {
-                                let number = new_peer.number();
-                                self.status.send_modify(|status| {
-                                    status.peer = Some(number);
-                                    status.state = Some(LinkState::New);
-                                });
-                                peer = Some(new_peer);
-                            }
-                            Err(_) => return Outcome::Retry(AttemptEnd::PeerCreateFailed),
-                        }
                         connection = Some(id);
+                        signalling.send(ClientMessage::TurnCredentials);
                     }
                     Some(ServerMessage::Signal { payload, .. }) => {
                         let (Some(peer), Some(id)) = (&mut peer, &connection) else { continue };

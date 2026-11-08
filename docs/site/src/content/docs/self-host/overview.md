@@ -5,7 +5,7 @@ description: What the sharing service and the TURN relay do, and what they can s
 
 SpecDeck sends a session straight from the host to each viewer. The **sharing service** only helps them find each other. It is two programs:
 
-- The **server** (`specdeck-server`) matches viewers to hosts by invite code and passes on the messages that set up the connection. It also hands out short-lived credentials for the relay. Apps reach it over a WebSocket, `wss://<domain>/signal`. It also serves the [web viewer](/specdeck/guide/join/#watch-in-a-browser) at `https://<domain>/`, built into the same program, so people who cannot install the app can watch.
+- The **server** (`specdeck-server`) matches viewers to hosts by invite code and passes on the messages that set up the connection. It also hands out short-lived credentials for the relay, only to apps that host a session or have joined one, and limits how much any one client can hold (see [Limits](/specdeck/self-host/configuration/#limits)). Apps reach it over a WebSocket, `wss://<domain>/signal`. It also serves the [web viewer](/specdeck/guide/join/#watch-in-a-browser) at `https://<domain>/`, built into the same program, so people who cannot install the app can watch.
 - The **TURN relay** ([coturn](https://github.com/coturn/coturn)) forwards the session's traffic when host and viewer cannot reach each other directly, for example behind strict company firewalls. It uses UDP only.
 
 ```
