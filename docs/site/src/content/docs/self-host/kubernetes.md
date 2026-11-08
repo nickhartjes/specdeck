@@ -38,7 +38,8 @@ kubectl apply -k deploy/k8s/base     # or your overlay
 ## Good to know
 
 - Run **one** replica of the server: rooms live in memory.
-- Kubernetes Services cannot declare port ranges, so every relay port is listed. 20 ports cover about 10 relayed viewers; widen coturn's `--min-port`/`--max-port` and the Service's port list together.
+- Kubernetes Services cannot declare port ranges, so every relay port is listed. 20 ports cover about 10 relayed viewers; widen coturn's `--min-port`/`--max-port`, `--total-quota` and the Service's port list together.
+- coturn limits each relayed connection to 20 Mbit/s (`--max-bps`, in bytes per second), so the relay's total is at most `--total-quota` × 20 Mbit/s.
 - Both pods meet the `restricted` Pod Security Standard.
 - To try it on your own machine, `just local-up` deploys the `local` overlay to Colima's k3s.
 

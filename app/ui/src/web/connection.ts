@@ -204,7 +204,9 @@ export class Connection {
       let done = false;
       let opened = false;
       let connected = false;
-      let joinSent = false;
+      // The connection id the service gave this viewer on joining; the peer starts once TURN
+      // credentials, or the answer that there are none, have arrived.
+      let joinedAs: string | undefined;
       let connection: string | null = null;
       let peer: RTCPeerConnection | null = null;
       let control: RTCDataChannel | null = null;
@@ -241,10 +243,8 @@ export class Connection {
       };
 
       const send = (message: object) => socket.send(JSON.stringify(message));
-      const join = () => {
-        if (joinSent) return;
-        joinSent = true;
-        send({ type: 'join', room });
+      const startPeerOnceJoined = () => {
+        if (joinedAs && !peer) startPeer(joinedAs);
       };
 
       const startPeer = (id: string) => {
@@ -353,7 +353,8 @@ export class Connection {
 
       socket.onopen = () => {
         opened = true;
-        send({ type: 'turn-credentials' });
+        // TURN credentials come after joining: the service gives them only to members.
+        send({ type: 'join', room });
       };
       socket.onerror = () => {};
       socket.onclose = () => {
@@ -372,16 +373,19 @@ export class Connection {
         switch (message.type) {
           case 'turn-credentials':
             for (const url of message.urls) iceServers.push({ urls: url, username: message.username, credential: message.credential });
-            join();
+            startPeerOnceJoined();
             break;
           case 'error':
-            if (message.code === 'turn-unavailable') join();
+            if (message.code === 'turn-unavailable') startPeerOnceJoined();
             // After the host closed the session its room is gone.
             else if (message.code === 'room-not-found') finish({ final: core.admittedOnce() ? 'closed' : 'invalid-code' });
             else if (message.code === 'rate-limited') finish({ final: 'too-many-attempts' });
+            // Before the first admission a full service is final; later, keep trying.
+            else if (message.code === 'server-busy') finish(core.admittedOnce() ? { retry: true } : { final: 'service-busy' });
             break;
           case 'joined':
-            if (!peer) startPeer(message.connection);
+            joinedAs = message.connection;
+            send({ type: 'turn-credentials' });
             break;
           case 'signal':
             if (message.connection === connection) void onSignal(message.payload);

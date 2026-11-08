@@ -321,6 +321,8 @@ export type EndReason =
   | 'invalid-code'
   | 'too-many-attempts'
   | 'service-unavailable'
+  /** The sharing service is at a capacity limit. */
+  | 'service-busy'
   | 'network-blocked'
   | 'update-app'
   | 'host-update'

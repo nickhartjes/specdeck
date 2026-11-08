@@ -77,6 +77,8 @@ pub enum EndReason {
     InvalidCode,
     TooManyAttempts,
     ServiceUnavailable,
+    /// The sharing service is at a capacity limit.
+    ServiceBusy,
     NetworkBlocked,
     /// This app is older than the host's.
     UpdateApp,
@@ -191,6 +193,7 @@ fn translate(event: ViewerEvent) -> Option<ViewEvent> {
         ViewerEvent::ServiceUnavailable => {
             ViewEvent::Ended { reason: EndReason::ServiceUnavailable }
         }
+        ViewerEvent::ServiceBusy => ViewEvent::Ended { reason: EndReason::ServiceBusy },
         ViewerEvent::CannotConnect => ViewEvent::Ended { reason: EndReason::NetworkBlocked },
     })
 }

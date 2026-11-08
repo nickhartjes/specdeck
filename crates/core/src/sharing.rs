@@ -303,6 +303,10 @@ struct Host {
     status: watch::Sender<SharingStatus>,
     /// Set when the service could not be reached or closed, until it is reached again.
     service_down: bool,
+    /// The service answered that it is busy: leave it and try again after `busy_backoff`.
+    busy: bool,
+    /// The wait before trying a busy service again; doubles while it stays busy.
+    busy_backoff: Duration,
     last_departure: Option<Departure>,
     traffic: diag::Traffic,
     requests: Requests,
@@ -466,6 +470,8 @@ impl Host {
             peer_tx: mpsc::unbounded_channel().0,
             status,
             service_down: false,
+            busy: false,
+            busy_backoff: Duration::ZERO,
             last_departure: None,
             traffic: diag::Traffic::default(),
             requests,
@@ -514,6 +520,18 @@ impl Host {
                 // Waits before retrying the signalling service; only armed while it is down.
                 _ = tokio::time::sleep_until(next_attempt), if server_rx.is_none() => {}
                 _ = traffic.tick() => self.traffic.report_host(),
+            }
+            if std::mem::take(&mut self.busy) {
+                // A full service refused the connection or a room: leave it, and come back later
+                // rather than at once, which would only add to its load.
+                server_rx = None;
+                self.signalling = None;
+                self.service_down = true;
+                self.busy_backoff =
+                    (self.busy_backoff * 2).clamp(Duration::from_secs(1), Duration::from_secs(30));
+                next_attempt = Instant::now() + self.busy_backoff;
+                diag::host_signalling_down(self.busy_backoff);
+                let _ = self.events.send(SharingEvent::Unavailable);
             }
             self.sync_whole_files();
             self.pump_all();
@@ -585,9 +603,10 @@ impl Host {
                 *backoff = Duration::ZERO;
                 self.service_down = false;
                 diag::host_signalling_up();
-                sender.send(ClientMessage::TurnCredentials);
                 sender.send(ClientMessage::Host { room: self.keys.room_id.clone() });
                 sender.send(ClientMessage::Host { room: self.rejoin_room.clone() });
+                // The service gives TURN credentials only to a connection that holds a room.
+                sender.send(ClientMessage::TurnCredentials);
                 self.signalling = Some(sender);
                 Some(receiver)
             }
@@ -613,6 +632,7 @@ impl Host {
     fn handle_server(&mut self, message: ServerMessage) {
         match message {
             ServerMessage::RoomOpened { room } if room == self.keys.room_id => {
+                self.busy_backoff = Duration::ZERO;
                 let _ = self.events.send(SharingEvent::Ready { code: self.code.clone() });
             }
             ServerMessage::TurnCredentials { urls, username, credential, ttl_seconds } => {
@@ -698,6 +718,7 @@ impl Host {
                 // Practically impossible with 60-bit codes; pick another one.
                 self.rotate_code();
             }
+            ServerMessage::Error { code: ErrorCode::ServerBusy } => self.busy = true,
             _ => {}
         }
     }

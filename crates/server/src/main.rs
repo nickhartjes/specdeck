@@ -6,6 +6,10 @@
 //! - `SPECDECK_TURN_TTL_SECONDS`: how long credentials stay valid (default 43200, 12 hours)
 //! - `SPECDECK_TRUSTED_PROXIES`: reverse proxies in front of the service, such as an ingress
 //!   (default 0); the client address for rate limiting is then read from `X-Forwarded-For`
+//! - `SPECDECK_MAX_CONNECTIONS`: open connections in total (default 2000)
+//! - `SPECDECK_MAX_CONNECTIONS_PER_IP`: open connections per client network, an IPv4 address or an
+//!   IPv6 /64 (default 100)
+//! - `SPECDECK_MAX_ROOMS`: open rooms in total (default 4000)
 //!
 //! Built with the `web-viewer` feature, it also serves the web viewer at `/`.
 
@@ -21,16 +25,30 @@ async fn main() -> std::io::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let address = std::env::var("SPECDECK_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".into());
-    let trusted_proxies =
-        std::env::var("SPECDECK_TRUSTED_PROXIES").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let config =
-        Config { turn: turn_config(), trusted_proxies, web: web_viewer(), ..Config::default() };
+    let defaults = Config::default();
+    let config = Config {
+        turn: turn_config(),
+        trusted_proxies: number("SPECDECK_TRUSTED_PROXIES", defaults.trusted_proxies),
+        web: web_viewer(),
+        max_connections: number("SPECDECK_MAX_CONNECTIONS", defaults.max_connections),
+        max_connections_per_ip: number(
+            "SPECDECK_MAX_CONNECTIONS_PER_IP",
+            defaults.max_connections_per_ip,
+        ),
+        max_rooms: number("SPECDECK_MAX_ROOMS", defaults.max_rooms),
+        ..defaults
+    };
     if config.turn.is_none() {
         tracing::warn!("no TURN relay configured (SPECDECK_TURN_SECRET, SPECDECK_TURN_URLS)");
     }
     let listener = TcpListener::bind(&address).await?;
     tracing::info!("sharing service listening on {address}");
     serve(listener, Arc::new(Service::new(config))).await
+}
+
+/// A number from the environment, or `default` when it is not set or not a number.
+fn number(name: &str, default: usize) -> usize {
+    std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
 #[cfg(feature = "web-viewer")]
