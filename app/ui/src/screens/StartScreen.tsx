@@ -19,6 +19,7 @@ import { errorMessage, useBridge } from '../api/bridge';
 import type { AgentId, AgentInfo, Profile, RunningSession } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { initials } from '../components/PeoplePanel';
+import { PLAIN_TEXT } from '../components/fields';
 import { formatCode, isCompleteCode, isJoinLink } from '../model/code';
 import type { MenuCommand } from '../menu/menu';
 import { AGENT_NAMES, endingText } from './HostScreen';
@@ -181,6 +182,7 @@ function Welcome({ onProfile }: { onProfile: (profile: Profile) => void }) {
           What should others call you?
         </label>
         <input
+          {...PLAIN_TEXT}
           id="username"
           className="field"
           autoFocus
@@ -217,7 +219,7 @@ function NameBadge({ profile, onProfile }: { profile: Profile; onProfile: (profi
           setEditing(false);
         }}
       >
-        <input className="field" style={{ width: 180, height: 30 }} autoFocus maxLength={64} aria-label="Your name" value={name} onChange={(e) => setName(e.target.value)} />
+        <input {...PLAIN_TEXT} className="field" style={{ width: 180, height: 30 }} autoFocus maxLength={64} aria-label="Your name" value={name} onChange={(e) => setName(e.target.value)} />
         <button className="btn small primary" type="submit">
           Save
         </button>
@@ -478,12 +480,12 @@ function JoinCard({
           Invite code
         </label>
         <input
+          {...PLAIN_TEXT}
           ref={input}
           id="invite-code"
           className="field code"
           placeholder="XXXX-XXXX-XXXX"
           autoComplete="off"
-          spellCheck={false}
           value={code}
           onChange={(event) => setCode(formatCode(event.target.value))}
           onPaste={(event) => {

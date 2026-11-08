@@ -66,3 +66,5 @@ The timeline then shows a card with the task, the value you kept, the spread and
 ## Notifications
 
 A viewer whose window is in the background gets a notification when you ask to read, naming you and what to read, and when you start a vote or a new round. A request that was already open when they joined doesn't notify them. Each has its own switch under [While you watch a session](/specdeck/guide/settings/#while-you-watch-a-session), both on at first.
+
+While your own window is in the background, you hear when a viewer has a question (with its text), when everyone has read, when the time runs out while someone is still reading, and when every viewer has voted. Each has its own switch under [While you host a session](/specdeck/guide/settings/#while-you-host-a-session), all on at first.

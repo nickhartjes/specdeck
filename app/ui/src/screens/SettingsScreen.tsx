@@ -1,8 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { HOST_NOTIFICATION_KINDS } from '../model/hostNotifications';
 import { VIEWER_NOTIFICATION_KINDS } from '../model/viewerNotices';
 import { errorMessage, useBridge } from '../api/bridge';
 import type { Profile, ServiceCheck } from '../api/types';
 import { APPEARANCES } from '../appearance';
+import { PLAIN_TEXT } from '../components/fields';
 import { serviceName } from '../model/code';
 
 /** The settings window: changes apply at once, as is usual for app settings. */
@@ -46,6 +48,7 @@ export function SettingsScreen() {
         <label htmlFor="settings-name">Your name</label>
         <div>
           <input
+            {...PLAIN_TEXT}
             id="settings-name"
             className="field"
             maxLength={64}
@@ -107,7 +110,30 @@ export function SettingsScreen() {
             Show notifications
           </label>
           <span id="settings-notifications-hint" className="field-hint">
-            When someone joins or leaves your session, and when the agent waits for you. Only while SpecDeck is not in front.
+            When someone joins or leaves your session, when the agent waits for you, and for what you choose below. Only while SpecDeck is not in front.
+          </span>
+        </div>
+      </div>
+      <div className="row">
+        <span id="settings-host-notifications">While you host a session</span>
+        <div>
+          <div role="group" aria-labelledby="settings-host-notifications" aria-describedby="settings-host-notifications-hint" style={{ display: 'flex', flexDirection: 'column' }}>
+            {HOST_NOTIFICATION_KINDS.map(({ kind, label }) => (
+              <label key={kind} className="check">
+                <input
+                  type="checkbox"
+                  checked={profile.hostNotifications[kind]}
+                  disabled={!profile.notifications}
+                  onChange={async (event) =>
+                    setProfile(await bridge.setHostNotifications({ ...profile.hostNotifications, [kind]: event.target.checked }))
+                  }
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <span id="settings-host-notifications-hint" className="field-hint">
+            When you asked everyone to read something or to estimate a task.
           </span>
         </div>
       </div>
@@ -283,11 +309,11 @@ function SharingService({ profile, onProfile }: { profile: Profile; onProfile: (
       <label htmlFor="settings-service">Sharing service</label>
       <div>
         <input
+          {...PLAIN_TEXT}
           id="settings-service"
           className="field"
           placeholder={serviceName(profile.builtInService)}
           autoComplete="off"
-          spellCheck={false}
           disabled={locked}
           value={value}
           onChange={(event) => {

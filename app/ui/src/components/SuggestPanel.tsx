@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { MAX_SUGGESTION_BYTES, type RequestOutcome, type Suggestion, type SuggestionState } from '../api/types';
+import { PLAIN_TEXT } from './fields';
 
 interface Props {
   /** The host's name, who decides on every suggestion. */
@@ -75,6 +76,7 @@ export function SuggestPanel({ host, agentName, allowed, mine, sent, onSuggest }
       {allowed ? (
         <form onSubmit={submit} className="suggest-form">
           <textarea
+            {...PLAIN_TEXT}
             className="field"
             aria-label="Prompt to suggest"
             rows={4}

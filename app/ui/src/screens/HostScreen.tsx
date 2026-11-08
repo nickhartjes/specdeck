@@ -296,6 +296,19 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
   // The host's asks: a failure says why in a toast.
   const ask = (call: () => Promise<void>) => void call().catch((e) => showToast(errorMessage(e)));
   const { read, vote } = state.asks;
+  // A click on a question's notification shows the open request's question texts (`host-ask-notifications`).
+  const [showQuestions, setShowQuestions] = useState(0);
+  const readId = useRef<number | null>(null);
+  useEffect(() => {
+    readId.current = read?.id ?? null;
+  }, [read?.id]);
+  useEffect(
+    () =>
+      bridge.onNoticeOpen((open) => {
+        if (open.kind === 'questions' && open.ask === readId.current) setShowQuestions((n) => n + 1);
+      }),
+    [bridge],
+  );
   const requests = (read || vote) && (
     <>
       {read && (
@@ -305,6 +318,7 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
           participants={state.participants}
           onOpen={() => workspace.current?.openTarget(read.target, read.label)}
           onEnd={() => ask(() => bridge.hostEndRead())}
+          showQuestions={showQuestions}
         />
       )}
       {vote && (

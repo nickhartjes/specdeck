@@ -320,6 +320,7 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   useEffect(
     () =>
       bridge.onNoticeOpen((open) => {
+        if (open.kind === 'questions') return; // the host's
         list.seen(open);
         workspace.current?.open(open);
       }),

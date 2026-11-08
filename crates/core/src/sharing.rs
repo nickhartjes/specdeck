@@ -113,6 +113,11 @@ pub enum SharingEvent {
     /// The open read request and vote as the host sees them, on every change; boxed, as it is
     /// much larger than the others.
     Asks(Box<HostAsks>),
+    /// The read request closed, just before the `Asks` without it: by its time running out, or
+    /// the host going on (`host-ask-notifications`).
+    ReadClosed {
+        time_up: bool,
+    },
 }
 
 /// The host's asks as the host's window shows them: the same views viewers get, with every
@@ -1360,6 +1365,7 @@ impl Host {
     fn close_read(&mut self, time_up: bool) -> bool {
         let Ok(entry) = self.asks.close_read(&self.present(), time_up) else { return false };
         self.view.add_entry(entry);
+        let _ = self.events.send(SharingEvent::ReadClosed { time_up });
         self.broadcast_asks();
         true
     }

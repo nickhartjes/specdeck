@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
+import { PLAIN_TEXT } from './fields';
 
 interface Props {
   term: string;
@@ -25,6 +26,7 @@ export function SearchBar({ term, onTerm, onNext, onPrevious, onClose, terminal,
   return (
     <div className="search" role="search">
       <input
+        {...PLAIN_TEXT}
         ref={input}
         className="field"
         placeholder="Find in session"

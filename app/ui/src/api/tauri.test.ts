@@ -31,6 +31,13 @@ describe('binary channel messages', () => {
   });
 });
 
+describe('host notifications', () => {
+  it('saves the kinds in the app', async () => {
+    await tauriBridge.setHostNotifications({ questions: false, read: true, voted: true });
+    expect(tauri.invoke).toHaveBeenCalledWith('set_host_notifications', { kinds: { questions: false, read: true, voted: true } });
+  });
+});
+
 describe('viewer notifications', () => {
   it('saves the kinds in the app', async () => {
     await tauriBridge.setViewerNotifications({ plans: true, documents: false, finished: true, reads: true, estimates: false, files: true, links: false, braindump: false });

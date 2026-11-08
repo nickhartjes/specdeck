@@ -32,6 +32,8 @@ use specdeck_protocol::{AgentId, AgentStatus};
 
 use specdeck_protocol::terminal_stream::encode_records;
 
+use crate::ask_notices::{AskNotice, AskNotices};
+
 /// Where an attached window's events go; returns false once it is gone.
 pub type EventSink = Box<dyn Fn(HostEvent) -> bool + Send>;
 
@@ -171,6 +173,33 @@ pub enum HostNotice {
     },
     /// A viewer suggested a prompt; the viewer's name.
     Suggestion(String),
+    /// A viewer has a question about the read request `ask`, which asks to read `label`
+    /// (`host-ask-notifications`).
+    Question {
+        ask: u32,
+        name: String,
+        text: Option<String>,
+        label: String,
+    },
+    /// Nobody who can answer the read request is still reading.
+    EveryoneRead {
+        label: String,
+        ready: usize,
+        questions: usize,
+    },
+    /// The read request's time ran out while someone was still reading.
+    TimeUp {
+        label: String,
+        ready: usize,
+        questions: usize,
+        reading: usize,
+    },
+    /// Every viewer who can vote has voted this round; `votes` counts the host's too.
+    EveryoneVoted {
+        task: String,
+        votes: usize,
+        host_missing: bool,
+    },
 }
 
 /// Why the host's link was not shared, in plain words. The window checks first, so the host
@@ -217,6 +246,26 @@ fn parse_hex(color: &str) -> Option<specdeck_core::mirror::Rgb> {
     Some(specdeck_core::mirror::Rgb { r: channel(0)?, g: channel(2)?, b: channel(4)? })
 }
 
+/// A notice about the host's asks as the app shows it, naming the viewer it is about.
+fn host_notice(notice: AskNotice, participants: &[Participant]) -> HostNotice {
+    match notice {
+        AskNotice::Question { ask, viewer, text, label } => {
+            let name = participants.iter().find(|p| p.id == viewer);
+            let name = name.map_or_else(|| "A viewer".into(), |p| p.label.clone());
+            HostNotice::Question { ask, name, text, label }
+        }
+        AskNotice::EveryoneRead { label, ready, questions } => {
+            HostNotice::EveryoneRead { label, ready, questions }
+        }
+        AskNotice::TimeUp { label, ready, questions, reading } => {
+            HostNotice::TimeUp { label, ready, questions, reading }
+        }
+        AskNotice::EveryoneVoted { task, votes, host_missing } => {
+            HostNotice::EveryoneVoted { task, votes, host_missing }
+        }
+    }
+}
+
 /// Viewers who joined and left between two participant lists, by name.
 fn viewer_changes(before: &[Participant], after: &[Participant]) -> Vec<HostNotice> {
     let viewers = |list: &[Participant]| -> Vec<(u32, String)> {
@@ -252,6 +301,7 @@ struct Ui {
     /// then.
     asks: HostAsks,
     asks_at: std::time::Instant,
+    ask_notices: AskNotices,
     events: Option<EventSink>,
     observer: Observer,
     last_summary: Option<Summary>,
@@ -276,6 +326,23 @@ impl Ui {
             notices.insert(0, HostNotice::Summary(summary));
         }
         Notice { observer: self.observer.clone(), notices }
+    }
+
+    /// Notices about the answers to the host's asks, after the asks or the viewers changed.
+    fn hear_asks(&mut self) {
+        let mut notices = self.ask_notices.read(self.asks.read.as_ref());
+        let viewers: Vec<u32> =
+            self.participants.iter().filter(|p| p.role == Role::Viewer).map(|p| p.id).collect();
+        notices.extend(self.ask_notices.vote(self.asks.vote.as_ref(), &viewers));
+        for notice in notices {
+            self.hear_ask(notice);
+        }
+    }
+
+    /// Adds `notice` for the observer.
+    fn hear_ask(&mut self, notice: AskNotice) {
+        let notice = host_notice(notice, &self.participants);
+        self.pending.push(notice);
     }
 
     fn send(&mut self, event: HostEvent) {
@@ -371,6 +438,7 @@ impl HostRuntime {
             viewer_links: Vec::new(),
             asks: HostAsks::default(),
             asks_at: std::time::Instant::now(),
+            ask_notices: AskNotices::new(),
             events: None,
             observer,
             last_summary: None,
@@ -464,7 +532,20 @@ impl HostRuntime {
                             let asks = *asks;
                             ui.asks = asks.clone();
                             ui.asks_at = std::time::Instant::now();
+                            ui.hear_asks();
                             ui.send(HostEvent::Asks { read: asks.read, vote: asks.vote });
+                            let notice = ui.observe();
+                            drop(ui);
+                            notice.tell();
+                        }
+                        Some(SharingEvent::ReadClosed { time_up }) => {
+                            let mut ui = shared.lock().unwrap();
+                            if let Some(closed) = ui.ask_notices.read_closed(time_up) {
+                                ui.hear_ask(closed);
+                            }
+                            let notice = ui.observe();
+                            drop(ui);
+                            notice.tell();
                         }
                         Some(SharingEvent::Suggestions(suggestions)) => {
                             let mut ui = shared.lock().unwrap();
@@ -485,6 +566,7 @@ impl HostRuntime {
                             let changes = viewer_changes(&ui.participants, &participants);
                             ui.pending.extend(changes);
                             ui.participants = participants.clone();
+                            ui.hear_asks();
                             ui.send(HostEvent::Participants { participants });
                             let notice = ui.observe();
                             drop(ui);
@@ -941,5 +1023,25 @@ mod tests {
             [HostNotice::ViewerJoined("Anna (2)".into()), HostNotice::ViewerLeft("Anna".into())]
         );
         assert!(viewer_changes(&after, &after).is_empty());
+    }
+
+    #[test]
+    fn a_question_names_the_viewer() {
+        let people = [person(0, Role::Host, "Nick"), person(2, Role::Viewer, "Anna (2)")];
+        let question = |viewer| AskNotice::Question {
+            ask: 1,
+            viewer,
+            text: Some("Why?".into()),
+            label: "design.md".into(),
+        };
+        let named = |name: &str| HostNotice::Question {
+            ask: 1,
+            name: name.into(),
+            text: Some("Why?".into()),
+            label: "design.md".into(),
+        };
+        assert_eq!(host_notice(question(2), &people), named("Anna (2)"));
+        // Gone from the list meanwhile.
+        assert_eq!(host_notice(question(5), &people), named("A viewer"));
     }
 }
