@@ -16,7 +16,8 @@ use crate::{AgentId, AgentStatus};
 /// `files` channel, `FileShared`, `Files`, `FilesAllowed`, `ShareFile` and `RemoveFile`); version
 /// 5 shared links (the `Link` and `LinkRemoved` entries, `ShareLink`, `LinksAllowed` and `Links`);
 /// version 6 the host's asks (the `ReadDone` and `Estimated` entries, `Answer`, `ReadRequest` and
-/// `Vote`).
+/// `Vote`) and the braindump (the `BraindumpItem` and `BraindumpGiven` entries, `AddToBraindump`,
+/// `AddNote`, `ReplaceNote`, `AlreadyGiven` and `Braindump`).
 pub const PROTOCOL_VERSION: u32 = 6;
 
 /// The oldest viewer protocol a host admits. Older viewers watch only: the host never sends them
@@ -42,6 +43,14 @@ pub const LINKS_PROTOCOL_VERSION: u32 = 5;
 /// The first protocol version with the host's asks: `ReadDone`, `Estimated`, `Answer`,
 /// `ReadRequest` and `Vote`.
 pub const ASKS_PROTOCOL_VERSION: u32 = 6;
+
+/// The first protocol version with the braindump: the `BraindumpItem` and `BraindumpGiven`
+/// entries, `Braindump`, `AlreadyGiven`, and the `AddToBraindump`, `AddNote` and `ReplaceNote`
+/// requests.
+pub const BRAINDUMP_PROTOCOL_VERSION: u32 = 6;
+
+/// Longest note in the braindump, in bytes of UTF-8.
+pub const MAX_NOTE_BYTES: u64 = 32 * 1024;
 
 /// Longest username accepted, in characters.
 pub const MAX_USERNAME_CHARS: usize = 64;
@@ -91,6 +100,12 @@ pub enum ViewerRequest {
     ShareLink { url: String, title: Option<String>, session_only: bool },
     /// An answer to the host's read request or a vote (version 6), checked by [`valid_answer`].
     Answer(Answer),
+    /// A file for the braindump (version 6), sent on `files` like a shared file.
+    AddToBraindump { name: String, size: u64, sha256: [u8; 32] },
+    /// A note for the braindump (version 6): Markdown text, named by the host.
+    AddNote { size: u64, sha256: [u8; 32] },
+    /// A new version of the viewer's own note, while it is not given (version 6).
+    ReplaceNote { file: u32, size: u64, sha256: [u8; 32] },
 }
 
 impl ViewerRequest {
@@ -102,6 +117,9 @@ impl ViewerRequest {
             ViewerRequest::RemoveFile { .. } => "remove_file",
             ViewerRequest::ShareLink { .. } => "share_link",
             ViewerRequest::Answer(_) => "answer",
+            ViewerRequest::AddToBraindump { .. } => "add_to_braindump",
+            ViewerRequest::AddNote { .. } => "add_note",
+            ViewerRequest::ReplaceNote { .. } => "replace_note",
         }
     }
 }
@@ -185,6 +203,20 @@ pub enum HostMessage {
     Vote {
         open: Option<VoteView>,
     },
+    /// The braindump now, oldest first (version 6): on admission and on every change.
+    Braindump {
+        items: Vec<BraindumpItemInfo>,
+    },
+}
+
+/// An item in the braindump: a shared file kept apart from `Files`, a note or not, and the
+/// round in which the host gave it to the agent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BraindumpItemInfo {
+    pub info: SharedFileInfo,
+    pub note: bool,
+    pub given: Option<u32>,
 }
 
 /// A file shared in the session, as everyone sees it in the list. Its bytes travel on the
@@ -248,6 +280,8 @@ pub enum Outcome {
     NotAllowedType,
     /// The file is gone, or is not the viewer's to remove.
     Gone,
+    /// The note was given to the agent, so it can no longer be edited (version 6).
+    AlreadyGiven,
 }
 
 impl Outcome {
@@ -262,6 +296,7 @@ impl Outcome {
             Outcome::Full => "full",
             Outcome::NotAllowedType => "type",
             Outcome::Gone => "gone",
+            Outcome::AlreadyGiven => "given",
         }
     }
 }
@@ -376,6 +411,8 @@ pub enum DecodeError {
     InvalidLink,
     #[error("answer must have a question of at most 280 characters and a card of a set")]
     InvalidAnswer,
+    #[error("note must be 1 to {MAX_NOTE_BYTES} bytes")]
+    InvalidNote,
 }
 
 pub fn encode<T: Serialize>(message: &T) -> Vec<u8> {
@@ -416,9 +453,21 @@ pub fn decode_viewer(bytes: &[u8]) -> Result<ViewerMessage, DecodeError> {
                 return Err(DecodeError::InvalidAnswer);
             }
         }
-        ViewerMessage::Send { request: ViewerRequest::ShareFile { name, .. }, .. } => {
+        ViewerMessage::Send {
+            request:
+                ViewerRequest::ShareFile { name, .. } | ViewerRequest::AddToBraindump { name, .. },
+            ..
+        } => {
             if name.is_empty() || name.len() > MAX_FILE_NAME_BYTES {
                 return Err(DecodeError::InvalidFileName);
+            }
+        }
+        ViewerMessage::Send {
+            request: ViewerRequest::AddNote { size, .. } | ViewerRequest::ReplaceNote { size, .. },
+            ..
+        } => {
+            if *size == 0 || *size > MAX_NOTE_BYTES {
+                return Err(DecodeError::InvalidNote);
             }
         }
         ViewerMessage::Hello { username, .. } => {
@@ -458,6 +507,21 @@ mod tests {
             id,
             request: ViewerRequest::ShareFile { name: name.into(), size: 1024, sha256: [3; 32] },
         }
+    }
+
+    fn add_to_braindump(id: u32, name: &str) -> ViewerMessage {
+        ViewerMessage::Send {
+            id,
+            request: ViewerRequest::AddToBraindump {
+                name: name.into(),
+                size: 1024,
+                sha256: [4; 32],
+            },
+        }
+    }
+
+    fn note(id: u32, size: u64) -> ViewerMessage {
+        ViewerMessage::Send { id, request: ViewerRequest::AddNote { size, sha256: [6; 32] } }
     }
 
     fn share_link(url: &str, title: Option<&str>) -> ViewerMessage {
@@ -505,6 +569,12 @@ mod tests {
             answer(Answer::Read { ask: 1, answer: ReadAnswer::Question { text: None } }),
             answer(Answer::Vote { ask: 2, round: 3, card: Some(Card::Value(5)) }),
             answer(Answer::Vote { ask: 2, round: 3, card: None }),
+            add_to_braindump(7, "edge-cases.txt"),
+            note(8, 512),
+            ViewerMessage::Send {
+                id: 9,
+                request: ViewerRequest::ReplaceNote { file: 4, size: 600, sha256: [5; 32] },
+            },
         ] {
             assert_eq!(decode_viewer(&encode(&message)), Ok(message));
         }
@@ -610,6 +680,24 @@ mod tests {
                 }),
             },
             HostMessage::Vote { open: None },
+            HostMessage::Reply { id: 7, outcome: Outcome::AlreadyGiven },
+            HostMessage::Braindump {
+                items: vec![BraindumpItemInfo {
+                    info: SharedFileInfo {
+                        file: 4,
+                        name: "sanne-note-1.md".into(),
+                        kind: FileKind::Markdown,
+                        media_type: "text/markdown".into(),
+                        size: 120,
+                        sha256: [8; 32],
+                        by: 2,
+                        by_label: "Sanne".into(),
+                        at_ms: 1_700_000_000_000,
+                    },
+                    note: true,
+                    given: Some(1),
+                }],
+            },
         ];
         for message in messages {
             assert_eq!(decode_host(&encode(&message)), Ok(message));
@@ -657,13 +745,18 @@ mod tests {
         assert_eq!(encode(&HostMessage::LinksAllowed { links: true }), [11, 1]);
         assert_eq!(encode(&HostMessage::Links { mine: vec![] }), [12, 0]);
         assert_eq!(encode(&share_link("https://a.b/", None))[..3], [3, 1, 3]);
-        // The asks come after every version 5 message, and `Answer` after `ShareLink`.
+        // The asks come after every version 5 message, and `Answer` after `ShareLink`; the braindump
+        // comes after the asks.
         assert_eq!(encode(&HostMessage::ReadRequest { open: None }), [13, 0]);
         assert_eq!(encode(&HostMessage::Vote { open: None }), [14, 0]);
         assert_eq!(
             encode(&answer(Answer::Read { ask: 1, answer: ReadAnswer::Ready }))[..5],
             [3, 7, 4, 0, 1]
         );
+        assert_eq!(encode(&HostMessage::Braindump { items: vec![] }), [15, 0]);
+        assert_eq!(encode(&HostMessage::Reply { id: 4, outcome: Outcome::Gone }), [6, 4, 7]);
+        assert_eq!(encode(&add_to_braindump(1, "a"))[..3], [3, 1, 5]);
+        assert_eq!(encode(&note(1, 1))[..3], [3, 1, 6]);
     }
 
     #[test]
@@ -681,6 +774,34 @@ mod tests {
         assert_eq!(decode_viewer(&encode(&answer(bad_card))), Err(DecodeError::InvalidAnswer));
         // The longest question in four-byte characters still fits in a request.
         assert!(encode(&answer(question(&"😀".repeat(280)))).len() <= MAX_REQUEST_BYTES);
+    }
+
+    #[test]
+    fn braindump_requests_are_bounded() {
+        let longest = "x".repeat(MAX_FILE_NAME_BYTES);
+        let bytes = encode(&add_to_braindump(1, &longest));
+        assert!(bytes.len() <= MAX_REQUEST_BYTES);
+        assert!(decode_viewer(&bytes).is_ok());
+        let longer = "x".repeat(MAX_FILE_NAME_BYTES + 1);
+        assert_eq!(
+            decode_viewer(&encode(&add_to_braindump(1, &longer))),
+            Err(DecodeError::InvalidFileName)
+        );
+        assert!(decode_viewer(&encode(&note(1, MAX_NOTE_BYTES))).is_ok());
+        assert_eq!(
+            decode_viewer(&encode(&note(1, MAX_NOTE_BYTES + 1))),
+            Err(DecodeError::InvalidNote)
+        );
+        assert_eq!(decode_viewer(&encode(&note(1, 0))), Err(DecodeError::InvalidNote));
+        let replace = |size| ViewerMessage::Send {
+            id: 1,
+            request: ViewerRequest::ReplaceNote { file: u32::MAX, size, sha256: [0xff; 32] },
+        };
+        assert!(encode(&replace(MAX_NOTE_BYTES)).len() <= MAX_REQUEST_BYTES);
+        assert_eq!(
+            decode_viewer(&encode(&replace(MAX_NOTE_BYTES + 1))),
+            Err(DecodeError::InvalidNote)
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { FileChange, TouchedFile } from '../model/timeline';
@@ -85,6 +85,53 @@ describe('files panel', () => {
     expect(tab).toHaveTextContent('0');
     await userEvent.click(tab);
     expect(onTab).toHaveBeenCalledWith('shared');
+  });
+
+  it('counts the braindump in the Shared tab, and opens adding where a file is dropped on it', async () => {
+    const note = { file: 3, name: 'sanne-note-1.md', kind: 'markdown' as const, mediaType: 'text/markdown', size: 12, sha256: [], by: 2, byLabel: 'Sanne', atMs: 0 };
+    const shared = {
+      files: [],
+      me: 2,
+      host: false,
+      canShare: true,
+      hostName: 'Nick',
+      agentName: 'Claude Code',
+      share: vi.fn(),
+      open: vi.fn(),
+      remove: vi.fn(),
+      save: vi.fn(),
+      say: vi.fn(),
+      braindump: { items: [{ info: note, note: true, given: null }], add: vi.fn(), note: vi.fn(), promptPossible: true },
+    };
+    const { container } = render(
+      <FilesPanel files={files} timelineSupported agentName="Claude Code" tab="shared" onTab={vi.fn()} active={null} onOpen={vi.fn()} onClose={vi.fn()} shared={shared} />,
+    );
+    expect(screen.getByRole('tab', { name: /Shared/ })).toHaveTextContent('1');
+    const dropped = new File(['x'], 'edge-cases.txt', { type: 'text/plain' });
+    fireEvent.drop(container.querySelector('.shared-tab')!, { dataTransfer: { files: [dropped], types: ['Files'] } });
+    const dialog = screen.getByRole('dialog', { name: 'Add files or a note' });
+    expect(within(dialog).getByRole('list', { name: 'Chosen files' })).toHaveTextContent('edge-cases.txt');
+    expect(shared.share).not.toHaveBeenCalled();
+  });
+
+  it('tells a viewer when the host has not turned adding on', () => {
+    const shared = {
+      files: [],
+      me: 2,
+      host: false,
+      canShare: false,
+      hostName: 'Nick',
+      agentName: 'Claude Code',
+      share: vi.fn(),
+      open: vi.fn(),
+      remove: vi.fn(),
+      save: vi.fn(),
+      say: vi.fn(),
+      braindump: { items: [], add: vi.fn(), note: vi.fn(), promptPossible: true },
+    };
+    panel({ shared, tab: 'shared' });
+    expect(screen.getByText('Nick has not turned on adding files and notes.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add files or a note/ })).not.toBeInTheDocument();
   });
 
   it('shows Code where Shared was chosen in a session without shared files', () => {

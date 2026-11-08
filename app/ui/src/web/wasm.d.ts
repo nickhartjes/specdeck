@@ -19,6 +19,8 @@ declare module 'specdeck-web-wasm' {
     castVote(ask: number, round: number, card: unknown): unknown;
     unansweredRequests(): unknown;
     shareFile(name: string, bytes: Uint8Array): unknown;
+    addToBraindump(name: string, bytes: Uint8Array): unknown;
+    addNote(text: Uint8Array, file?: number | null): unknown;
     removeFile(file: number): unknown;
   }
   export class FileFetch {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, BookOpen, Copy, Gauge, Link2, Power, RefreshCw } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, HostAsks, HostEvent, HostLink, HostSuggestion, Participant, SharedFileInfo, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
+import type { AgentId, AgentStatus, BraindumpItemInfo, HostAsks, HostEvent, HostLink, HostSuggestion, Participant, SharedFileInfo, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
 import { AskReadDialog } from '../components/AskReadDialog';
 import { EstimateDialog } from '../components/EstimateDialog';
 import { ReadBanner } from '../components/ReadBanner';
@@ -68,6 +68,10 @@ interface State {
   /** Whether viewers may share files. */
   filesAllowed: boolean;
   sharedFiles: SharedFileInfo[];
+  /** The braindump; null for sessions of the previous release, which have none. */
+  braindump: BraindumpItemInfo[] | null;
+  /** False for terminal sessions, where giving the braindump types nothing. */
+  braindumpPromptPossible: boolean;
   /** False for sessions of the previous release, which can't share links. */
   linksPossible: boolean;
   /** Whether viewers may send links. */
@@ -107,6 +111,8 @@ const initial: State = {
   sharedFilesPossible: false,
   filesAllowed: false,
   sharedFiles: [],
+  braindump: null,
+  braindumpPromptPossible: false,
   linksPossible: false,
   linksAllowed: false,
   viewerLinks: [],
@@ -133,6 +139,9 @@ export function hostReducer(state: State, event: HostEvent | { type: 'limit'; li
         sharedFilesPossible: event.sharedFilesPossible ?? false,
         filesAllowed: event.filesAllowed ?? false,
         sharedFiles: event.sharedFiles ?? [],
+        // A session of the previous release has no braindump.
+        braindump: event.braindump ?? null,
+        braindumpPromptPossible: event.braindumpPromptPossible ?? false,
         // A session of the previous release says nothing of links: it can't share them.
         linksPossible: event.linksPossible ?? false,
         linksAllowed: event.linksAllowed ?? false,
@@ -145,7 +154,7 @@ export function hostReducer(state: State, event: HostEvent | { type: 'limit'; li
     case 'asks':
       return { ...state, asks: { read: event.read, vote: event.vote }, asksAt: Date.now() };
     case 'shared-files':
-      return { ...state, sharedFiles: event.files, filesAllowed: event.filesAllowed };
+      return { ...state, sharedFiles: event.files, braindump: event.braindump ?? state.braindump, filesAllowed: event.filesAllowed };
     case 'allowed':
       return { ...state, suggestionsAllowed: event.suggestions };
     case 'shared':
@@ -251,7 +260,8 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
   const statusBar = useMemo(() => statusBarInfo(state.timeline, state.timelineSupported), [state.timeline, state.timelineSupported]);
   const folderName = state.folder.split(/[\\/]/).filter(Boolean).at(-1) ?? state.folder;
   const viewers = state.participants.filter((p) => p.role === 'Viewer').length;
-  const open = useSharedBytes(state.sharedFiles, bridge.hostReadSharedFile);
+  const held = useMemo(() => [...state.sharedFiles, ...(state.braindump ?? []).map((item) => item.info)], [state.sharedFiles, state.braindump]);
+  const open = useSharedBytes(held, bridge.hostReadSharedFile);
   const hostName = state.participants.find((p) => p.role === 'Host')?.label ?? 'You';
   const shared = useMemo<SharedFiles | undefined>(
     () =>
@@ -269,9 +279,18 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
             put: (file) => bridge.hostPutSharedFile(file),
             save: bridge.saveSharedFile,
             say: showToast,
+            braindump: state.braindump
+              ? {
+                  items: state.braindump,
+                  add: (files) => void shareEach(files, bridge.hostAddToBraindump, showToast, (name) => `${name} is in the braindump.`),
+                  note: async (text, file) => void (await (file === undefined ? bridge.hostAddNote(text) : bridge.hostReplaceNote(file, text))),
+                  give: bridge.hostGiveBraindump,
+                  promptPossible: state.braindumpPromptPossible,
+                }
+              : undefined,
           }
         : undefined,
-    [state.sharedFilesPossible, state.sharedFiles, hostName, terminal, agentName, bridge, showToast, open],
+    [state.sharedFilesPossible, state.sharedFiles, state.braindump, state.braindumpPromptPossible, hostName, terminal, agentName, bridge, showToast, open],
   );
 
   // The host's asks: a failure says why in a toast.
@@ -372,7 +391,7 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
           }
           files={
             state.sharedFilesPossible
-              ? { allowed: state.filesAllowed, onChange: (on) => void bridge.hostAllowFiles(on).catch((e) => showToast(errorMessage(e))) }
+              ? { allowed: state.filesAllowed, onChange: (on) => void bridge.hostAllowFiles(on).catch((e) => showToast(errorMessage(e))), terminal }
               : undefined
           }
           links={

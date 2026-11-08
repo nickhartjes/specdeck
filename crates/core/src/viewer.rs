@@ -16,8 +16,8 @@ use datachannel::ConnectionState;
 use serde::Serialize;
 use specdeck_protocol::asks::{Answer, Card, ReadAnswer, ReadView, VoteView};
 use specdeck_protocol::control::{
-    self, Outcome as ReplyOutcome, Participant, RefusalReason, SentLink, SharedFileInfo,
-    Suggestion, ViewerMessage, ViewerRequest,
+    self, BraindumpItemInfo, MAX_NOTE_BYTES, Outcome as ReplyOutcome, Participant, RefusalReason,
+    SentLink, SharedFileInfo, Suggestion, ViewerMessage, ViewerRequest,
 };
 use specdeck_protocol::files::{self, FetchStep, Fetching, FilesReply, Uploading};
 use specdeck_protocol::frames::Record;
@@ -118,6 +118,8 @@ pub enum ViewerEvent {
     AnswerSent {
         id: u32,
     },
+    /// The braindump now.
+    Braindump(Vec<BraindumpItemInfo>),
     /// The connection dropped; the viewer is reconnecting.
     Reconnecting,
     /// Not admitted; final.
@@ -263,8 +265,37 @@ impl ViewerSession {
     /// Shares a file with everyone, if the host allows it; resolves to `Received` once it is
     /// shared, or to why not. Files are sent one at a time, and again after a reconnect.
     pub fn share_file(&self, name: String, bytes: Vec<u8>) -> oneshot::Receiver<ReplyOutcome> {
+        self.upload(ShareTo::Everyone, name, bytes)
+    }
+
+    /// Adds a file to the braindump, as [`share_file`](Self::share_file) shares one.
+    pub fn add_to_braindump(
+        &self,
+        name: String,
+        bytes: Vec<u8>,
+    ) -> oneshot::Receiver<ReplyOutcome> {
+        self.upload(ShareTo::Braindump, name, bytes)
+    }
+
+    /// Adds a note to the braindump; the host names it.
+    pub fn add_note(&self, text: String) -> oneshot::Receiver<ReplyOutcome> {
+        self.upload(ShareTo::Note, String::new(), text.into_bytes())
+    }
+
+    /// Replaces this viewer's note `file` with `text`, while it is not given.
+    pub fn replace_note(&self, file: u32, text: String) -> oneshot::Receiver<ReplyOutcome> {
+        self.upload(ShareTo::ReplaceNote(file), String::new(), text.into_bytes())
+    }
+
+    fn upload(&self, to: ShareTo, name: String, bytes: Vec<u8>) -> oneshot::Receiver<ReplyOutcome> {
         let (done, receiver) = oneshot::channel();
-        let _ = self.control.send(Control::Share(Share { name, bytes, done }));
+        // The host would disconnect a viewer that announced a note of another size.
+        let note = matches!(to, ShareTo::Note | ShareTo::ReplaceNote(_));
+        if note && (bytes.is_empty() || bytes.len() as u64 > MAX_NOTE_BYTES) {
+            let _ = done.send(ReplyOutcome::TooLarge);
+            return receiver;
+        }
+        let _ = self.control.send(Control::Share(Share { to, name, bytes, done }));
         receiver
     }
 
@@ -321,11 +352,36 @@ pub enum FileError {
 /// Where a fetched file, or why it could not be fetched, goes.
 type Fetched = oneshot::Sender<Result<Vec<u8>, FileError>>;
 
-/// A file this viewer wants to share.
+/// A file this viewer wants to share or add to the braindump, or a note.
 struct Share {
+    to: ShareTo,
     name: String,
     bytes: Vec<u8>,
     done: oneshot::Sender<ReplyOutcome>,
+}
+
+/// Where an upload goes.
+#[derive(Clone, Copy)]
+enum ShareTo {
+    Everyone,
+    Braindump,
+    Note,
+    ReplaceNote(u32),
+}
+
+impl Share {
+    /// The request that announces this upload to the host.
+    fn request(&self) -> ViewerRequest {
+        let size = self.bytes.len() as u64;
+        let sha256 = files::sha256(&self.bytes);
+        let name = self.name.clone();
+        match self.to {
+            ShareTo::Everyone => ViewerRequest::ShareFile { name, size, sha256 },
+            ShareTo::Braindump => ViewerRequest::AddToBraindump { name, size, sha256 },
+            ShareTo::Note => ViewerRequest::AddNote { size, sha256 },
+            ShareTo::ReplaceNote(file) => ViewerRequest::ReplaceNote { file, size, sha256 },
+        }
+    }
 }
 
 /// Fetching and sharing files, one of each at a time (`shared-files` design decision 2).
@@ -333,6 +389,8 @@ struct Share {
 struct Transfers {
     /// The latest list from the host, for each file's size and hash.
     files: Vec<SharedFileInfo>,
+    /// The braindump's items, fetched like shared files.
+    braindump: Vec<SharedFileInfo>,
     fetches: VecDeque<(u32, Fetched)>,
     fetching: Option<(Fetching, Fetched)>,
     shares: VecDeque<Share>,
@@ -739,6 +797,10 @@ impl Viewer {
             ControlUpdate::Links(mine) => ViewerEvent::Links(mine),
             ControlUpdate::ReadRequest(open) => ViewerEvent::ReadRequest(open),
             ControlUpdate::Vote(open) => ViewerEvent::Vote(open),
+            ControlUpdate::Braindump(items) => {
+                self.transfers.braindump = items.iter().map(|item| item.info.clone()).collect();
+                ViewerEvent::Braindump(items)
+            }
             ControlUpdate::Refused(reason) => {
                 return Some(Outcome::Final(ViewerEvent::Refused(reason)));
             }
@@ -755,7 +817,10 @@ impl Viewer {
         let bytes = match &request {
             ViewerRequest::Suggest { text } => text.len(),
             ViewerRequest::ShareLink { url, .. } => url.len(),
-            ViewerRequest::ShareFile { size, .. } => *size as usize,
+            ViewerRequest::ShareFile { size, .. }
+            | ViewerRequest::AddToBraindump { size, .. }
+            | ViewerRequest::AddNote { size, .. }
+            | ViewerRequest::ReplaceNote { size, .. } => *size as usize,
             ViewerRequest::RemoveFile { .. } | ViewerRequest::Answer(_) => 0,
         };
         diag::viewer_request_sent(kind, bytes);
@@ -780,7 +845,8 @@ impl Viewer {
         };
         while self.transfers.fetching.is_none() {
             let Some((file, done)) = self.transfers.fetches.pop_front() else { break };
-            let Some(info) = self.transfers.files.iter().find(|info| info.file == file) else {
+            let known = self.transfers.files.iter().chain(&self.transfers.braindump);
+            let Some(info) = known.into_iter().find(|info| info.file == file) else {
                 let _ = done.send(Err(FileError::Gone));
                 continue;
             };
@@ -793,12 +859,7 @@ impl Viewer {
             && self.transfers.wait_until.is_none()
             && let Some(share) = self.transfers.shares.pop_front()
         {
-            let request = ViewerRequest::ShareFile {
-                name: share.name.clone(),
-                size: share.bytes.len() as u64,
-                sha256: files::sha256(&share.bytes),
-            };
-            let message = self.queue_request(request);
+            let message = self.queue_request(share.request());
             if let ViewerMessage::Send { id, .. } = &message {
                 self.transfers.asked = Some((*id, share));
             }

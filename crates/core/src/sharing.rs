@@ -14,10 +14,11 @@ use tokio::time::Instant;
 use serde::Serialize;
 use specdeck_protocol::asks::{self as ask, Card, CardSet, ReadTarget, ReadView, VoteView};
 use specdeck_protocol::control::{
-    self, ASKS_PROTOCOL_VERSION, HostMessage, LINKS_PROTOCOL_VERSION, MAX_LINKS_LISTED,
-    MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant, REQUESTS_PROTOCOL_VERSION,
-    RefusalReason, Role, SHARED_FILES_PROTOCOL_VERSION, SentLink, SentLinkState, Suggestion,
-    SuggestionState, ViewerMessage, ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
+    self, ASKS_PROTOCOL_VERSION, BRAINDUMP_PROTOCOL_VERSION, HostMessage, LINKS_PROTOCOL_VERSION,
+    MAX_LINKS_LISTED, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
+    REQUESTS_PROTOCOL_VERSION, RefusalReason, Role, SHARED_FILES_PROTOCOL_VERSION, SentLink,
+    SentLinkState, Suggestion, SuggestionState, ViewerMessage, ViewerRequest,
+    WHOLE_FILES_PROTOCOL_VERSION,
 };
 use specdeck_protocol::files::{
     self, Assembled, Assembly, FILE_CHUNK_BYTES, FilesReply, FilesRequest,
@@ -36,7 +37,7 @@ use crate::diag::{self, LeaveReason};
 use crate::ice::turn_url_with_credentials;
 use crate::peer::{BUFFERED_LOW, Channel, LinkState, Peer, PeerConfig, PeerEvent};
 use crate::session::SessionView;
-use crate::shared_files::Refusal;
+use crate::shared_files::{Group, Purpose, Refusal, SharedFile};
 use crate::signalling_client::{self, SignallingSender};
 
 /// Most viewers a host can allow.
@@ -403,6 +404,8 @@ struct Upload {
     id: u32,
     assembly: Assembly,
     last: Instant,
+    /// Where the upload goes, for diagnostics.
+    group: &'static str,
 }
 
 struct Host {
@@ -523,9 +526,13 @@ impl Requests {
         let (on, bytes) = match &request {
             ViewerRequest::Suggest { text } => (self.suggestions_on, text.len()),
             ViewerRequest::ShareLink { url, .. } => (self.links_on, url.len()),
-            // Files and answers have their own gates, `Host::file_request` and `Host::answer`.
+            // Files, the braindump and answers have their own gates, `Host::file_request` and
+            // `Host::answer`.
             ViewerRequest::ShareFile { .. }
             | ViewerRequest::RemoveFile { .. }
+            | ViewerRequest::AddToBraindump { .. }
+            | ViewerRequest::AddNote { .. }
+            | ViewerRequest::ReplaceNote { .. }
             | ViewerRequest::Answer(_) => {
                 return (Outcome::Off, None);
             }
@@ -553,6 +560,9 @@ impl Requests {
                 }
                 ViewerRequest::ShareFile { .. }
                 | ViewerRequest::RemoveFile { .. }
+                | ViewerRequest::AddToBraindump { .. }
+                | ViewerRequest::AddNote { .. }
+                | ViewerRequest::ReplaceNote { .. }
                 | ViewerRequest::Answer(_) => unreachable!("returned above"),
             }
         };
@@ -1133,6 +1143,8 @@ impl Host {
                 send_newer(slot, SHARED_FILES_PROTOCOL_VERSION, &list);
                 let links = HostMessage::LinksAllowed { links: self.requests.links_on };
                 send_newer(slot, LINKS_PROTOCOL_VERSION, &links);
+                let braindump = HostMessage::Braindump { items: self.view.braindump() };
+                send_newer(slot, BRAINDUMP_PROTOCOL_VERSION, &braindump);
                 self.send_mine(identity.id);
                 self.send_my_links(identity.id);
                 // Everyone's view of the asks changes with the participants, the new viewer's
@@ -1160,9 +1172,16 @@ impl Host {
             return self.disconnect(connection, LeaveReason::Malformed);
         };
         let viewer = admitted.id;
+        let braindump = matches!(
+            request,
+            ViewerRequest::AddToBraindump { .. }
+                | ViewerRequest::AddNote { .. }
+                | ViewerRequest::ReplaceNote { .. }
+        );
         if admitted.protocol < REQUESTS_PROTOCOL_VERSION
             || (admitted.protocol < LINKS_PROTOCOL_VERSION
                 && matches!(request, ViewerRequest::ShareLink { .. }))
+            || (admitted.protocol < BRAINDUMP_PROTOCOL_VERSION && braindump)
             || (admitted.protocol < ASKS_PROTOCOL_VERSION
                 && matches!(request, ViewerRequest::Answer(_)))
         {
@@ -1176,7 +1195,9 @@ impl Host {
             }
             return;
         }
-        if matches!(request, ViewerRequest::ShareFile { .. } | ViewerRequest::RemoveFile { .. }) {
+        if braindump
+            || matches!(request, ViewerRequest::ShareFile { .. } | ViewerRequest::RemoveFile { .. })
+        {
             if admitted.protocol < SHARED_FILES_PROTOCOL_VERSION {
                 return self.disconnect(connection, LeaveReason::Malformed);
             }
@@ -1212,10 +1233,11 @@ impl Host {
             .map_or_else(String::new, |p| p.label)
     }
 
-    /// Decides on a viewer's file to share or remove (`shared-files` design decision 3). A file
-    /// to share gets room held and an upload id; its bytes follow on the files channel.
+    /// Decides on a viewer's file to share or remove (`shared-files` design decision 3), or to
+    /// add to the braindump (`braindump` design decision 2). A file or note gets room held and
+    /// an upload id; its bytes follow on the files channel.
     fn file_request(&mut self, connection: &str, viewer: u32, request: ViewerRequest) -> Outcome {
-        match request {
+        let (kind, name, size, sha256, purpose) = match request {
             ViewerRequest::RemoveFile { file } => {
                 let outcome = match self.view.remove_shared_file(file, Some(viewer)) {
                     Ok(_) => {
@@ -1225,43 +1247,57 @@ impl Host {
                     Err(_) => Outcome::Gone,
                 };
                 diag::host_viewer_request(viewer, "remove_file", 0, outcome.as_str());
-                outcome
+                return outcome;
             }
             ViewerRequest::ShareFile { name, size, sha256 } => {
-                let busy = self
-                    .slots
-                    .get(connection)
-                    .and_then(|slot| slot.admitted.as_ref())
-                    .is_some_and(|admitted| admitted.upload.is_some());
-                let outcome = if !self.view.files_allowed() {
-                    Outcome::Off
-                } else if busy || !self.requests.take(viewer, Instant::now()) {
-                    Outcome::RateLimited
-                } else {
-                    match self.view.reserve_upload(viewer, name, size, sha256) {
-                        Ok(upload) => {
-                            if let Some(admitted) =
-                                self.slots.get_mut(connection).and_then(|s| s.admitted.as_mut())
-                            {
-                                let assembly = Assembly::new(size, sha256);
-                                admitted.upload =
-                                    Some(Upload { id: upload, assembly, last: Instant::now() });
-                            }
-                            Outcome::Ready { upload }
-                        }
-                        Err(refusal) => refusal_outcome(refusal),
-                    }
-                };
-                diag::host_viewer_request(viewer, "share_file", size as usize, outcome.as_str());
-                if !matches!(outcome, Outcome::Ready { .. }) {
-                    diag::host_file_shared(viewer, "unknown", size, outcome.as_str());
-                }
-                outcome
+                ("share_file", name, size, sha256, Purpose::Share)
+            }
+            ViewerRequest::AddToBraindump { name, size, sha256 } => {
+                ("add_to_braindump", name, size, sha256, Purpose::Braindump)
+            }
+            ViewerRequest::AddNote { size, sha256 } => {
+                ("add_note", String::new(), size, sha256, Purpose::Note)
+            }
+            ViewerRequest::ReplaceNote { file, size, sha256 } => {
+                ("replace_note", String::new(), size, sha256, Purpose::ReplaceNote { file })
             }
             ViewerRequest::Suggest { .. }
             | ViewerRequest::ShareLink { .. }
-            | ViewerRequest::Answer(_) => Outcome::Off,
+            | ViewerRequest::Answer(_) => {
+                return Outcome::Off;
+            }
+        };
+        let busy = self
+            .slots
+            .get(connection)
+            .and_then(|slot| slot.admitted.as_ref())
+            .is_some_and(|admitted| admitted.upload.is_some());
+        let outcome = if !self.view.files_allowed() {
+            Outcome::Off
+        } else if busy || !self.requests.take(viewer, Instant::now()) {
+            Outcome::RateLimited
+        } else {
+            match self.view.reserve_upload(viewer, name, size, sha256, purpose) {
+                Ok(upload) => {
+                    if let Some(admitted) =
+                        self.slots.get_mut(connection).and_then(|s| s.admitted.as_mut())
+                    {
+                        let assembly = Assembly::new(size, sha256);
+                        let last = Instant::now();
+                        let group = purpose.group_name();
+                        admitted.upload = Some(Upload { id: upload, assembly, last, group });
+                    }
+                    Outcome::Ready { upload }
+                }
+                Err(refusal) => refusal_outcome(refusal),
+            }
+        };
+        diag::host_viewer_request(viewer, kind, size as usize, outcome.as_str());
+        if !matches!(outcome, Outcome::Ready { .. }) {
+            let group = purpose.group_name();
+            diag::host_file_shared(viewer, group, "unknown", size, outcome.as_str());
         }
+        outcome
     }
 
     /// A viewer's answer to a read request or vote, within its own rate limit. Nothing here
@@ -1390,7 +1426,13 @@ impl Host {
         let viewer = admitted.id;
         match request {
             FilesRequest::Fetch { file, from } => {
-                match self.view.shared_file(file).filter(|shared| from < shared.info.size) {
+                // An older viewer has no braindump, so it never gets one of its items.
+                let readable = |shared: &SharedFile| {
+                    admitted.protocol >= BRAINDUMP_PROTOCOL_VERSION
+                        || shared.group != Group::Braindump
+                };
+                let shared = self.view.shared_file(file);
+                match shared.filter(|shared| from < shared.info.size && readable(shared)) {
                     Some(shared) => {
                         admitted.fetch = Some(Fetch { file, offset: from, bytes: shared.bytes });
                     }
@@ -1417,6 +1459,7 @@ impl Host {
                         self.send_files(connection, &FilesReply::Ack { upload, received });
                     }
                     Ok(Assembled::Done(bytes)) => {
+                        let group = current.group;
                         admitted.upload = None;
                         let size = bytes.len() as u64;
                         let received = size;
@@ -1424,21 +1467,23 @@ impl Host {
                         let label = self.label(viewer);
                         let outcome = match self.view.complete_upload(upload, &label, bytes) {
                             Ok(info) => {
-                                diag::host_file_shared(viewer, info.kind.as_str(), size, "shared");
+                                let kind = info.kind.as_str();
+                                diag::host_file_shared(viewer, group, kind, size, "shared");
                                 Outcome::Received
                             }
                             Err(refusal) => {
-                                diag::host_file_shared(viewer, "unknown", size, refusal.as_str());
+                                let outcome = refusal.as_str();
+                                diag::host_file_shared(viewer, group, "unknown", size, outcome);
                                 refusal_outcome(refusal)
                             }
                         };
                         self.send_files(connection, &FilesReply::Finished { upload, outcome });
                     }
                     Err(files::AssemblyError::BadHash) => {
-                        let size = current.assembly.size();
+                        let (size, group) = (current.assembly.size(), current.group);
                         admitted.upload = None;
                         self.view.release_upload(upload);
-                        diag::host_file_shared(viewer, "unknown", size, "hash");
+                        diag::host_file_shared(viewer, group, "unknown", size, "hash");
                         let outcome = Outcome::Gone;
                         self.send_files(connection, &FilesReply::Finished { upload, outcome });
                     }
@@ -1493,7 +1538,8 @@ impl Host {
             if admitted.upload.as_ref().is_some_and(|u| now.duration_since(u.last) >= UPLOAD_IDLE) {
                 let upload = admitted.upload.take().expect("checked above");
                 self.view.release_upload(upload.id);
-                diag::host_file_shared(admitted.id, "unknown", upload.assembly.size(), "stalled");
+                let size = upload.assembly.size();
+                diag::host_file_shared(admitted.id, upload.group, "unknown", size, "stalled");
                 stalled.push((connection.clone(), upload.id));
             }
         }
@@ -1519,8 +1565,10 @@ impl Host {
             }
         }
         let list = HostMessage::Files { files: self.view.shared_files() };
+        let braindump = HostMessage::Braindump { items: self.view.braindump() };
         for slot in self.slots.values_mut() {
             send_newer(slot, SHARED_FILES_PROTOCOL_VERSION, &list);
+            send_newer(slot, BRAINDUMP_PROTOCOL_VERSION, &braindump);
         }
     }
 
@@ -1799,6 +1847,9 @@ fn pump(
             Entry::FileShared { .. } => SHARED_FILES_PROTOCOL_VERSION,
             Entry::Link { .. } | Entry::LinkRemoved { .. } => LINKS_PROTOCOL_VERSION,
             Entry::ReadDone { .. } | Entry::Estimated { .. } => ASKS_PROTOCOL_VERSION,
+            Entry::BraindumpItem { .. } | Entry::BraindumpGiven { .. } => {
+                BRAINDUMP_PROTOCOL_VERSION
+            }
             _ => 0,
         };
         if admitted.protocol < newer {
@@ -1854,6 +1905,7 @@ fn refusal_outcome(refusal: Refusal) -> Outcome {
         Refusal::NotAllowedType => Outcome::NotAllowedType,
         Refusal::Gone => Outcome::Gone,
         Refusal::Off => Outcome::Off,
+        Refusal::AlreadyGiven => Outcome::AlreadyGiven,
     }
 }
 

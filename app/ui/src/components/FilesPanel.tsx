@@ -49,7 +49,7 @@ export function FilesPanel({ files, timelineSupported, agentName, terminal = fal
   const tabs = [
     ['documents', 'Documents', timelineSupported ? documents.length : null],
     ['code', 'Code', timelineSupported ? code.length : null],
-    ...(shared ? [['shared', 'Shared', shared.files.length] as const] : []),
+    ...(shared ? [['shared', 'Shared', shared.files.length + (shared.braindump?.items.length ?? 0)] as const] : []),
   ] as const;
   const label = tabs.find(([id]) => id === tab)?.[1] ?? 'Code';
   return (

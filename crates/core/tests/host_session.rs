@@ -8,7 +8,8 @@ use std::time::Duration;
 use specdeck_core::environment::Environment;
 use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
-use specdeck_core::session::{HostConfig, HostSession, SessionEvent};
+use specdeck_core::session::{GiveError, HostConfig, HostSession, SessionEvent};
+use specdeck_core::shared_files::{PutError, Refusal};
 use specdeck_core::sharing::{AskCommand, Sharing, SharingConfig};
 use specdeck_protocol::asks::{Card, CardSet, ReadTarget};
 use specdeck_protocol::links::LinkRefusal;
@@ -719,7 +720,7 @@ async fn the_host_shares_removes_and_puts_files_without_typing_them() {
     assert!(matches!(event.entry, Entry::FileShared { file, .. } if file == info.file));
     let listed =
         next_matching(&mut events, |e| matches!(e, SessionEvent::SharedFiles { .. })).await;
-    let SessionEvent::SharedFiles { files, viewers_allowed } = listed else { unreachable!() };
+    let SessionEvent::SharedFiles { files, viewers_allowed, .. } = listed else { unreachable!() };
     assert_eq!((files, viewers_allowed), (vec![info.clone()], false));
     assert_eq!(session.shared_file(info.file).unwrap().bytes.as_ref(), text.as_bytes());
 
@@ -744,6 +745,111 @@ async fn the_host_shares_removes_and_puts_files_without_typing_them() {
     session.input(b"after\r").unwrap();
     wait_for_output(&session, &mut events, "got:after").await;
     assert!(!output_text(&session).contains(MARKER));
+}
+
+/// Starts an echoing terminal-only agent in `bin`, so anything typed into it shows in the output.
+async fn echo_session(bin: &Path, data: &Path) -> (HostSession, UnboundedReceiver<SessionEvent>) {
+    fake_agent(bin, "opencode", r#"echo ready; while read line; do echo "got:$line"; done"#);
+    let (session, mut events) =
+        HostSession::start(config(AgentId::OpenCode, bin, data), &env(bin)).await.unwrap();
+    wait_for_output(&session, &mut events, "ready").await;
+    (session, events)
+}
+
+#[tokio::test]
+async fn the_host_gives_the_braindump_round_by_round_without_typing_it() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let (session, mut events) = echo_session(bin.path(), data.path()).await;
+
+    const MARKER: &str = "braindump-marker-51c2";
+    let note = session.add_note("Nick", &format!("Edge cases: {MARKER}")).unwrap();
+    assert_eq!(note.name, "nick-note-1.md");
+    let file =
+        session.add_to_braindump("Nick", "../edge-cases.txt", b"sleeps 25 s".to_vec()).unwrap();
+    assert_eq!(file.name, "edge-cases.txt");
+    let edited = session.replace_note(note.file, &format!("Edge cases, edited: {MARKER}")).unwrap();
+    assert_eq!(edited.name, note.name);
+    let listed = next_matching(&mut events, |e| {
+        matches!(e, SessionEvent::SharedFiles { braindump, .. } if braindump.len() == 2
+            && braindump[0].info.file == edited.file)
+    })
+    .await;
+    let SessionEvent::SharedFiles { files, .. } = listed else { unreachable!() };
+    assert!(files.is_empty(), "the braindump is not shared with everyone");
+
+    // A name already taken gets a number; the existing file is unchanged.
+    std::fs::create_dir_all(bin.path().join("shared/braindump")).unwrap();
+    std::fs::write(bin.path().join("shared/braindump/edge-cases.txt"), b"older").unwrap();
+    let given = session.give_braindump().unwrap();
+    assert_eq!(given.round, 1);
+    assert_eq!(given.files, [edited.file, file.file]);
+    assert_eq!(
+        given.paths,
+        ["shared/braindump/nick-note-1.md", "shared/braindump/edge-cases (2).txt"]
+    );
+    assert_eq!(given.from, ["Nick"]);
+    let read = |path: &str| std::fs::read_to_string(bin.path().join(path)).unwrap();
+    assert_eq!(read("shared/braindump/edge-cases.txt"), "older");
+    assert_eq!(read("shared/braindump/edge-cases (2).txt"), "sleeps 25 s");
+    assert!(read("shared/braindump/nick-note-1.md").contains("edited"));
+    let step = next_matching(&mut events, |e| {
+        matches!(e, SessionEvent::Timeline(event) if matches!(event.entry, Entry::BraindumpGiven { .. }))
+    })
+    .await;
+    let SessionEvent::Timeline(event) = step else { unreachable!() };
+    assert!(
+        matches!(event.entry, Entry::BraindumpGiven { round: 1, ref files, .. } if *files == given.files)
+    );
+    assert!(session.view().braindump().iter().all(|item| item.given == Some(1)));
+
+    // A given note can't be edited; a second round gives only what is new.
+    assert_eq!(session.replace_note(edited.file, "again").err(), Some(Refusal::AlreadyGiven));
+    assert!(matches!(session.give_braindump(), Err(GiveError::Nothing)));
+    let later = session.add_note("Nick", "One more").unwrap();
+    let second = session.give_braindump().unwrap();
+    assert_eq!((second.round, second.files.as_slice()), (2, [later.file].as_slice()));
+    assert_eq!(second.paths, ["shared/braindump/nick-note-2.md"]);
+
+    // Removing a given item leaves its copy.
+    session.remove_shared_file(file.file).unwrap();
+    assert_eq!(read("shared/braindump/edge-cases (2).txt"), "sleeps 25 s");
+
+    // Nothing of it was typed into the agent.
+    session.input(b"after\r").unwrap();
+    wait_for_output(&session, &mut events, "got:after").await;
+    assert!(!output_text(&session).contains(MARKER));
+}
+
+#[tokio::test]
+async fn a_braindump_that_cannot_be_written_is_not_given() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let (session, _events) = echo_session(bin.path(), data.path()).await;
+    session.add_note("Nick", "First").unwrap();
+    session.add_to_braindump("Nick", "b.txt", b"second".to_vec()).unwrap();
+
+    // The second item finds no free name, so the first one written is removed again.
+    let braindump = bin.path().join("shared/braindump");
+    std::fs::create_dir_all(&braindump).unwrap();
+    std::fs::write(braindump.join("b.txt"), b"taken").unwrap();
+    for n in 2..=100 {
+        std::fs::write(braindump.join(format!("b ({n}).txt")), b"taken").unwrap();
+    }
+    assert!(matches!(session.give_braindump(), Err(GiveError::Put(PutError::NoFreeName))));
+    assert!(!braindump.join("nick-note-1.md").exists());
+    assert!(session.view().braindump().iter().all(|item| item.given.is_none()));
+
+    // A link out of the session folder: nothing written there, nothing marked.
+    #[cfg(unix)]
+    {
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::remove_dir_all(&braindump).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), &braindump).unwrap();
+        assert!(matches!(session.give_braindump(), Err(GiveError::Put(PutError::OutsideFolder))));
+        assert!(std::fs::read_dir(elsewhere.path()).unwrap().next().is_none());
+        assert!(session.view().braindump().iter().all(|item| item.given.is_none()));
+    }
 }
 
 #[tokio::test]

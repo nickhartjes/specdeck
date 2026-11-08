@@ -116,7 +116,10 @@ impl App {
     }
 
     async fn recv(&mut self) -> Frame {
-        let frame = self.connection.reader.recv().await.unwrap().expect("connection closed");
+        // Boxed: its 64 KB read buffer would otherwise be part of every future that waits on
+        // it, and their sum overflows the test thread's stack in debug builds.
+        let frame =
+            Box::pin(self.connection.reader.recv()).await.unwrap().expect("connection closed");
         self.note("session", &frame);
         frame
     }
@@ -351,10 +354,6 @@ async fn a_sent_suggestion_is_typed_as_one_prompt() {
     // The host edits it into three lines and sends it: one prompt, submitted once.
     let answer = SuggestionAnswer::Send { text: "one\ntwo\r\nsix".into() };
     app.send(&Command::AnswerSuggestion { viewer_id, id, answer: answer.clone() }).await;
-    // The bytes the agent read, in order; the terminal stream frames them in records.
-    let bytes_read = |terminal: &str| -> String {
-        terminal.split('[').skip(1).filter_map(|token| token.get(..2)).collect()
-    };
     tokio::time::timeout(WAIT, async {
         while !bytes_read(&terminal).contains("0d") {
             if let Frame::Data(records) = app.recv().await {
@@ -1063,4 +1062,165 @@ async fn refuse_a_limit(app: &mut App, terminal: &mut String, file: u32) {
     let target = ReadTarget::Shared { file };
     app.send(&Command::AskToRead { target, label: "notes.md".into(), limit_s: 60 }).await;
     app.until(terminal, |e| failed_with(e, "time limit")).await;
+}
+
+/// The bytes the agent read, in order, from the `[xx]` the bytes agent prints for each.
+fn bytes_read(terminal: &str) -> String {
+    terminal.split('[').skip(1).filter_map(|token| token.get(..2)).collect()
+}
+
+fn hex(text: &str) -> String {
+    text.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The start of `agent` in `folder`, with the folder's programs on the path.
+fn start_as(folder: &Path, url: &str, agent: AgentId) -> Command {
+    let Command::Start {
+        mut environment,
+        folder: f,
+        cols,
+        rows,
+        username,
+        data_dir,
+        signalling_url,
+        ..
+    } = start(folder, url)
+    else {
+        unreachable!()
+    };
+    environment.set("PATH", format!("{}:/usr/bin:/bin", folder.display()));
+    Command::Start {
+        agent,
+        folder: f,
+        cols,
+        rows,
+        username,
+        data_dir,
+        signalling_url,
+        environment,
+        verbose: false,
+        browser: false,
+        screenshots: true,
+    }
+}
+
+/// Starts `agent` in `folder` and attaches.
+async fn started_as(app: &mut App, folder: &Path, url: &str, agent: AgentId) -> String {
+    let mut terminal = String::new();
+    app.send(&start_as(folder, url, agent)).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Started)).await;
+    app.send(&Command::Attach).await;
+    terminal
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_braindump_is_given_as_one_prompt_ending_with_its_paths() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let program = folder.path().join("opencode");
+    std::fs::write(&program, BYTES_AGENT).unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let mut terminal = started_as(&mut app, folder.path(), &url, AgentId::OpenCode).await;
+    braindump_in_the_snapshot(&mut app, &mut terminal, true).await;
+    app.until_text(&mut terminal, "ready").await;
+    add_a_note(&mut app, &mut terminal).await;
+    give_with_a_prompt(&mut app, &mut terminal, folder.path()).await;
+
+    app.send(&Command::End).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;
+    process.exits().await;
+}
+
+async fn braindump_in_the_snapshot(app: &mut App, terminal: &mut String, prompt: bool) {
+    let snapshot = app
+        .until(terminal, |e| matches!(e, Event::HostEvent { event } if event["type"] == "snapshot"))
+        .await;
+    let Event::HostEvent { event: snapshot } = snapshot else { unreachable!() };
+    assert_eq!(snapshot["braindump"], serde_json::json!([]));
+    assert_eq!(snapshot["braindumpPromptPossible"], prompt);
+}
+
+async fn add_a_note(app: &mut App, terminal: &mut String) {
+    app.send(&Command::AddNote { id: 1, text: "Edge cases".into() }).await;
+    let added = app.until(terminal, |e| matches!(e, Event::Answer { id: 1, .. })).await;
+    let Event::Answer { value: Some(info), .. } = added else { panic!("{added:?}") };
+    assert_eq!(info["name"], "nick-note-1.md");
+    app.until(terminal, |e| {
+        matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["braindump"][0]["note"] == true)
+    })
+    .await;
+}
+
+/// Gives the note with a prompt, then finds nothing new to give.
+async fn give_with_a_prompt(app: &mut App, terminal: &mut String, folder: &Path) {
+    // An agent session needs a prompt.
+    app.send(&Command::GiveBraindump { id: 2, prompt: Some("  ".into()) }).await;
+    let refused = app.until(terminal, |e| matches!(e, Event::Answer { id: 2, .. })).await;
+    assert!(matches!(refused, Event::Answer { error: Some(_), .. }), "{refused:?}");
+
+    app.send(&Command::GiveBraindump { id: 3, prompt: Some("Read\r\nthese".into()) }).await;
+    let given = app.until(terminal, |e| matches!(e, Event::Answer { id: 3, .. })).await;
+    let Event::Answer { value: Some(paths), .. } = given else { panic!("{given:?}") };
+    assert_eq!(paths, serde_json::json!(["shared/braindump/nick-note-1.md"]));
+    assert_eq!(
+        std::fs::read_to_string(folder.join("shared/braindump/nick-note-1.md")).unwrap(),
+        "Edge cases"
+    );
+    tokio::time::timeout(WAIT, async {
+        while !bytes_read(terminal).contains("0d") {
+            if let Frame::Data(records) = app.recv().await {
+                terminal.push_str(&String::from_utf8_lossy(&records));
+            }
+        }
+    })
+    .await
+    .expect("nothing was submitted");
+    let typed = format!("{}0d", hex("Read\nthese\n\nshared/braindump/nick-note-1.md"));
+    assert_eq!(bytes_read(terminal), typed, "one prompt, submitted once");
+    nothing_new_to_give(app, terminal, &typed).await;
+}
+
+/// Nothing new: refused, and nothing typed.
+async fn nothing_new_to_give(app: &mut App, terminal: &mut String, typed: &str) {
+    app.send(&Command::GiveBraindump { id: 4, prompt: Some("Again".into()) }).await;
+    let nothing = app.until(terminal, |e| matches!(e, Event::Answer { id: 4, .. })).await;
+    assert!(matches!(nothing, Event::Answer { error: Some(_), .. }), "{nothing:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    app.send(&Command::Status).await;
+    app.until(terminal, |event| matches!(event, Event::Status { .. })).await;
+    assert_eq!(bytes_read(terminal), typed);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_terminal_session_gives_the_braindump_without_typing() {
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let mut process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    started(&mut app, folder.path(), &url).await;
+    let mut terminal = String::new();
+    app.send(&Command::Attach).await;
+    braindump_in_the_snapshot(&mut app, &mut terminal, false).await;
+
+    app.send(&Command::AddToBraindump { id: 1, name: "notes.md".into(), data: NOTES.into() }).await;
+    app.until(&mut terminal, |e| matches!(e, Event::Answer { id: 1, value: Some(_), .. })).await;
+    app.send(&Command::GiveBraindump { id: 2, prompt: Some("echo typed".into()) }).await;
+    let refused = app.until(&mut terminal, |e| matches!(e, Event::Answer { id: 2, .. })).await;
+    assert!(matches!(refused, Event::Answer { error: Some(_), .. }), "{refused:?}");
+    app.send(&Command::GiveBraindump { id: 3, prompt: None }).await;
+    let given = app.until(&mut terminal, |e| matches!(e, Event::Answer { id: 3, .. })).await;
+    let Event::Answer { value: Some(paths), .. } = given else { panic!("{given:?}") };
+    assert_eq!(paths, serde_json::json!(["shared/braindump/notes.md"]));
+    assert_eq!(
+        std::fs::read(folder.path().join("shared/braindump/notes.md")).unwrap(),
+        b"# Notes\n"
+    );
+
+    app.send(&Command::End).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;
+    process.exits().await;
 }

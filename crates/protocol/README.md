@@ -5,6 +5,7 @@ The wire protocol between a host and its viewers. Both sides use this crate; it 
 Current version: `PROTOCOL_VERSION = 6` ([`src/control.rs`](src/control.rs)). Hosts admit viewers from `MIN_VIEWER_PROTOCOL_VERSION = 5` up to their own version: one version back.
 
 - Version 6 added the host's asks: a request to read something and a vote on a task's size ([`src/asks.rs`](src/asks.rs)). It added the `read-done` and `estimated` timeline entries, the `Answer` request, and the host's `ReadRequest` and `Vote`. Version 5 viewers are admitted and watch as before, suggestions and links included: the host never sends them those entries, `ReadRequest` or `Vote`, and lists them as on an older app, which can't answer.
+  Version 6 also added the braindump: the `braindump-item` and `braindump-given` timeline entries, the `AddToBraindump`, `AddNote` and `ReplaceNote` requests, the `AlreadyGiven` outcome and the host's `Braindump`. A braindump item is a shared file kept apart from `Files`: its bytes travel on `files` and are checked as a shared file's are. Version 5 viewers never get these entries or `Braindump`, and the host answers their `Fetch` for a braindump item with `Gone`.
 - Version 5 added shared links: the `link` and `link-removed` timeline entries, the `ShareLink` request, and the host's `LinksAllowed` and `Links`. Which links are accepted is decided by `check_link` ([`src/links.rs`](src/links.rs)), used by the sharer, the host and every participant before opening one. Version 4 viewers are admitted and watch as before, suggestions included: the host never sends them a link entry, `LinksAllowed` or `Links`, and they can't share links.
 
 - Version 4 added the whole text of code files: the `file-text` timeline entry and the host's setting for it (`Shared`). It also added shared files: the `files` channel, the `file-shared` entry, `FilesAllowed`, `Files`, and the `ShareFile` and `RemoveFile` requests with their outcomes. Version 3 viewers are admitted and watch as before, suggestions included: the host never sends them a `file-text` or `file-shared` event, `Shared`, `FilesAllowed` or `Files`, and does not accept a `files` channel from them. It skips such an event for them, which they see as a gap in the event sequence, as they already accept.
@@ -44,7 +45,7 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `Hello` | `protocol_version`, `username`, `last_output_seq?`, `last_event_seq?`, `resume_token?` | First message on a connection. When reconnecting, the `last_*` fields say where the viewer left off and `resume_token` lets it take its old place |
 | `Resend` | `from_output_seq` | Send records again from this sequence, after a gap or a failed verification |
 | `Leave` | | The viewer is leaving |
-| `Send` (v3) | `id`, `request` | A request to the host. `request` is `Suggest { text }`, (v4) `ShareFile { name, size, sha256 }` (name 1 to 255 bytes) or `RemoveFile { file }`, (v5) `ShareLink { url, title?, session_only }`, where `url` must be in the normalized form `check_link` returns and `title` 1 to 120 characters without control characters, or (v6) `Answer(Read { ask, answer } | Vote { ask, round, card? })`. A read answer is `Reading`, `Ready` or `Question { text? }`, the text at most 280 characters without control characters but line breaks; a card is `Value(index)` into the vote's set (below 6 for any set), `Unsure` or `Break`, and no card takes the vote back. `id` is the viewer's own and unique among its requests; a repeated id is answered again without taking the request twice, so a viewer resends unanswered requests after reconnecting. A `ShareFile` is not resent: its upload belongs to the connection |
+| `Send` (v3) | `id`, `request` | A request to the host. `request` is `Suggest { text }`, (v4) `ShareFile { name, size, sha256 }` (name 1 to 255 bytes) or `RemoveFile { file }`, (v5) `ShareLink { url, title?, session_only }`, where `url` must be in the normalized form `check_link` returns and `title` 1 to 120 characters without control characters, (v6) `Answer(Read { ask, answer } | Vote { ask, round, card? })`, `AddToBraindump { name, size, sha256 }` (name as for `ShareFile`), `AddNote { size, sha256 }` or `ReplaceNote { file, size, sha256 }` (a note is 1 to 32 KB). A read answer is `Reading`, `Ready` or `Question { text? }`, the text at most 280 characters without control characters but line breaks; a card is `Value(index)` into the vote's set (below 6 for any set), `Unsure` or `Break`, and no card takes the vote back. `id` is the viewer's own and unique among its requests; a repeated id is answered again without taking the request twice, so a viewer resends unanswered requests after reconnecting. A `ShareFile`, `AddToBraindump`, `AddNote` or `ReplaceNote` is not resent: its upload belongs to the connection |
 
 ### Host to viewer
 
@@ -56,7 +57,7 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `Status` | `status` | `Starting`, `Working`, `Waiting`, `Exited` or `Unknown` (agents whose events are not captured) |
 | `SessionEnded` | | The host closed the session |
 | `Allowed` (v3) | `suggestions` | What viewers may send; on admission and on every change |
-| `Reply` (v3) | `id`, `outcome` | To the sender only: `Received`, `Off` (the host has turned that kind off) or `RateLimited` (3 at once, then 1 every 10 seconds per viewer, not reset by reconnecting). For files (v4) also `Ready { upload }` (send the bytes as that upload on `files`), `TooLarge`, `Full`, `NotAllowedType` and `Gone`. Answers (v6) get `Received`, `RateLimited` (a limit of their own: 5 at once, then 1 every second) or `Gone` (the ask closed, the round is over, the votes are revealed, or the card is not of the vote's set) |
+| `Reply` (v3) | `id`, `outcome` | To the sender only: `Received`, `Off` (the host has turned that kind off) or `RateLimited` (3 at once, then 1 every 10 seconds per viewer, not reset by reconnecting). For files (v4) also `Ready { upload }` (send the bytes as that upload on `files`), `TooLarge`, `Full`, `NotAllowedType` and `Gone`. Answers (v6) get `Received`, `RateLimited` (a limit of their own: 5 at once, then 1 every second) or `Gone` (the ask closed, the round is over, the votes are revealed, or the card is not of the vote's set). (v6) `AlreadyGiven` for a note that can no longer be edited |
 | `Suggestions` (v3) | `mine[]` (`id`, `text`, `state`) | To one viewer: their own suggestions in this session, `Waiting`, `Sent { edited }` or `Declined`; on admission and on every change |
 | `Shared` (v4) | `whole_files` | Whether the host shares whole code files; on admission and on every change |
 | `FilesAllowed` (v4) | `files` | Whether viewers may share files; on admission and on every change |
@@ -65,6 +66,7 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `Links` (v5) | `mine[]` (`id`, `url`, `title?`, `session_only`, `state`) | To one viewer: their newest 50 links in this session, `Waiting`, `Shared` or `Declined`; on admission and on every change |
 | `ReadRequest` (v6) | `open?` (`id`, `target`, `label`, `limit_s`, `left_ms?`, `people[]`, `mine`, `questions[]`) | To one viewer: the open read request, `None` once closed; on admission and on every change. `target` is `Document { path }`, `Code { path }`, `Shared { file }` or `Changes { from_seq, to_seq }` (the timeline events after the host's last prompt up to the moment of asking). `left_ms` is the time left when sent, so clocks never have to agree. `people` pairs each participant id with `Reading`, `Ready`, `Question` or `OlderApp`; `mine` is the viewer's own answer, with their own question's text. `questions` is always empty for viewers: only the host sees question texts |
 | `Vote` (v6) | `open?` (`id`, `round`, `task`, `cards`, `voted[]`, `mine?`, `revealed?`, `older[]`) | To one viewer: the open vote, `None` once closed; on admission and on every change. `cards` is `StoryPoints` (1, 2, 3, 5, 8, 13) or `TShirt` (XS to XL), both with ? and ☕. Before the reveal it holds no vote's value but the viewer's own (`mine`); `revealed` pairs every participant id with their card afterwards |
+| `Braindump` (v6) | `items[]` (`info` as in `Files`, `note`, `given?`) | The braindump now, oldest first, with the round each item was given in; on admission and on every change. Whether viewers may add to it is `FilesAllowed` |
 
 Messages marked v3, v4, v5 or v6 are sent only to viewers admitted with that version or later.
 
@@ -81,7 +83,7 @@ viewer                                      host
   | <-- Allowed, Suggestions (v3 viewers) ----  |
   | <-- Shared, FilesAllowed, Files (v4) -----  |
   | <-- LinksAllowed, Links (v5 viewers) -----  |
-  | <-- ReadRequest, Vote (v6 viewers) -------  |
+  | <-- ReadRequest, Vote, Braindump (v6) ----  |
   | <== history, then live records and ======  |
   |     timeline events on `stream`             |
 ```
@@ -157,6 +159,8 @@ Chunks are not signed: the signed `file-shared` event announces `size` and `sha2
 | `link-removed` (v5) | The host removed the link `id`. Never sent to version 4 viewers |
 | `read-done` (v6) | A read request closed: `id`, `target`, `label`, how many were `ready` and had `questions` out of the `of` who could answer, and `timeUp`. No names, no question texts. Never sent to version 5 viewers |
 | `estimated` (v6) | The host kept an estimate: `id`, `task`, `cards`, `kept`, the `low` and `high` value cards voted (null when every vote was ? or ☕) and the number of `votes`. No names or single votes. Never sent to version 5 viewers |
+| `braindump-item` (v6) | Someone added to the braindump: the fields of `file-shared`, plus `note`, and `replaces` when it is a new version of that note. Windows don't draw it as a step. Never sent to version 5 viewers |
+| `braindump-given` (v6) | The host gave the braindump to the agent: `round`, the item ids `files`, the `paths` written in the session folder, and the labels of the people they came from (`from`). Never sent to version 5 viewers |
 | `timeline-unavailable` | Structured events cannot be captured; the terminal mirror still works |
 | `timeline-available` | Events arrive again |
 

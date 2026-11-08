@@ -165,7 +165,7 @@ const notInTheWebViewer = () => Promise.reject(new Error('The web viewer can onl
 export function shareRefusal(outcome: RequestOutcome): string {
   switch (outcome) {
     case 'Off':
-      return 'The host has not turned on sharing files.';
+      return 'The host has not turned on adding files and notes.';
     case 'TooLarge':
       return 'Files can be up to 10 MB.';
     case 'Full':
@@ -174,6 +174,8 @@ export function shareRefusal(outcome: RequestOutcome): string {
       return 'Only images (PNG, JPEG, GIF, WebP), Markdown and text files can be shared.';
     case 'Gone':
       return 'The file did not reach the host intact. Share it again.';
+    case 'AlreadyGiven':
+      return 'That note was given to the agent, so it can’t be edited.';
     default:
       return 'The host did not take the file. Share it again.';
   }
@@ -369,9 +371,26 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     hostRemoveSharedFile: notInTheWebViewer,
     hostReadSharedFile: notInTheWebViewer,
     hostPutSharedFile: notInTheWebViewer,
+    hostAddToBraindump: notInTheWebViewer,
+    hostAddNote: notInTheWebViewer,
+    hostReplaceNote: notInTheWebViewer,
+    hostGiveBraindump: notInTheWebViewer,
     viewerShareFile: async (name, bytes) => {
       if (!connection) throw new Error('You are not in a session.');
       const outcome = await connection.shareFile(name, new Uint8Array(bytes));
+      if (outcome !== 'Received') throw new Error(shareRefusal(outcome));
+    },
+    viewerAddToBraindump: async (name, bytes) => {
+      if (!connection) throw new Error('You are not in a session.');
+      const outcome = await connection.addToBraindump(name, new Uint8Array(bytes));
+      if (outcome !== 'Received') throw new Error(shareRefusal(outcome));
+    },
+    viewerAddNote: async (text, file) => {
+      if (!connection) throw new Error('You are not in a session.');
+      if (!text.trim()) throw new Error('Write something first.');
+      const outcome = await connection.addNote(text, file);
+      if (outcome === 'TooLarge') throw new Error('Notes can be up to 32 KB.');
+      if (outcome === 'Gone' && file !== undefined) throw new Error('That note is no longer in the braindump.');
       if (outcome !== 'Received') throw new Error(shareRefusal(outcome));
     },
     viewerOpenFile: async (file) => {

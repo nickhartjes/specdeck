@@ -43,6 +43,8 @@ const LINK_PATH_MARKER: &str = "marker-link-path";
 const LINK_KEY_MARKER: &str = "Marker-Link-Key";
 const LINK_TITLE_MARKER: &str = "Marker-Link-Title";
 const LINK_SITE_MARKER: &str = "marker-link-site.example";
+const NOTE_MARKER: &str = "Marker-Braindump-Note";
+const BRAINDUMP_NAME_MARKER: &str = "Marker-Braindump-Name";
 const READ_LABEL_MARKER: &str = "Marker-Read-Label";
 const QUESTION_MARKER: &str = "Marker-Question-Text";
 const TASK_MARKER: &str = "Marker-Task-Text";
@@ -323,6 +325,17 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         matches!(e, ViewerEvent::Timeline { event, .. } if matches!(event.entry, Entry::Estimated { .. }))
     })
     .await;
+
+    // The braindump: the viewer writes a note, which counts against its rate limit like the
+    // requests above, and the host adds a file, edits its own note and gives it all.
+    let note = viewer.add_note(format!("{NOTE_MARKER}\nfrom the viewer"));
+    assert_eq!(tokio::time::timeout(WAIT, note).await.unwrap(), Ok(Outcome::Received));
+    let own = session.add_note(HOST_NAME, NOTE_MARKER).unwrap();
+    session.replace_note(own.file, &format!("{NOTE_MARKER}, edited")).unwrap();
+    let name = format!("{BRAINDUMP_NAME_MARKER}.txt");
+    session.add_to_braindump(HOST_NAME, &name, NOTE_MARKER.as_bytes().to_vec()).unwrap();
+    let given = session.give_braindump().unwrap();
+    assert_eq!(given.paths.len(), 3);
     // Past a traffic report, so verbose events are in.
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     viewer.leave();
@@ -359,6 +372,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "host.file_sent",
         "host.file_removed",
         "host.files_allowed",
+        "host.braindump_given",
         "viewer.file_fetched",
         "viewer.file_uploaded",
         "host.traffic",
@@ -387,6 +401,8 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         LINK_KEY_MARKER,
         LINK_TITLE_MARKER,
         LINK_SITE_MARKER,
+        NOTE_MARKER,
+        BRAINDUMP_NAME_MARKER,
         READ_LABEL_MARKER,
         QUESTION_MARKER,
         TASK_MARKER,

@@ -1,8 +1,8 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { SharedFileInfo } from '../api/types';
-import { shareEach, SharedFileTab, SharedTab, type SharedFiles } from './SharedFiles';
+import type { BraindumpItemInfo, SharedFileInfo } from '../api/types';
+import { shareEach, SharedFileTab, SharedTab, type Braindump, type SharedFiles } from './SharedFiles';
 
 const info = (file: number, name: string, kind: SharedFileInfo['kind'], by = 2, byLabel = 'Sanne'): SharedFileInfo => ({
   file,
@@ -136,5 +136,120 @@ describe('a shared file in a tab', () => {
     });
     rerender(<SharedFileTab file={info(5, 'gone.md', 'markdown')} shared={shared({ open })} onKeep={vi.fn()} />);
     expect(await screen.findByText('That file is no longer shared.')).toBeInTheDocument();
+  });
+});
+
+const item = (file: number, name: string, given: number | null, note = true, by = 2, byLabel = 'Sanne'): BraindumpItemInfo => ({
+  info: info(file, name, note ? 'markdown' : 'text', by, byLabel),
+  note,
+  given,
+});
+
+function braindump(overrides: Partial<Braindump> = {}): Braindump {
+  return {
+    items: [item(3, 'sanne-note-1.md', 1), item(4, 'edge-cases.txt', null, false, 3, 'Mo'), item(5, 'sanne-note-2.md', null)],
+    add: vi.fn(),
+    note: vi.fn(async () => {}),
+    promptPossible: true,
+    ...overrides,
+  };
+}
+
+describe('the braindump', () => {
+  it('lists its items above the shared files, marking those given', () => {
+    render(<SharedTab shared={shared({ braindump: braindump() })} active={null} onOpen={vi.fn()} />);
+    const list = screen.getByRole('list', { name: 'Braindump for Claude Code' });
+    const labels = within(list).getAllByRole('button').map((b) => b.getAttribute('aria-label'));
+    expect(labels).toEqual([
+      'sanne-note-1.md, added by You, 2 KB, given to Claude Code',
+      'edge-cases.txt, added by Mo, 2 KB',
+      'sanne-note-2.md, added by You, 2 KB',
+    ]);
+    // Only the host gives it.
+    expect(screen.queryByRole('button', { name: /Give/ })).not.toBeInTheDocument();
+  });
+
+  it('offers the host to give what is new, with an editable prompt that ends with the paths', async () => {
+    const give = vi.fn(async () => ['shared/braindump/edge-cases.txt', 'shared/braindump/sanne-note-2.md']);
+    const say = vi.fn();
+    render(<SharedTab shared={shared({ host: true, me: 0, say, braindump: braindump({ give }) })} active={null} onOpen={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Give 2 to Claude Code' }));
+    const dialog = screen.getByRole('dialog', { name: 'Give the braindump to Claude Code' });
+    expect(within(dialog).getByRole('list', { name: 'Items to give' })).toHaveTextContent('shared/braindump/edge-cases.txtshared/braindump/sanne-note-2.md');
+    const prompt = within(dialog).getByRole('textbox', { name: 'Prompt for Claude Code' });
+    await userEvent.clear(prompt);
+    await userEvent.type(prompt, 'Plan the import.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Give to Claude Code' }));
+    expect(give).toHaveBeenCalledWith('Plan the import.');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(say).toHaveBeenCalled();
+  });
+
+  it('in a terminal session only copies, and types nothing', async () => {
+    const give = vi.fn(async () => ['shared/braindump/edge-cases.txt']);
+    render(
+      <SharedTab
+        shared={shared({ host: true, me: 0, braindump: braindump({ give, promptPossible: false, items: [item(4, 'edge-cases.txt', null, false)] }) })}
+        active={null}
+        onOpen={vi.fn()}
+      />,
+    );
+    // No agent to name: the shell is not given anything.
+    expect(screen.getByRole('heading', { name: 'Braindump' })).toBeInTheDocument();
+    expect(screen.getByText(/You copy them into the session folder together/)).toBeInTheDocument();
+    expect(screen.queryByText(/The shell/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Copy 1 to the session folder' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent('Nothing is typed into the terminal');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Copy to the session folder' }));
+    expect(give).toHaveBeenCalledWith(null);
+  });
+
+  it('offers no Give when everything was given', () => {
+    render(<SharedTab shared={shared({ host: true, me: 0, braindump: braindump({ give: vi.fn(), items: [item(3, 'sanne-note-1.md', 1)] }) })} active={null} onOpen={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Give/ })).not.toBeInTheDocument();
+  });
+
+  it('lets the author edit their own note until it is given', async () => {
+    const note = vi.fn(async () => {});
+    const say = vi.fn();
+    const open = vi.fn(async () => bytes('Old text'));
+    const tab = (it: BraindumpItemInfo, me = 2) => (
+      <SharedFileTab file={it.info} item={it} shared={shared({ me, open, say, braindump: braindump({ note }) })} onKeep={vi.fn()} />
+    );
+    const { rerender } = render(tab(item(5, 'sanne-note-2.md', null)));
+    expect(screen.getByText(/In the braindump for Claude Code/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: /Edit/ }));
+    const field = screen.getByRole('textbox', { name: 'Note' });
+    expect(field).toHaveValue('Old text');
+    await userEvent.type(field, ', and new');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(note).toHaveBeenCalledWith('Old text, and new', 5);
+    await waitFor(() => expect(say).toHaveBeenCalledWith('sanne-note-2.md saved.'));
+
+    // Not once it is given, and not someone else's.
+    rerender(tab(item(3, 'sanne-note-1.md', 1)));
+    expect(await screen.findByText(/Given to Claude Code/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Edit/ })).not.toBeInTheDocument();
+    rerender(tab(item(5, 'sanne-note-2.md', null), 3));
+    expect(screen.queryByRole('button', { name: /Edit/ })).not.toBeInTheDocument();
+    // Not even the host's, though the host may remove it.
+    rerender(<SharedFileTab file={item(5, 'sanne-note-2.md', null).info} item={item(5, 'sanne-note-2.md', null)} shared={shared({ host: true, me: 0, open, braindump: braindump({ note }) })} onKeep={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Edit/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Remove/ })).toBeInTheDocument();
+    // A braindump item is given with the rest, never put in the folder on its own.
+    rerender(<SharedFileTab file={item(4, 'edge-cases.txt', null, false).info} item={item(4, 'edge-cases.txt', null, false)} shared={shared({ host: true, me: 0, put: vi.fn(), open })} onKeep={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Put in the session folder/ })).not.toBeInTheDocument();
+  });
+
+  it('shows a note as text, never running what is in it', async () => {
+    const open = vi.fn(async () => bytes('Idea\n\n<script>window.ran = true</script><img src=x onerror="window.ran = true">'));
+    const it2 = item(5, 'sanne-note-2.md', null);
+    const { container } = render(<SharedFileTab file={it2.info} item={it2} shared={shared({ open, braindump: braindump() })} onKeep={vi.fn()} />);
+    await screen.findByRole('article', { name: 'sanne-note-2.md' });
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+    expect((window as { ran?: boolean }).ran).toBeUndefined();
   });
 });

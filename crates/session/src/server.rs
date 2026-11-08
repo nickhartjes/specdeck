@@ -419,6 +419,31 @@ async fn run(
             answer(outgoing, id, runtime.put_shared_file(file).map(serde_json::Value::String));
             Ok(())
         }
+        Command::AddToBraindump { id, name, data } => {
+            let result = runtime
+                .add_to_braindump(&name, &data)
+                .map(|info| serde_json::to_value(info).unwrap_or_default());
+            answer(outgoing, id, result);
+            Ok(())
+        }
+        Command::AddNote { id, text } => {
+            let result =
+                runtime.add_note(&text).map(|info| serde_json::to_value(info).unwrap_or_default());
+            answer(outgoing, id, result);
+            Ok(())
+        }
+        Command::ReplaceNote { id, file, text } => {
+            let result = runtime
+                .replace_note(file, &text)
+                .map(|info| serde_json::to_value(info).unwrap_or_default());
+            answer(outgoing, id, result);
+            Ok(())
+        }
+        Command::GiveBraindump { id, prompt } => {
+            let result = runtime.give_braindump(prompt).await.map(serde_json::Value::from);
+            answer(outgoing, id, result);
+            Ok(())
+        }
         Command::AnswerSuggestion { viewer_id, id, answer } => {
             let text = match answer {
                 SuggestionAnswer::Send { text } => Some(text),

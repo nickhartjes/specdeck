@@ -402,10 +402,23 @@ pub fn host_code_sharing(whole_files: bool) {
     info!(whole_files, "host.code_sharing");
 }
 
-/// Someone shared a file, or it was refused: who (0 for the host), what kind, how large and the
-/// outcome. Never the file's name or content (`shared-files` design decision 10).
-pub fn host_file_shared(by: u32, kind: &'static str, bytes: u64, outcome: &'static str) {
-    info!(by, kind, bytes, outcome, "host.file_shared");
+/// Someone shared a file or added to the braindump, or it was refused: who (0 for the host),
+/// where to (`everyone`, `braindump` or `note`), what kind, how large and the outcome. Never the
+/// file's name or content (`shared-files` design decision 10).
+pub fn host_file_shared(
+    by: u32,
+    group: &'static str,
+    kind: &'static str,
+    bytes: u64,
+    outcome: &'static str,
+) {
+    info!(by, group, kind, bytes, outcome, "host.file_shared");
+}
+
+/// The host gave the braindump to the agent, or could not: how many items, how many bytes, and
+/// the outcome. Never names or content.
+pub fn host_braindump_given(items: usize, bytes: u64, outcome: &'static str) {
+    info!(items, bytes, outcome, "host.braindump_given");
 }
 
 /// A shared file was removed, by the host (0) or the viewer who shared it.

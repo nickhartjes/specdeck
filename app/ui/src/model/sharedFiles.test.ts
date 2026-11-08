@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TimelineEvent } from '../api/types';
-import { dataUrl, formatSize, refusal, sharedBy, shareSteps, textOf } from './sharedFiles';
+import { dataUrl, formatSize, giveSteps, itemsFrom, newestVersions, noteBytes, people, refusal, sharedBy, shareSteps, textOf } from './sharedFiles';
 
 const file = (name: string, size = 10, type = '') => ({ name, size, type });
 
@@ -42,5 +42,45 @@ describe('shared files in the window', () => {
       { outputSeq: 0, at: 2, kind: 'file-shared', file: 4, name: 'a.md', fileKind: 'markdown', mediaType: 'text/markdown', size: 3, sha256: '', by: 2, byLabel: 'Sanne' },
     ];
     expect(shareSteps(events)).toEqual([{ file: 4, name: 'a.md', by: 2, byLabel: 'Sanne', at: 2 }]);
+  });
+
+  it('joins the givings of the braindump with what is still in it', () => {
+    const events: TimelineEvent[] = [
+      { outputSeq: 0, at: 1, kind: 'braindump-item', file: 4, name: 'sanne-note-1.md', fileKind: 'markdown', mediaType: 'text/markdown', size: 3, sha256: '', by: 2, byLabel: 'Sanne', note: true },
+      { outputSeq: 0, at: 5, kind: 'braindump-given', round: 1, files: [4, 6], paths: ['shared/braindump/sanne-note-1.md', 'shared/braindump/edge-cases (2).txt'], from: ['Sanne', 'Mo'] },
+    ];
+    expect(giveSteps(events, new Set([4]))).toEqual([
+      {
+        round: 1,
+        at: 5,
+        from: ['Sanne', 'Mo'],
+        items: [
+          { file: 4, name: 'sanne-note-1.md', path: 'shared/braindump/sanne-note-1.md', removed: false },
+          { file: 6, name: 'edge-cases (2).txt', path: 'shared/braindump/edge-cases (2).txt', removed: true },
+        ],
+      },
+    ]);
+  });
+
+  it('says whom the items came from', () => {
+    expect(people(['Sanne'])).toBe('Sanne');
+    expect(people(['Sanne', 'Mo'])).toBe('Sanne and Mo');
+    expect(people(['Sanne', 'Mo', 'Nick'])).toBe('Sanne, Mo and Nick');
+    expect(itemsFrom(1, ['Mo'])).toBe('1 item from Mo');
+    expect(itemsFrom(3, ['Sanne', 'Mo'])).toBe('3 items from Sanne and Mo');
+  });
+
+  it('counts a note in bytes as the host does', () => {
+    expect(noteBytes('ab\r\ncd')).toBe(5);
+    expect(noteBytes('é')).toBe(2);
+  });
+
+  it('follows an edited note to its newest version', () => {
+    const item = (file: number, replaces?: number): TimelineEvent => ({ outputSeq: 0, at: file, kind: 'braindump-item', file, name: 'mo-note-1.md', fileKind: 'markdown', mediaType: 'text/markdown', size: 1, sha256: '', by: 2, byLabel: 'Mo', note: true, replaces });
+    const newest = newestVersions([item(3), item(5, 3), item(6), item(8, 5)]);
+    expect([...newest]).toEqual([
+      [3, 8],
+      [5, 8],
+    ]);
   });
 });

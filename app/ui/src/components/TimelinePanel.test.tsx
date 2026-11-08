@@ -210,6 +210,44 @@ describe('shared files in the timeline', () => {
   });
 });
 
+describe('the braindump in the timeline', () => {
+  const props = { timelineSupported: true, agentName: 'Claude Code', matches: new Set<string>(), current: null, onJump: () => {} };
+  const at = (n: number) => 1_700_000_000_000 + n;
+  const events: TimelineEvent[] = [
+    { outputSeq: 0, at: at(10), kind: 'prompt', promptId: 'p1', text: 'First prompt' },
+    { outputSeq: 0, at: at(30), kind: 'prompt', promptId: 'p2', text: 'Second prompt' },
+  ];
+  const gives = [
+    {
+      round: 1,
+      at: at(20),
+      from: ['Sanne', 'Mo'],
+      items: [
+        { file: 3, name: 'sanne-note-1.md', path: 'shared/braindump/sanne-note-1.md', removed: false },
+        { file: 4, name: 'edge-cases-2.txt', path: 'shared/braindump/edge-cases-2.txt', removed: true },
+      ],
+    },
+  ];
+
+  it('shows the giving where it happened, with the items to open', async () => {
+    const onOpenShared = vi.fn();
+    const { container } = render(<TimelinePanel model={buildTimeline(events)} {...props} gives={gives} onOpenShared={onOpenShared} />);
+    const text = container.querySelector('.timeline')?.textContent ?? '';
+    const step = 'Gave the braindump to Claude Code: 2 items from Sanne and Mo';
+    expect(text.indexOf('First prompt')).toBeLessThan(text.indexOf(step));
+    expect(text.indexOf(step)).toBeLessThan(text.indexOf('Second prompt'));
+    await userEvent.click(screen.getByText(step));
+    await userEvent.click(screen.getByRole('button', { name: 'shared/braindump/sanne-note-1.md' }));
+    expect(onOpenShared).toHaveBeenCalledWith(3, 'sanne-note-1.md');
+    expect(screen.getByText(/shared\/braindump\/edge-cases-2.txt/)).toHaveTextContent('(removed)');
+  });
+
+  it('counts as something in an empty timeline', () => {
+    render(<TimelinePanel model={buildTimeline([])} {...props} gives={gives} />);
+    expect(screen.queryByText('No prompts yet')).not.toBeInTheDocument();
+  });
+});
+
 describe('shared links', () => {
   const stamp = (n: number) => ({ outputSeq: n, at: 1_700_000_000_000 + n });
   const link = (n: number, id: number, url: string | null): TimelineEvent => ({ ...stamp(n), kind: 'link', id, url, title: `Link ${id}`, by: 'Nick' });

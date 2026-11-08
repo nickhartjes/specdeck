@@ -27,8 +27,8 @@ use specdeck_protocol::asks::{
     Card, CardSet, ReadAnswer, ReadState, ReadTarget, ReadView, VoteView,
 };
 use specdeck_protocol::control::{
-    ASKS_PROTOCOL_VERSION, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
-    RefusalReason, SentLinkState, SharedFileInfo, SuggestionState,
+    ASKS_PROTOCOL_VERSION, BraindumpItemInfo, MIN_VIEWER_PROTOCOL_VERSION, Outcome,
+    PROTOCOL_VERSION, Participant, RefusalReason, SentLinkState, SharedFileInfo, SuggestionState,
 };
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
@@ -361,7 +361,12 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     .await;
     newer.suggest("Add a test".into());
     host_suggestions(&mut hosted.events, |list| list.len() == 1).await;
-    hosted.session.input(b"later\r").unwrap();
+    // The braindump: added to, edited, given and removed from.
+    let note = hosted.session.add_note("nick", "For Claude").unwrap();
+    let item = hosted.session.add_to_braindump("nick", "a.txt", b"a".to_vec()).unwrap();
+    hosted.session.replace_note(note.file, "For Claude, edited").unwrap();
+    hosted.session.give_braindump().unwrap();
+    hosted.session.remove_shared_file(item.file).unwrap();
 
     // The host asks to read and starts a vote, which the older viewer must not hear of.
     let notes = hosted.session.share_file("nick", "notes.md", b"# Notes\n".to_vec()).unwrap();
@@ -374,10 +379,11 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     let vote = AskCommand::StartVote { task: "Estimate".into(), cards: CardSet::TShirt };
     assert_eq!(hosted.sharing.ask(vote).await.unwrap(), Ok(()));
     assert_eq!(hosted.sharing.ask(AskCommand::EndRead).await.unwrap(), Ok(()));
+    hosted.session.input(b"later\r").unwrap();
 
     // The older viewer keeps following the session, admitted once and never told anything
     // its version cannot read. Version 5 reads requests, whole files, shared files and links,
-    // so it is told about those, but not about the host's asks or their entries.
+    // so it is told about those, but not about the host's asks, the braindump or their entries.
     let mut newer_messages = Vec::new();
     tokio::time::timeout(WAIT, async {
         loop {
@@ -392,12 +398,19 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
                 }
                 ViewerEvent::ReadRequest(_)
                 | ViewerEvent::Vote(_)
+                | ViewerEvent::Braindump(_)
                 | ViewerEvent::Reconnecting
                 | ViewerEvent::Welcome { .. } => newer_messages.push(event.clone()),
                 ViewerEvent::Timeline { event: step, .. }
-                    if matches!(step.entry, Entry::ReadDone { .. } | Entry::Estimated { .. }) =>
+                    if matches!(
+                        step.entry,
+                        Entry::ReadDone { .. }
+                            | Entry::Estimated { .. }
+                            | Entry::BraindumpItem { .. }
+                            | Entry::BraindumpGiven { .. }
+                    ) =>
                 {
-                    newer_messages.push(event.clone())
+                    newer_messages.push(event.clone());
                 }
                 _ => {}
             }
@@ -409,6 +422,8 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     .await
     .expect("the older viewer stopped following");
     assert!(newer_messages.is_empty(), "{newer_messages:?}");
+    let fetched = tokio::time::timeout(WAIT, _older.fetch_file(note.file + 2)).await.unwrap();
+    assert_eq!(fetched.unwrap(), Err(FileError::Gone), "no braindump bytes for an older viewer");
 }
 
 /// A fake Claude Code that writes `a.rs` and reports it through its hooks on the line "edit",
@@ -1911,4 +1926,81 @@ async fn a_read_request_closes_when_its_time_is_up() {
     tokio::time::sleep(Duration::from_secs(30)).await;
     assert_eq!(sharing.ask(AskCommand::EndRead).await.unwrap(), Ok(()));
     assert!(matches!(entries(&view)[1], Entry::ReadDone { time_up: false, .. }));
+}
+
+/// What a viewer's request to the host came to.
+async fn wait<T>(receiver: tokio::sync::oneshot::Receiver<T>) -> T {
+    tokio::time::timeout(WAIT, receiver).await.expect("no answer").expect("dropped")
+}
+
+/// The braindump a viewer was last told about, once `done` holds for it.
+async fn braindump_until(
+    events: &mut UnboundedReceiver<ViewerEvent>,
+    seen: &mut Seen,
+    done: impl Fn(&[BraindumpItemInfo]) -> bool,
+) -> Vec<BraindumpItemInfo> {
+    let event =
+        until(events, seen, |_, e| matches!(e, ViewerEvent::Braindump(items) if done(items))).await;
+    let ViewerEvent::Braindump(items) = event else { unreachable!() };
+    items
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn viewers_add_to_the_braindump_and_edit_their_own_notes() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut anna_events) = join(&url, &code, "anna");
+    let mut seen_anna = Seen::default();
+    until(&mut anna_events, &mut seen_anna, |_, e| *e == ViewerEvent::Braindump(vec![])).await;
+    let (bob, mut bob_events) = join(&url, &code, "bob");
+    let mut seen_bob = Seen::default();
+    until(&mut bob_events, &mut seen_bob, |seen, _| seen.welcome.is_some()).await;
+
+    // Off when the session starts, like sharing files.
+    assert_eq!(wait(anna.add_note("Say reconnecting".into())).await, Outcome::Off);
+    hosted.session.allow_viewer_files(true);
+    until(&mut anna_events, &mut seen_anna, |_, e| *e == ViewerEvent::FilesAllowed { files: true })
+        .await;
+
+    // A note, named after its author, reaches the others and is checked when fetched.
+    assert_eq!(wait(anna.add_note("Say *reconnecting*".into())).await, Outcome::Received);
+    let items = braindump_until(&mut bob_events, &mut seen_bob, |items| items.len() == 1).await;
+    let first = items[0].info.clone();
+    assert_eq!((first.name.as_str(), first.by_label.as_str()), ("anna-note-1.md", "anna"));
+    assert!(items[0].note && items[0].given.is_none());
+    let fetched = wait(bob.fetch_file(first.file)).await;
+    assert_eq!(fetched.unwrap(), b"Say *reconnecting*");
+
+    // Only the author edits it; the new version replaces the old one for everyone.
+    assert_eq!(wait(bob.replace_note(first.file, "Mine now".into())).await, Outcome::Gone);
+    assert_eq!(
+        wait(anna.replace_note(first.file, "Say *reconnecting*, not error".into())).await,
+        Outcome::Received
+    );
+    let items = braindump_until(&mut bob_events, &mut seen_bob, |items| {
+        items.len() == 1 && items[0].info.file != first.file
+    })
+    .await;
+    assert_eq!(items[0].info.name, first.name);
+    let fetched = wait(bob.fetch_file(items[0].info.file)).await;
+    assert_eq!(fetched.unwrap(), b"Say *reconnecting*, not error");
+    assert_eq!(wait(bob.fetch_file(first.file)).await, Err(FileError::Gone));
+
+    // A file for the braindump stays out of the shared files; a note too long never leaves.
+    let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+    assert_eq!(wait(bob.add_to_braindump("crash".into(), png.to_vec())).await, Outcome::Received);
+    let items = braindump_until(&mut anna_events, &mut seen_anna, |items| items.len() == 2).await;
+    assert_eq!((items[1].info.name.as_str(), items[1].note), ("crash.png", false));
+    assert!(hosted.session.view().shared_files().is_empty());
+    assert_eq!(wait(anna.add_note("x".repeat(40 * 1024))).await, Outcome::TooLarge);
+
+    // Once given, the note can no longer be edited.
+    hosted.session.give_braindump().unwrap();
+    let items = braindump_until(&mut anna_events, &mut seen_anna, |items| {
+        items.iter().all(|item| item.given == Some(1))
+    })
+    .await;
+    let note = items[0].info.file;
+    assert_eq!(wait(anna.replace_note(note, "Too late".into())).await, Outcome::AlreadyGiven);
 }

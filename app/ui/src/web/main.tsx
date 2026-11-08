@@ -41,6 +41,8 @@ function core(code: string): ViewerCore {
     castVote: (ask, round, card) => viewer.castVote(ask, round, card) as Request,
     unansweredRequests: () => viewer.unansweredRequests() as Request[],
     shareFile: (name, bytes) => viewer.shareFile(name, bytes) as Request,
+    addToBraindump: (name, bytes) => viewer.addToBraindump(name, bytes) as Request,
+    addNote: (text, file) => viewer.addNote(text, file) as Request,
     removeFile: (file) => viewer.removeFile(file) as Request,
     fetchFile: (file, size, sha256) => {
       const fetch = new FileFetch(file, BigInt(size), sha256);

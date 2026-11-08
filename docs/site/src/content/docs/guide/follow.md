@@ -90,6 +90,7 @@ In the web viewer, notifications are off until you turn them on: open the layout
 | See which files changed | Look in **Files**, under **Documents** or **Code**. Each file says whether the agent created, changed or only read it. Select a changed file to see all its diffs in order; select a file it only read to see where in the terminal it read it |
 | See a whole code file | Open a changed file from **Code** and switch from **Changes** to **Whole file, changes marked**: the file as it is now, with the lines changed in this session marked and where lines were removed. It works when the host shares whole files (otherwise the tab says the host shares only the changes), and for changes made since. Each file keeps the view you chose for the rest of the session; a step in the timeline always shows its change |
 | See files people shared | Look in **Files › Shared**, under **Shared with everyone**: wireframes, notes or logs the host or other viewers shared, newest first. Select one to open it; **Save a copy** saves it on your computer. A share also shows in the timeline. See below |
+| See the braindump | Look in **Files › Shared**, under **Braindump for** the agent: the notes and files people collected for the agent, each marked **Given** once the host gave it. See below |
 | Open a file for a while | A single click opens a file in a preview tab, in italics, which the next file you open replaces. Double-click the file or the tab to keep it open; scrolling or selecting text in a preview keeps it too |
 | Show or hide the files, the terminal or the timeline | Press **⌘1**, **⌘2**, **⌘3** (macOS) or **Ctrl+1**, **Ctrl+2**, **Ctrl+3** (Windows, Linux), from left to right. **⌘2** or **Ctrl+2** goes to the terminal tab, and adds it in Overview |
 | Copy | Select text in the terminal, the timeline or a diff and copy it: **⌘C** on macOS; on Windows and Linux **Ctrl+C** copies while text is selected (in your own terminal, without a selection it interrupts the agent, as in any terminal) and **Ctrl+Shift+C** always copies. Copying never sends anything to the session |
@@ -108,11 +109,16 @@ To get around, use **Jump to a prompt** in the card, or **Go to the latest promp
 
 Losing the connection and coming back does not count as joining again. In the web viewer, reloading the page does. The host never sees prompts folded.
 
-## Share a file
+## Share a file or add to the braindump
 
-When the host lets viewers share files, **Files › Shared** has **Share files**: choose files, or drop them there. Images (PNG, JPEG, GIF, WebP), Markdown and text files up to 10 MB can be shared, up to 20 MB of your files in a session. Everyone in the session sees them, with your name. You can remove your own files.
+When the host lets viewers add files and notes, **Files › Shared** has **Add files or a note**: choose files, or drop them there, and choose **Where it goes**.
 
-A file you share goes to the host's SpecDeck first, which checks it and passes it on. It never reaches the agent unless the host puts it in the session folder. When the host has not turned sharing on, the **Shared** tab says so.
+- **To the braindump** collects input for the agent: what you need, edge cases, a screenshot. Write a note, add files, or both. A note is text up to 32 KB, saved as a Markdown file with your name, such as `sanne-note-1.md`. You can **Edit** your own note in its tab until the host gives it to the agent. When the braindump is complete, the host gives it all to the agent at once, with a prompt the host writes. Each item is then marked **Given**, and the timeline shows the giving as a step.
+- **Share with everyone** is for people to look at, and never reaches the agent unless the host puts the file in the session folder.
+
+Images (PNG, JPEG, GIF, WebP), Markdown and text files up to 10 MB can be added, up to 20 MB of your files in a session. Everyone in the session sees them, with your name. You can remove your own files and notes.
+
+What you add goes to the host's SpecDeck first, which checks it and passes it on. When the host has not turned this on, the **Shared** tab says so. With a host on an older SpecDeck you can share files but there is no braindump.
 
 ## Links
 

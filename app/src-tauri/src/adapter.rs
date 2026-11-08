@@ -11,11 +11,11 @@ use specdeck_local::{Compat, Frame, Protocol, compat};
 use specdeck_session::messages::{Command, Event};
 
 /// Commands added in this release (`viewer-to-host-channel`, `files-documents-and-code`,
-/// `shared-files`, `shared-links`, `read-and-estimate`), which a session of the release before it
-/// does not know. Its snapshot has no `suggestionsPossible`, `wholeFilesPossible`,
-/// `sharedFilesPossible`, `linksPossible` or `asksPossible`, so the window offers none of them;
-/// this keeps a stray one from reaching it. Remove a release later.
-const NEW_COMMANDS: [&str; 20] = [
+/// `shared-files`, `shared-links`, `read-and-estimate`, `braindump`), which a session of the
+/// release before it does not know. Its snapshot has no `suggestionsPossible`,
+/// `wholeFilesPossible`, `sharedFilesPossible`, `linksPossible`, `asksPossible` or `braindump`, so
+/// the window offers none of them; this keeps a stray one from reaching it. Remove a release later.
+const NEW_COMMANDS: [&str; 24] = [
     "allow-requests",
     "answer-suggestion",
     "share-code",
@@ -36,6 +36,10 @@ const NEW_COMMANDS: [&str; 20] = [
     "vote-again",
     "stop-vote",
     "keep-estimate",
+    "add-to-braindump",
+    "add-note",
+    "replace-note",
+    "give-braindump",
 ];
 
 /// `command` as a session of release `peer` understands it, or None when it cannot take it.
@@ -250,6 +254,15 @@ mod tests {
         ] {
             assert!(command(previous, &asks).is_none(), "{asks:?}");
             assert!(command(Protocol::own(), &asks).is_some(), "{asks:?}");
+        }
+        for braindump in [
+            Command::AddToBraindump { id: 1, name: "a.png".into(), data: "YQ==".into() },
+            Command::AddNote { id: 2, text: "Edge cases".into() },
+            Command::ReplaceNote { id: 3, file: 1, text: "Edited".into() },
+            Command::GiveBraindump { id: 4, prompt: Some("Read these".into()) },
+        ] {
+            assert!(command(previous, &braindump).is_none(), "{braindump:?}");
+            assert!(command(Protocol::own(), &braindump).is_some(), "{braindump:?}");
         }
     }
 

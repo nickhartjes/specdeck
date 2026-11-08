@@ -266,6 +266,31 @@ pub enum Entry {
         high: Option<crate::asks::Card>,
         votes: u16,
     },
+    /// Someone added an item to the braindump (`braindump`), or a new version of their note,
+    /// replacing `replaces`. Checked like `FileShared`; windows do not draw it as a step.
+    /// Protocol version 6: never sent to older viewers, which cannot decode it.
+    BraindumpItem {
+        file: u32,
+        name: String,
+        file_kind: crate::control::FileKind,
+        media_type: String,
+        size: u64,
+        sha256: String,
+        by: u32,
+        by_label: String,
+        #[serde(default)]
+        note: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaces: Option<u32>,
+    },
+    /// The host gave the braindump to the agent: the items `files`, written to `paths` in the
+    /// session folder, from the people labelled `from`. Protocol version 6, like `BraindumpItem`.
+    BraindumpGiven {
+        round: u32,
+        files: Vec<u32>,
+        paths: Vec<String>,
+        from: Vec<String>,
+    },
     /// An OpenSpec change the agent works on; each one replaces the previous for that change.
     Plan {
         change: String,
@@ -620,10 +645,56 @@ mod tests {
     }
 
     #[test]
+    fn the_braindump_in_the_timeline() {
+        let item = Entry::BraindumpItem {
+            file: 4,
+            name: "sanne-note-1.md".into(),
+            file_kind: crate::control::FileKind::Markdown,
+            media_type: "text/markdown".into(),
+            size: 120,
+            sha256: "cd".repeat(32),
+            by: 2,
+            by_label: "Sanne".into(),
+            note: true,
+            replaces: Some(3),
+        };
+        let json = serde_json::json!({
+            "kind": "braindump-item", "file": 4, "name": "sanne-note-1.md",
+            "fileKind": "markdown", "mediaType": "text/markdown", "size": 120,
+            "sha256": "cd".repeat(32), "by": 2, "byLabel": "Sanne", "note": true, "replaces": 3
+        });
+        assert_eq!(serde_json::to_value(&item).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), item);
+        let given = Entry::BraindumpGiven {
+            round: 1,
+            files: vec![4, 5],
+            paths: vec![
+                "shared/braindump/sanne-note-1.md".into(),
+                "shared/braindump/a (2).txt".into(),
+            ],
+            from: vec!["Sanne".into(), "Mo".into()],
+        };
+        let json = serde_json::json!({
+            "kind": "braindump-given", "round": 1, "files": [4, 5],
+            "paths": ["shared/braindump/sanne-note-1.md", "shared/braindump/a (2).txt"],
+            "from": ["Sanne", "Mo"]
+        });
+        assert_eq!(serde_json::to_value(&given).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), given);
+        // Nothing in them is large, so fitting never changes them.
+        for entry in [item, given] {
+            let event =
+                TimelineEvent { output_seq: 1, at: 2, entry: entry.clone(), truncated: false };
+            assert_eq!(fit(event, MAX_EVENT_JSON_BYTES).entry, entry);
+        }
+    }
+
+    #[test]
     fn an_unknown_kind_cannot_be_decoded() {
         // Why `FileText` is held back from version 3 viewers, `Link` and `LinkRemoved` from
-        // version 4, and `ReadDone` and `Estimated` from version 5: their apps decode every event
-        // into `TimelineEvent`, and a kind they do not know fails the whole frame.
+        // version 4, and `ReadDone`, `Estimated` and the braindump's entries from version 5: their
+        // apps decode every event into `TimelineEvent`, and a kind they do not know fails the
+        // whole frame.
         let json = serde_json::json!({
             "outputSeq": 1, "at": 2, "kind": "no-such-kind", "promptId": "p"
         });

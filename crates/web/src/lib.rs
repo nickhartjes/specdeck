@@ -8,8 +8,9 @@
 use serde::Serialize;
 use specdeck_protocol::asks::{Answer, Card, ReadAnswer, ReadView, VoteView, valid_question};
 use specdeck_protocol::control::{
-    self, MAX_FILE_NAME_BYTES, Outcome, PROTOCOL_VERSION, Participant, RefusalReason, SentLink,
-    SharedFileInfo, Suggestion, ViewerMessage, ViewerRequest, valid_suggestion,
+    self, BraindumpItemInfo, MAX_FILE_NAME_BYTES, MAX_NOTE_BYTES, Outcome, PROTOCOL_VERSION,
+    Participant, RefusalReason, SentLink, SharedFileInfo, Suggestion, ViewerMessage, ViewerRequest,
+    valid_suggestion,
 };
 use specdeck_protocol::files::{self, FetchStep, Fetching, FilesReply, Uploading};
 use specdeck_protocol::invite::InviteCode;
@@ -81,6 +82,9 @@ enum Control {
     },
     Vote {
         open: Option<VoteView>,
+    },
+    Braindump {
+        items: Vec<BraindumpItemInfo>,
     },
     Retry,
 }
@@ -217,6 +221,39 @@ impl WebViewer {
         Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
     }
 
+    /// A file for the braindump: `{ id, message }`, uploaded as [`share_file`](Self::share_file)
+    /// uploads one.
+    #[wasm_bindgen(js_name = addToBraindump)]
+    pub fn add_to_braindump(&mut self, name: &str, bytes: &[u8]) -> Result<JsValue, JsError> {
+        if name.is_empty() || name.len() > MAX_FILE_NAME_BYTES {
+            return Err(JsError::new("A file name is 1 to 255 bytes."));
+        }
+        let request = ViewerRequest::AddToBraindump {
+            name: name.to_owned(),
+            size: bytes.len() as u64,
+            sha256: files::sha256(bytes),
+        };
+        let (id, message) = self.state.send_request(request);
+        Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
+    }
+
+    /// A note for the braindump, `text` as UTF-8: `{ id, message }`, uploaded as a file is.
+    /// `file` names this viewer's note it replaces, when it is an edit.
+    #[wasm_bindgen(js_name = addNote)]
+    pub fn add_note(&mut self, text: &[u8], file: Option<u32>) -> Result<JsValue, JsError> {
+        let size = text.len() as u64;
+        if size == 0 || size > MAX_NOTE_BYTES {
+            return Err(JsError::new("A note is 1 byte to 32 KB of text."));
+        }
+        let sha256 = files::sha256(text);
+        let request = match file {
+            Some(file) => ViewerRequest::ReplaceNote { file, size, sha256 },
+            None => ViewerRequest::AddNote { size, sha256 },
+        };
+        let (id, message) = self.state.send_request(request);
+        Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
+    }
+
     /// A link for the host to share: `{ id, message }`, as [`suggest`](Self::suggest). The page
     /// checks the link with the browser's own URL parser first (`app/ui/src/model/links.ts`),
     /// which follows the same standard as the host's check; `check_link` is left out of the
@@ -305,7 +342,7 @@ impl WebViewer {
 
     /// What a message on the control channel means: `{ type: "welcome" | "participants" |
     /// "status" | "refused" | "ended" | "allowed" | "reply" | "suggestions" | "shared" |
-    /// "links-allowed" | "links" | "read-request" | "vote" | "retry", ... }`.
+    /// "links-allowed" | "links" | "read-request" | "vote" | "braindump" | "retry", ... }`.
     #[wasm_bindgen(js_name = onControl)]
     pub fn on_control(&mut self, bytes: &[u8]) -> JsValue {
         to_js(&match self.state.on_control(bytes) {
@@ -331,6 +368,7 @@ impl WebViewer {
             ControlUpdate::Links(mine) => Control::Links { mine },
             ControlUpdate::ReadRequest(open) => Control::ReadRequest { open },
             ControlUpdate::Vote(open) => Control::Vote { open },
+            ControlUpdate::Braindump(items) => Control::Braindump { items },
             ControlUpdate::Retry => Control::Retry,
         })
     }

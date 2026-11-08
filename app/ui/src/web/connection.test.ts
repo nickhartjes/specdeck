@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ViewEvent } from '../api/types';
+import type { BraindumpItemInfo, SharedFileInfo, ViewEvent } from '../api/types';
 import { Connection, refusalReason, type ControlUpdate, type Platform, type ViewerCore } from './connection';
 
 /** A WebSocket to the sharing service, driven by the test. */
@@ -129,6 +129,8 @@ function fakeCore(): FakeCore {
     unansweredRequests: () => core.unanswered,
     unanswered: [],
     shareFile: (name) => ({ id: 50 + name.length, message: new Uint8Array([3, 50 + name.length]) }),
+    addToBraindump: (name) => ({ id: 60 + name.length, message: new Uint8Array([3, 60 + name.length]) }),
+    addNote: (text, file) => ({ id: 70 + (file ?? 0), message: new Uint8Array([3, 70 + (file ?? 0), text.length]) }),
     removeFile: (file) => ({ id: 90, message: new Uint8Array([3, 90, file]) }),
     // Fetches: [5, file] asks; a reply [1] is a chunk, [2] the end, [3] gone.
     fetchFile: (file) => ({
@@ -292,6 +294,45 @@ describe('web viewer connection', () => {
     await expect(shared).resolves.toBe('Received');
     // Files report back on their own: the suggestions' latest request stays as it was.
     expect(events.some((event) => event.type === 'request-sent')).toBe(false);
+  });
+
+  it('adds notes and files to the braindump on the files channel and fetches its items', async () => {
+    const core = fakeCore();
+    const info: SharedFileInfo = { file: 4, name: 'anna-note-1.md', kind: 'markdown', mediaType: 'text/markdown', size: 1, sha256: [], by: 1, byLabel: 'anna', atMs: 1 };
+    const items: BraindumpItemInfo[] = [{ info, note: true, given: null }];
+    core.controls.push(
+      welcome,
+      { type: 'braindump', items },
+      { type: 'reply', id: 70, outcome: { Ready: { upload: 8 } } },
+      { type: 'reply', id: 74, outcome: 'AlreadyGiven' },
+    );
+    const { sockets, peers, events, connection } = setup(core);
+    const { peer } = await reachHost(sockets, peers);
+    const control = peer.channel('control');
+    const files = peer.channel('files');
+    control.open();
+    files.open();
+    control.receive([0]);
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'braindump', items });
+
+    // A braindump item is fetched like a shared file.
+    const opened = connection.openFile(4);
+    expect(files.sent).toEqual([new Uint8Array([5, 4])]);
+    files.receive([2]);
+    expect(new Uint8Array(await opened)).toEqual(new Uint8Array([42]));
+
+    const note = connection.addNote('Say\r\nreconnecting');
+    expect(control.sent.at(-1)).toEqual(new Uint8Array([3, 70, 'Say\nreconnecting'.length]));
+    control.receive([0]);
+    expect(files.sent.at(-1)).toEqual(new Uint8Array([6, 8]));
+    files.receive([4]);
+    await expect(note).resolves.toBe('Received');
+    const edit = connection.addNote('Too late', 4);
+    control.receive([0]);
+    await expect(edit).resolves.toBe('AlreadyGiven');
+    await expect(connection.addNote('x'.repeat(32 * 1024 + 1))).resolves.toBe('TooLarge');
+    await expect(connection.addNote('')).resolves.toBe('TooLarge');
   });
 
   it('sends links to the host and passes on what became of them', async () => {

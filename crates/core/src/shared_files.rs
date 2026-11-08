@@ -1,6 +1,7 @@
 //! Files shared with everyone in a session (`shared-files` design decisions 5 and 7): what may be
 //! shared, decided from the content; the session's store, held in memory with its limits; and
-//! putting a shared file into the session folder for the agent.
+//! putting a shared file into the session folder for the agent. The braindump's items live in
+//! the same store, marked as such (`braindump` design decision 1).
 //!
 //! The store only ever holds bytes a person chose in a window, the host's or a viewer's. Nothing
 //! here reads a path to share it.
@@ -11,7 +12,9 @@ use std::io::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
-use specdeck_protocol::control::{FileKind, MAX_FILE_NAME_BYTES, SharedFileInfo};
+use specdeck_protocol::control::{
+    BraindumpItemInfo, FileKind, MAX_FILE_NAME_BYTES, MAX_NOTE_BYTES, SharedFileInfo,
+};
 use specdeck_protocol::files::{MAX_SHARED_FILE_BYTES, sha256};
 
 use crate::session_folder::SessionFolder;
@@ -28,6 +31,9 @@ pub const MAX_FILES: usize = 200;
 /// The folder in the session folder that shared files are put into.
 pub const SHARED_FOLDER: &str = "shared";
 
+/// The folder in [`SHARED_FOLDER`] that giving the braindump writes into.
+pub const BRAINDUMP_FOLDER: &str = "braindump";
+
 /// Why a file is not shared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
@@ -41,6 +47,8 @@ pub enum Refusal {
     Gone,
     /// The host does not let viewers share files.
     Off,
+    /// The note was given to the agent, so it can no longer be edited.
+    AlreadyGiven,
 }
 
 impl Refusal {
@@ -52,6 +60,7 @@ impl Refusal {
             Refusal::NotAllowedType => "type",
             Refusal::Gone => "gone",
             Refusal::Off => "off",
+            Refusal::AlreadyGiven => "given",
         }
     }
 }
@@ -96,6 +105,33 @@ pub fn check(name: &str, bytes: &[u8]) -> Result<Checked, Refusal> {
             media_type: "text/plain",
         }),
     }
+}
+
+/// Decides whether `bytes` may be a note: Markdown text of 1 to [`MAX_NOTE_BYTES`] bytes, not
+/// blank, valid UTF-8 without NUL bytes, whatever its first bytes look like.
+pub fn check_note(bytes: &[u8]) -> Result<(), Refusal> {
+    if bytes.len() as u64 > MAX_NOTE_BYTES {
+        return Err(Refusal::TooLarge);
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) if !text.trim().is_empty() && !text.contains('\0') => Ok(()),
+        _ => Err(Refusal::NotAllowedType),
+    }
+}
+
+/// The name of an author's `number`th note: `sanne-note-1.md`, or `note-1.md` when nothing is
+/// left of their label.
+pub fn note_name(label: &str, number: u32) -> String {
+    let label = clean_name(&label.replace(['/', '\\'], " "));
+    let words: Vec<String> = label.split_whitespace().map(str::to_lowercase).collect();
+    let mut stem = words.join("-");
+    // Room for "-note-<n>.md" within the name limit.
+    let suffix = format!("note-{number}.md");
+    let room = MAX_FILE_NAME_BYTES - suffix.len() - 1;
+    if stem.len() > room {
+        stem.truncate(stem.floor_char_boundary(room));
+    }
+    if stem.is_empty() { suffix } else { format!("{stem}-{suffix}") }
 }
 
 /// The image type of `bytes` and its extensions, the first one preferred.
@@ -176,11 +212,53 @@ impl Sharer {
     }
 }
 
+/// Where a file belongs: shared with everyone, or in the braindump for the agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Group {
+    Everyone,
+    Braindump,
+}
+
 #[derive(Clone, Debug)]
 pub struct SharedFile {
     pub info: SharedFileInfo,
     pub sharer: Sharer,
     pub bytes: Arc<[u8]>,
+    pub group: Group,
+    /// A note in the braindump, which its author can edit until it is given.
+    pub note: bool,
+    /// The round in which the host gave it to the agent.
+    pub given: Option<u32>,
+}
+
+impl SharedFile {
+    pub fn braindump_info(&self) -> BraindumpItemInfo {
+        BraindumpItemInfo { info: self.info.clone(), note: self.note, given: self.given }
+    }
+}
+
+/// What an upload becomes once it has arrived.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    /// A file shared with everyone.
+    Share,
+    /// A file for the braindump.
+    Braindump,
+    /// A note for the braindump.
+    Note,
+    /// A new version of the note `file`.
+    ReplaceNote { file: u32 },
+}
+
+impl Purpose {
+    /// Where the upload goes, for diagnostics.
+    pub fn group_name(self) -> &'static str {
+        match self {
+            Purpose::Share => "everyone",
+            Purpose::Braindump => "braindump",
+            Purpose::Note | Purpose::ReplaceNote { .. } => "note",
+        }
+    }
 }
 
 /// Room held for an upload that has not arrived yet.
@@ -190,6 +268,7 @@ pub struct Reservation {
     pub name: String,
     pub size: u64,
     pub sha256: [u8; 32],
+    pub purpose: Purpose,
 }
 
 /// The session's shared files, in the order they were shared.
@@ -200,6 +279,10 @@ pub struct Store {
     /// Ids are never reused, so a removed file's id never names another file.
     next_file: u32,
     next_upload: u32,
+    /// How many notes each person has written, for naming the next one.
+    notes: HashMap<Sharer, u32>,
+    /// The number of the last time the braindump was given.
+    rounds: u32,
 }
 
 impl Store {
@@ -207,8 +290,32 @@ impl Store {
         &self.files
     }
 
+    /// The files shared with everyone, without the braindump.
     pub fn list(&self) -> Vec<SharedFileInfo> {
-        self.files.iter().map(|file| file.info.clone()).collect()
+        self.files.iter().filter(|f| f.group == Group::Everyone).map(|f| f.info.clone()).collect()
+    }
+
+    /// The braindump, oldest first.
+    pub fn braindump(&self) -> Vec<BraindumpItemInfo> {
+        self.files
+            .iter()
+            .filter(|f| f.group == Group::Braindump)
+            .map(SharedFile::braindump_info)
+            .collect()
+    }
+
+    /// The braindump's items not given yet, oldest first.
+    pub fn not_given(&self) -> Vec<&SharedFile> {
+        self.files.iter().filter(|f| f.group == Group::Braindump && f.given.is_none()).collect()
+    }
+
+    /// Marks `files` as given in a new round, and returns its number.
+    pub fn mark_given(&mut self, files: &[u32]) -> u32 {
+        self.rounds += 1;
+        for file in self.files.iter_mut().filter(|f| files.contains(&f.info.file)) {
+            file.given = Some(self.rounds);
+        }
+        self.rounds
     }
 
     pub fn get(&self, file: u32) -> Option<&SharedFile> {
@@ -229,23 +336,45 @@ impl Store {
 
     /// Whether `sharer` may share `size` more bytes now.
     pub fn room(&self, sharer: Sharer, size: u64) -> Result<(), Refusal> {
+        self.room_replacing(sharer, size, None)
+    }
+
+    /// Whether `sharer` may hold `size` more bytes now, in place of the file `replacing` when
+    /// there is one: its room is counted as free, and the number of files does not grow.
+    fn room_replacing(
+        &self,
+        sharer: Sharer,
+        size: u64,
+        replacing: Option<u32>,
+    ) -> Result<(), Refusal> {
         if size > MAX_SHARED_FILE_BYTES {
             return Err(Refusal::TooLarge);
         }
         if size == 0 {
             return Err(Refusal::NotAllowedType);
         }
-        if self.files.len() + self.reserved.len() >= MAX_FILES
-            || self.used(None) + size > MAX_SESSION_BYTES
+        let freed = replacing.and_then(|file| self.get(file)).map_or(0, |f| f.info.size);
+        let count = self.files.len() + self.reserved.len();
+        if (replacing.is_none() && count >= MAX_FILES)
+            || self.used(None) + size > MAX_SESSION_BYTES + freed
         {
             return Err(Refusal::Full);
         }
         if let Sharer::Viewer(viewer) = sharer
-            && self.used(Some(viewer)) + size > MAX_VIEWER_BYTES
+            && self.used(Some(viewer)) + size > MAX_VIEWER_BYTES + freed
         {
             return Err(Refusal::Full);
         }
         Ok(())
+    }
+
+    /// Whether `sharer` may replace their note `file`: their own, a note, and not given.
+    fn replaceable(&self, file: u32, sharer: Sharer) -> Result<&SharedFile, Refusal> {
+        let note = self.get(file).filter(|f| f.sharer == sharer && f.note).ok_or(Refusal::Gone)?;
+        if note.given.is_some() {
+            return Err(Refusal::AlreadyGiven);
+        }
+        Ok(note)
     }
 
     /// Holds room for a viewer's upload; the id it returns names the upload on `files`.
@@ -255,11 +384,20 @@ impl Store {
         name: String,
         size: u64,
         sha256: [u8; 32],
+        purpose: Purpose,
     ) -> Result<u32, Refusal> {
-        self.room(Sharer::Viewer(viewer), size)?;
+        let sharer = Sharer::Viewer(viewer);
+        let replacing = match purpose {
+            Purpose::ReplaceNote { file } => Some(self.replaceable(file, sharer)?.info.file),
+            _ => None,
+        };
+        if matches!(purpose, Purpose::Note | Purpose::ReplaceNote { .. }) && size > MAX_NOTE_BYTES {
+            return Err(Refusal::TooLarge);
+        }
+        self.room_replacing(sharer, size, replacing)?;
         self.next_upload += 1;
         let upload = self.next_upload;
-        self.reserved.insert(upload, Reservation { viewer, name, size, sha256 });
+        self.reserved.insert(upload, Reservation { viewer, name, size, sha256, purpose });
         Ok(upload)
     }
 
@@ -288,8 +426,78 @@ impl Store {
         bytes: Vec<u8>,
         at_ms: u64,
     ) -> Result<SharedFileInfo, Refusal> {
+        self.add_to(Group::Everyone, sharer, by_label, name, bytes, at_ms)
+    }
+
+    /// Adds `bytes`, checked here, to `group` as `sharer`.
+    pub fn add_to(
+        &mut self,
+        group: Group,
+        sharer: Sharer,
+        by_label: &str,
+        name: &str,
+        bytes: Vec<u8>,
+        at_ms: u64,
+    ) -> Result<SharedFileInfo, Refusal> {
         let checked = check(name, &bytes)?;
         self.room(sharer, bytes.len() as u64)?;
+        Ok(self.push(group, false, sharer, by_label, checked, bytes, at_ms))
+    }
+
+    /// Adds a note to the braindump as `sharer`, named after them.
+    pub fn add_note(
+        &mut self,
+        sharer: Sharer,
+        by_label: &str,
+        bytes: Vec<u8>,
+        at_ms: u64,
+    ) -> Result<SharedFileInfo, Refusal> {
+        check_note(&bytes)?;
+        self.room(sharer, bytes.len() as u64)?;
+        let number = self.notes.entry(sharer).or_default();
+        *number += 1;
+        let name = note_name(by_label, *number);
+        let checked = Checked { name, kind: FileKind::Markdown, media_type: "text/markdown" };
+        Ok(self.push(Group::Braindump, true, sharer, by_label, checked, bytes, at_ms))
+    }
+
+    /// Replaces `sharer`'s note `file`, not yet given, with `bytes`: the new version gets a new
+    /// id and keeps the name and author. Returns it and the old one, which is removed.
+    pub fn replace_note(
+        &mut self,
+        file: u32,
+        sharer: Sharer,
+        bytes: Vec<u8>,
+        at_ms: u64,
+    ) -> Result<(SharedFileInfo, SharedFileInfo), Refusal> {
+        let old = self.replaceable(file, sharer)?.info.clone();
+        check_note(&bytes)?;
+        self.room_replacing(sharer, bytes.len() as u64, Some(file))?;
+        let checked = Checked {
+            name: old.name.clone(),
+            kind: FileKind::Markdown,
+            media_type: "text/markdown",
+        };
+        let at = self.files.iter().position(|f| f.info.file == file).ok_or(Refusal::Gone)?;
+        self.files.remove(at);
+        let new = self.push(Group::Braindump, true, sharer, &old.by_label, checked, bytes, at_ms);
+        // The new version takes the old one's place in the list.
+        let last = self.files.pop().expect("just pushed");
+        self.files.insert(at, last);
+        Ok((new, old))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push(
+        &mut self,
+        group: Group,
+        note: bool,
+        sharer: Sharer,
+        by_label: &str,
+        checked: Checked,
+        bytes: Vec<u8>,
+        at_ms: u64,
+    ) -> SharedFileInfo {
         self.next_file += 1;
         let info = SharedFileInfo {
             file: self.next_file,
@@ -302,8 +510,16 @@ impl Store {
             by_label: by_label.to_owned(),
             at_ms,
         };
-        self.files.push(SharedFile { info: info.clone(), sharer, bytes: bytes.into() });
-        Ok(info)
+        let file = SharedFile {
+            info: info.clone(),
+            sharer,
+            bytes: bytes.into(),
+            group,
+            note,
+            given: None,
+        };
+        self.files.push(file);
+        info
     }
 
     /// Removes `file` for the host (`asker` `None`) or for the viewer who shared it.
@@ -327,32 +543,44 @@ pub enum PutError {
     OutsideFolder,
     #[error("shared/ in the session folder is not a folder")]
     NotAFolder,
-    #[error("no free name in shared/")]
+    #[error("no free name in that folder")]
     NoFreeName,
     #[error("could not write the file: {0}")]
     Io(#[from] std::io::Error),
 }
 
-/// Writes `bytes` into `shared/` in the session folder under `name`, or the first free name with
-/// a number, and returns the path relative to the folder. Never replaces a file, and never
-/// follows a symlink at the name: the file is created new or not at all.
+/// Writes `bytes` into `shared/` in the session folder, or into its subfolder `sub` when that
+/// is not empty, under `name` or the first free name with a number, and returns the path
+/// relative to the folder. Never replaces a file, and never follows a symlink at the name: the
+/// file is created new or not at all.
 pub fn put_in_folder(
     folder: &SessionFolder,
     root: &Path,
+    sub: &str,
     name: &str,
     bytes: &[u8],
 ) -> Result<String, PutError> {
-    let shared = root.join(SHARED_FOLDER);
-    // Checked before creating it, so a link elsewhere is never followed to make a folder there.
-    if !folder.contains(&shared.to_string_lossy()) {
-        return Err(PutError::OutsideFolder);
-    }
-    std::fs::create_dir_all(&shared)?;
-    if !shared.is_dir() {
-        return Err(PutError::NotAFolder);
-    }
-    if !folder.contains(&shared.to_string_lossy()) {
-        return Err(PutError::OutsideFolder);
+    let mut shared = root.join(SHARED_FOLDER);
+    let mut relative = SHARED_FOLDER.to_owned();
+    for dir in std::iter::once(None).chain((!sub.is_empty()).then_some(Some(sub))) {
+        if let Some(dir) = dir {
+            shared.push(dir);
+            relative = format!("{relative}/{dir}");
+        }
+        // Checked before creating it, so a link elsewhere is never followed to make a folder
+        // there, and again after.
+        if !folder.contains(&shared.to_string_lossy()) {
+            return Err(PutError::OutsideFolder);
+        }
+        if !shared.exists() {
+            std::fs::create_dir(&shared)?;
+        }
+        if !shared.is_dir() {
+            return Err(PutError::NotAFolder);
+        }
+        if !folder.contains(&shared.to_string_lossy()) {
+            return Err(PutError::OutsideFolder);
+        }
     }
     let name = match clean_name(name) {
         name if name.is_empty() => "file".to_owned(),
@@ -371,7 +599,7 @@ pub fn put_in_folder(
         match OpenOptions::new().write(true).create_new(true).open(shared.join(&candidate)) {
             Ok(mut file) => {
                 file.write_all(bytes)?;
-                return Ok(format!("{SHARED_FOLDER}/{candidate}"));
+                return Ok(format!("{relative}/{candidate}"));
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),
@@ -463,11 +691,14 @@ mod tests {
     fn reservations_count_until_released() {
         let mut store = Store::default();
         let mb = |n: u64| n * 1024 * 1024;
-        let upload = store.reserve(1, "a.log".into(), mb(9), [0; 32]).unwrap();
-        store.reserve(1, "b.log".into(), mb(9), [0; 32]).unwrap();
-        assert_eq!(store.reserve(1, "c.log".into(), mb(3), [0; 32]), Err(Refusal::Full));
+        let upload = store.reserve(1, "a.log".into(), mb(9), [0; 32], Purpose::Share).unwrap();
+        store.reserve(1, "b.log".into(), mb(9), [0; 32], Purpose::Share).unwrap();
+        assert_eq!(
+            store.reserve(1, "c.log".into(), mb(3), [0; 32], Purpose::Share),
+            Err(Refusal::Full)
+        );
         assert_eq!(store.release(upload).map(|r| r.viewer), Some(1));
-        assert!(store.reserve(1, "c.log".into(), mb(3), [0; 32]).is_ok());
+        assert!(store.reserve(1, "c.log".into(), mb(3), [0; 32], Purpose::Share).is_ok());
         assert_eq!(store.release_viewer(1).len(), 2);
         assert!(store.reserved.is_empty());
     }
@@ -519,20 +750,20 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let folder = session(root.path());
         assert_eq!(
-            put_in_folder(&folder, root.path(), "wireframe.png", PNG).unwrap(),
+            put_in_folder(&folder, root.path(), "", "wireframe.png", PNG).unwrap(),
             "shared/wireframe.png"
         );
         assert_eq!(std::fs::read(root.path().join("shared/wireframe.png")).unwrap(), PNG);
         assert_eq!(
-            put_in_folder(&folder, root.path(), "wireframe.png", b"2").unwrap(),
+            put_in_folder(&folder, root.path(), "", "wireframe.png", b"2").unwrap(),
             "shared/wireframe (2).png"
         );
         assert_eq!(
-            put_in_folder(&folder, root.path(), "Makefile", b"a").unwrap(),
+            put_in_folder(&folder, root.path(), "", "Makefile", b"a").unwrap(),
             "shared/Makefile"
         );
         assert_eq!(
-            put_in_folder(&folder, root.path(), "Makefile", b"b").unwrap(),
+            put_in_folder(&folder, root.path(), "", "Makefile", b"b").unwrap(),
             "shared/Makefile (2)"
         );
         assert_eq!(
@@ -550,7 +781,7 @@ mod tests {
         let folder = session(root.path());
         std::os::unix::fs::symlink(elsewhere.path(), root.path().join("shared")).unwrap();
         assert!(matches!(
-            put_in_folder(&folder, root.path(), "a.md", b"a"),
+            put_in_folder(&folder, root.path(), "", "a.md", b"a"),
             Err(PutError::OutsideFolder)
         ));
         assert!(std::fs::read_dir(elsewhere.path()).unwrap().next().is_none());
@@ -561,15 +792,169 @@ mod tests {
         std::fs::create_dir(root.path().join("shared")).unwrap();
         let target = elsewhere.path().join("target");
         std::os::unix::fs::symlink(&target, root.path().join("shared/a.md")).unwrap();
-        assert_eq!(put_in_folder(&folder, root.path(), "a.md", b"a").unwrap(), "shared/a (2).md");
+        assert_eq!(
+            put_in_folder(&folder, root.path(), "", "a.md", b"a").unwrap(),
+            "shared/a (2).md"
+        );
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn braindump_items_share_the_room_and_stay_out_of_the_list() {
+        let mut store = Store::default();
+        let mb = |n: u64| vec![b'x'; (n * 1024 * 1024) as usize];
+        store.add(Sharer::Viewer(1), "Mo", "a.log", mb(10), 0).unwrap();
+        store.add(Sharer::Viewer(1), "Mo", "a2.log", mb(5), 0).unwrap();
+        let item =
+            store.add_to(Group::Braindump, Sharer::Viewer(1), "Mo", "b.log", mb(4), 0).unwrap();
+        // Shared files and the braindump count toward one limit per viewer.
+        assert_eq!(
+            store.add_to(Group::Braindump, Sharer::Viewer(1), "Mo", "c.png", mb(2), 0),
+            Err(Refusal::Full)
+        );
+        assert_eq!(store.list().len(), 2, "the braindump is not in Files");
+        assert_eq!(store.braindump().iter().map(|i| i.info.file).collect::<Vec<_>>(), [item.file]);
+        // Removing a braindump item frees its room.
+        store.remove(item.file, Some(1)).unwrap();
+        assert!(store.room(Sharer::Viewer(1), 5 * 1024 * 1024).is_ok());
+        assert!(store.braindump().is_empty());
+    }
+
+    #[test]
+    fn notes_are_named_after_their_author() {
+        assert_eq!(note_name("Sanne", 1), "sanne-note-1.md");
+        assert_eq!(note_name("Mo de Vries (2)", 3), "mo-de-vries-(2)-note-3.md");
+        assert_eq!(note_name("ops/Mo", 1), "ops-mo-note-1.md");
+        assert_eq!(note_name("..", 2), "note-2.md");
+        assert_eq!(note_name("", 1), "note-1.md");
+        assert!(note_name(&"é".repeat(200), 12).len() <= MAX_FILE_NAME_BYTES);
+        let mut store = Store::default();
+        let first =
+            store.add_note(Sharer::Viewer(2), "Sanne", b"Say *reconnecting*".to_vec(), 0).unwrap();
+        let second = store.add_note(Sharer::Viewer(2), "Sanne", b"And more".to_vec(), 0).unwrap();
+        let host = store.add_note(Sharer::Host, "Nick", b"Mine".to_vec(), 0).unwrap();
+        assert_eq!(
+            [first.name.as_str(), second.name.as_str(), host.name.as_str()],
+            ["sanne-note-1.md", "sanne-note-2.md", "nick-note-1.md"]
+        );
+        assert_eq!((first.kind, first.media_type.as_str()), (FileKind::Markdown, "text/markdown"));
+        assert!(store.braindump().iter().all(|item| item.note && item.given.is_none()));
+    }
+
+    #[test]
+    fn notes_must_be_text_and_small() {
+        assert_eq!(check_note(b"ok"), Ok(()));
+        assert_eq!(check_note(b"GIF89a is text here"), Ok(()));
+        assert_eq!(check_note(b"nul\0"), Err(Refusal::NotAllowedType));
+        assert_eq!(check_note(&[0xC3, 0x28]), Err(Refusal::NotAllowedType));
+        assert_eq!(check_note(b"  \n\t"), Err(Refusal::NotAllowedType));
+        assert_eq!(check_note(&vec![b'x'; MAX_NOTE_BYTES as usize]), Ok(()));
+        assert_eq!(check_note(&vec![b'x'; MAX_NOTE_BYTES as usize + 1]), Err(Refusal::TooLarge));
+        let mut store = Store::default();
+        assert_eq!(
+            store.add_note(Sharer::Viewer(1), "Mo", b"a\0b".to_vec(), 0),
+            Err(Refusal::NotAllowedType)
+        );
+        assert_eq!(
+            store.reserve(1, String::new(), MAX_NOTE_BYTES + 1, [0; 32], Purpose::Note),
+            Err(Refusal::TooLarge)
+        );
+    }
+
+    #[test]
+    fn only_the_author_replaces_a_note_until_it_is_given() {
+        let mut store = Store::default();
+        let file = store.add(Sharer::Viewer(1), "Mo", "a.md", b"# a".to_vec(), 0).unwrap().file;
+        let mine = store.add_note(Sharer::Viewer(1), "Mo", b"one".to_vec(), 0).unwrap().file;
+        let later = store.add_note(Sharer::Viewer(1), "Mo", b"two".to_vec(), 0).unwrap().file;
+        let theirs = store.add_note(Sharer::Viewer(2), "Sanne", b"three".to_vec(), 0).unwrap().file;
+        for (target, asker) in [(theirs, 1), (file, 1), (99, 1)] {
+            assert_eq!(
+                store.replace_note(target, Sharer::Viewer(asker), b"x".to_vec(), 1).err(),
+                Some(Refusal::Gone)
+            );
+        }
+        assert_eq!(
+            store.reserve(1, String::new(), 3, [0; 32], Purpose::ReplaceNote { file: theirs }),
+            Err(Refusal::Gone)
+        );
+        let (new, old) =
+            store.replace_note(mine, Sharer::Viewer(1), b"one, edited".to_vec(), 5).unwrap();
+        assert_eq!(old.file, mine);
+        assert!(new.file > theirs, "a new id");
+        assert_eq!((new.name.as_str(), new.by, new.at_ms), ("mo-note-1.md", 1, 5));
+        assert!(store.get(mine).is_none());
+        let order: Vec<u32> = store.braindump().iter().map(|i| i.info.file).collect();
+        assert_eq!(order, [new.file, later, theirs], "in the old one's place");
+        // Once given, it can't be edited, and a second round has nothing left.
+        let round = store.mark_given(&[new.file, later, theirs]);
+        assert_eq!(round, 1);
+        assert_eq!(
+            store.replace_note(new.file, Sharer::Viewer(1), b"x".to_vec(), 6).err(),
+            Some(Refusal::AlreadyGiven)
+        );
+        assert_eq!(
+            store.reserve(1, String::new(), 1, [0; 32], Purpose::ReplaceNote { file: new.file }),
+            Err(Refusal::AlreadyGiven)
+        );
+        assert!(store.not_given().is_empty());
+        let fresh = store.add_note(Sharer::Viewer(2), "Sanne", b"four".to_vec(), 7).unwrap().file;
+        assert_eq!(store.not_given().iter().map(|f| f.info.file).collect::<Vec<_>>(), [fresh]);
+        assert_eq!(store.mark_given(&[fresh]), 2);
+    }
+
+    #[test]
+    fn replacing_a_note_counts_only_the_difference() {
+        let mut store = Store::default();
+        store.add(Sharer::Viewer(1), "Mo", "a.log", vec![b'x'; 10 * 1024 * 1024], 0).unwrap();
+        store.add(Sharer::Viewer(1), "Mo", "b.log", vec![b'x'; 10 * 1024 * 1024 - 100], 0).unwrap();
+        let note = store.add_note(Sharer::Viewer(1), "Mo", vec![b'n'; 100], 0).unwrap().file;
+        // At the viewer's limit, a note of the same size still fits in place of the old one.
+        let upload =
+            store.reserve(1, String::new(), 100, [0; 32], Purpose::ReplaceNote { file: note });
+        // The upload's room is freed when it arrives, before the note is replaced.
+        store.release(upload.unwrap());
+        assert!(store.replace_note(note, Sharer::Viewer(1), vec![b'm'; 100], 1).is_ok());
+    }
+
+    #[test]
+    fn put_in_folder_writes_into_a_subfolder() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = session(root.path());
+        assert_eq!(
+            put_in_folder(&folder, root.path(), BRAINDUMP_FOLDER, "edge-cases.txt", b"a").unwrap(),
+            "shared/braindump/edge-cases.txt"
+        );
+        assert_eq!(
+            put_in_folder(&folder, root.path(), BRAINDUMP_FOLDER, "edge-cases.txt", b"b").unwrap(),
+            "shared/braindump/edge-cases (2).txt"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("shared/braindump/edge-cases.txt")).unwrap(),
+            b"a"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn put_in_folder_never_follows_a_subfolder_link_out() {
+        let root = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let folder = session(root.path());
+        std::fs::create_dir(root.path().join("shared")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.path().join("shared/braindump")).unwrap();
+        assert!(matches!(
+            put_in_folder(&folder, root.path(), BRAINDUMP_FOLDER, "a.md", b"a"),
+            Err(PutError::OutsideFolder)
+        ));
+        assert!(std::fs::read_dir(elsewhere.path()).unwrap().next().is_none());
     }
 
     #[test]
     fn put_in_folder_refuses_a_file_named_shared() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("shared"), b"x").unwrap();
-        let result = put_in_folder(&session(root.path()), root.path(), "a.md", b"a");
+        let result = put_in_folder(&session(root.path()), root.path(), "", "a.md", b"a");
         assert!(matches!(result, Err(PutError::Io(_) | PutError::NotAFolder)));
     }
 }

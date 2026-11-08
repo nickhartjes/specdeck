@@ -18,3 +18,23 @@
 .share-step svg { width: 14px; height: 14px; flex: none; }
 .share-step .time { color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .share-step .muted { color: var(--text-faint); }
+
+/* The braindump (`braindump`): its group in the Shared tab, the dialogs, and its step in the timeline. */
+/* In a narrow panel the Give button goes under the title, and its text wraps, rather than widening the tab. */
+.shared-tab .group-head { display: flex; flex-wrap: wrap; align-items: center; padding-right: 14px; }
+.shared-tab .group-head .group-title { flex: 1 0 auto; }
+.shared-tab .group-head .btn { margin: 10px 0 0 14px; max-width: calc(100% - 14px); height: auto; min-height: 30px; white-space: normal; text-align: left; }
+.shared-tab .files .given { display: inline-flex; align-items: center; gap: 3px; color: var(--text-faint); font-size: 11.5px; white-space: nowrap; }
+.shared-tab .files .given svg { width: 12px; height: 12px; }
+.add-form .drop { display: grid; gap: 6px; justify-items: start; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+.add-form .drop.drop-over { border-color: var(--accent); background: var(--accent-soft); }
+.add-form textarea, .give-form textarea { resize: vertical; font: inherit; }
+.add-form .chosen, .give-form .chosen { margin: 4px 0; padding-left: 18px; font-size: 12.5px; overflow-wrap: anywhere; }
+.note-editor { display: grid; grid-template-rows: 1fr auto; gap: 8px; padding: 12px; min-height: 0; }
+.note-editor textarea { min-height: 240px; resize: none; font: inherit; }
+.note-editor .actions { display: flex; align-items: center; gap: 8px; }
+.note-editor .spacer { flex: 1; }
+.give-step { display: block; }
+.give-step summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.give-step summary::-webkit-details-marker { display: none; }
+.give-step ul { margin: 6px 0 0 22px; padding: 0; list-style: none; display: grid; gap: 2px; }
