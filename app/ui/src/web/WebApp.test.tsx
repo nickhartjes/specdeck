@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setDefaultSchedule, type Schedule } from '../model/viewQueue';
 import { renderWith } from '../test/helpers';
 import { TerminalViewStub } from '../test/terminal-stub';
 import { webBridge } from './bridge';
@@ -10,6 +11,15 @@ import { choose } from '../model/layout';
 import { appLink, takeHashCode, WebApp, webPage } from './WebApp';
 
 vi.mock('../terminal/TerminalView', () => ({ TerminalView: TerminalViewStub }));
+// The connection the web bridge opens, by what it hands the connection; no other test opens one.
+const opened = vi.hoisted(() => ({ options: null as { onEvent: (event: unknown) => void } | null }));
+vi.mock('./connection', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./connection')>()),
+  Connection: vi.fn(function Connection(options: { onEvent: (event: unknown) => void }) {
+    opened.options = options;
+    return { leave: () => {} };
+  }),
+}));
 
 const SERVICE = 'wss://specdeck.example.com/signal';
 
@@ -187,5 +197,42 @@ describe('joining late in a browser', () => {
     expect(screen.getByRole('article', { name: 'Prompt 1' })).toHaveClass('folded');
     expect(screen.getByRole('article', { name: 'Prompt 2' })).toHaveClass('folded');
     expect(screen.getByRole('article', { name: 'Prompt 3' })).not.toHaveClass('folded');
+  });
+});
+
+describe('replaying the history in a browser', () => {
+  afterEach(() =>
+    setDefaultSchedule((flush) => {
+      flush();
+      return () => {};
+    }),
+  );
+
+  it('applies events that arrive one per message in order, after one frame', async () => {
+    const frames: (() => void)[] = [];
+    const manual: Schedule = (flush) => {
+      frames.push(flush);
+      return () => void frames.splice(frames.indexOf(flush), 1);
+    };
+    setDefaultSchedule(manual);
+    const { joinSession } = setup('7K2M-9QXH-4TPA');
+    // Through the web bridge itself, as a page does.
+    joinSession.mockRestore();
+    await userEvent.type(await screen.findByLabelText('Your name'), 'anna');
+    await userEvent.click(screen.getByRole('button', { name: 'Watch in this browser' }));
+    await waitFor(() => expect(opened.options).not.toBeNull());
+    const message = (event: ViewEvent) => act(() => opened.options!.onEvent(event));
+    message({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+    message({ type: 'status', status: 'waiting' });
+    const now = Date.now();
+    for (let n = 0; n < 50; n++) {
+      message({ type: 'timeline', event: { outputSeq: n * 2, at: now + n * 2, kind: 'prompt', promptId: `p${n}`, text: `Prompt ${n}` } });
+      message({ type: 'timeline', event: { outputSeq: n * 2 + 1, at: now + n * 2 + 1, kind: 'response', promptId: `p${n}`, text: `Done with ${n}.` } });
+    }
+    expect(screen.queryByRole('article', { name: 'Prompt 1' })).not.toBeInTheDocument();
+    expect(frames).toHaveLength(1);
+    act(() => frames.splice(0).forEach((flush) => flush()));
+    const turns = [...document.querySelectorAll('.turn')].map((turn) => turn.getAttribute('aria-label'));
+    expect(turns).toEqual(Array.from({ length: 50 }, (_, n) => `Prompt ${n + 1}`));
   });
 });
