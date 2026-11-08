@@ -24,7 +24,7 @@ Clicking a viewer's notification SHALL bring the session's window to the front a
 - **THEN** the `README.md` tab is selected, and no other tab opens or is replaced
 
 ### Requirement: The most important thing opens
-When a notification covers several things, a click SHALL open only the one its title names: a plan before documents. A notification whose title is that the agent finished SHALL only bring the window to the front.
+When a notification covers several things, a click SHALL open only the one its title names: a plan before documents. A notification that the agent finished, or that the host asks to read or for an estimate, SHALL only bring the window to the front.
 
 #### Scenario: Plan and a README
 - **WHEN** a viewer clicks the notification that the plan `add-login` is ready for review, whose body says `README.md` changed too
@@ -37,6 +37,10 @@ When a notification covers several things, a click SHALL open only the one its t
 #### Scenario: Agent finished
 - **WHEN** a viewer clicks the notification that Claude finished
 - **THEN** the session's window comes to the front, and its tabs stay as they were
+
+#### Scenario: The host asks to read
+- **WHEN** a viewer clicks the notification that Henk asks them to read `design.md`
+- **THEN** the session's window comes to the front with the read request in its request row, and its tabs stay as they were
 
 ### Requirement: A click on an older notification
 A click on a notification SHALL open what it was about also after later turns and after the session ended, at the latest version the viewer received. A document deleted since SHALL open at its last version. When the viewer left the session, or joined again in the same window, a click SHALL open nothing.

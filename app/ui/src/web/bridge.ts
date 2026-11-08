@@ -321,6 +321,14 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     hostAnswerLink: notInTheWebViewer,
     hostRemoveLink: notInTheWebViewer,
     hostAllowLinks: notInTheWebViewer,
+    hostAskToRead: notInTheWebViewer,
+    hostEndRead: notInTheWebViewer,
+    hostStartVote: notInTheWebViewer,
+    hostCastVote: notInTheWebViewer,
+    hostRevealVotes: notInTheWebViewer,
+    hostVoteAgain: notInTheWebViewer,
+    hostStopVote: notInTheWebViewer,
+    hostKeepEstimate: notInTheWebViewer,
     hostClose: notInTheWebViewer,
     joinSession: async (code, server, terminal, events) => {
       // Each page joins only through its own service (spec: Only the page's own service).
@@ -389,6 +397,14 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       connection.sendLink(url, title, sessionOnly);
     },
     openLink: async (id) => openSharedLink(links, id, options.openableLink, open),
+    answerRead: async (ask, answer) => {
+      if (!connection) throw new Error('You are not in a session.');
+      connection.answerRead(ask, answer);
+    },
+    castVote: async (ask, round, card) => {
+      if (!connection) throw new Error('You are not in a session.');
+      connection.castVote(ask, round, card);
+    },
     takeJoinLink: () => Promise.resolve(null),
     // One page, one session: no other windows to start or title.
     takeStartCommand: () => Promise.resolve(null),

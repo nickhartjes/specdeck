@@ -1313,6 +1313,107 @@ async fn host_allow_links(
     with_host(&state, &window, |host| host.allow_links(on))
 }
 
+/// Asks everyone in the session to read something (`read-and-estimate`).
+#[tauri::command]
+async fn host_ask_to_read(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    target: specdeck_protocol::asks::ReadTarget,
+    label: String,
+    limit_s: u16,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.ask_to_read(target, label, limit_s))
+}
+
+/// Goes on: closes the open read request.
+#[tauri::command]
+async fn host_end_read(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    with_host(&state, &window, |host| host.end_read())
+}
+
+/// Asks everyone how big `task` is.
+#[tauri::command]
+async fn host_start_vote(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    task: String,
+    cards: specdeck_protocol::asks::CardSet,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.start_vote(task, cards))
+}
+
+/// The host's own vote; none takes it back.
+#[tauri::command]
+async fn host_cast_vote(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    card: Option<specdeck_protocol::asks::Card>,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.cast_vote(card))
+}
+
+#[tauri::command]
+async fn host_reveal_votes(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.reveal_votes())
+}
+
+#[tauri::command]
+async fn host_vote_again(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    with_host(&state, &window, |host| host.vote_again())
+}
+
+#[tauri::command]
+async fn host_stop_vote(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+    with_host(&state, &window, |host| host.stop_vote())
+}
+
+/// Closes the vote keeping `card`.
+#[tauri::command]
+async fn host_keep_estimate(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    card: specdeck_protocol::asks::Card,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.keep_estimate(card))
+}
+
+/// Answers the host's read request in the session this window watches.
+#[tauri::command]
+async fn answer_read(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    ask: u32,
+    answer: specdeck_protocol::asks::ReadAnswer,
+) -> Result<(), String> {
+    let session = state.sessions.lock().unwrap().of_window(window.label());
+    match session {
+        Some((_, Session::Viewer(viewer))) => viewer.answer_read(ask, answer),
+        _ => Err("This window does not watch a session.".into()),
+    }
+}
+
+/// Votes in the host's vote in the session this window watches.
+#[tauri::command]
+async fn cast_vote(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    ask: u32,
+    round: u16,
+    card: Option<specdeck_protocol::asks::Card>,
+) -> Result<(), String> {
+    let session = state.sessions.lock().unwrap().of_window(window.label());
+    match session {
+        Some((_, Session::Viewer(viewer))) => {
+            viewer.cast_vote(ask, round, card);
+            Ok(())
+        }
+        _ => Err("This window does not watch a session.".into()),
+    }
+}
+
 /// Sends the host of the session this window watches a link to share.
 #[tauri::command]
 async fn send_link(
@@ -2436,6 +2537,16 @@ pub fn run() {
             host_answer_link,
             host_remove_link,
             host_allow_links,
+            host_ask_to_read,
+            host_end_read,
+            host_start_vote,
+            host_cast_vote,
+            host_reveal_votes,
+            host_vote_again,
+            host_stop_vote,
+            host_keep_estimate,
+            answer_read,
+            cast_vote,
             send_link,
             open_shared_link,
             host_close,

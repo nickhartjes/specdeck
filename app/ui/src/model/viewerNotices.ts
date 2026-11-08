@@ -7,14 +7,16 @@
 
 import type { AgentStatus, NoticeOpen, PlanDocument, TimelineEvent, ViewerNotificationKind, ViewerNotifications } from '../api/types';
 
-/** What a viewer gets until they change it: plans and documents, not every turn's end. */
-export const DEFAULT_VIEWER_NOTIFICATIONS: ViewerNotifications = { plans: true, documents: true, finished: false };
+/** What a viewer gets until they change it: plans, documents and the host's asks, not every turn's end. */
+export const DEFAULT_VIEWER_NOTIFICATIONS: ViewerNotifications = { plans: true, documents: true, finished: false, reads: true, estimates: true };
 
-/** The viewer's switches, in the order shown; read and vote requests will add theirs here. */
+/** The viewer's switches, in the order shown. The host's asks notify in `hostAskNotices.ts`. */
 export const VIEWER_NOTIFICATION_KINDS: { kind: ViewerNotificationKind; label: string }[] = [
   { kind: 'plans', label: 'A plan is ready for review' },
   { kind: 'documents', label: 'A document changed' },
   { kind: 'finished', label: 'The agent finished' },
+  { kind: 'reads', label: 'The host asks you to read' },
+  { kind: 'estimates', label: 'The host asks for an estimate' },
 ];
 
 /** How long the agent waits before its turn counts as ended: status and timeline arrive on separate channels. */

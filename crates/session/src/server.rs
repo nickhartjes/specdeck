@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use specdeck_core::browser::{BrowserAction, BrowserHandler, BrowserResult};
 use specdeck_core::peer::PeerConfig;
+use specdeck_core::sharing::AskCommand;
 use specdeck_diag::Diagnostics;
 use specdeck_local::{Compat, Connection, Frame, Frozen, Listener, Protocol, compat};
 use specdeck_protocol::AgentId;
@@ -439,6 +440,18 @@ async fn run(
             runtime.allow_links(links);
             Ok(())
         }
+        Command::AskToRead { target, label, limit_s } => {
+            runtime.ask(AskCommand::Read { target, label, limit_s }).await
+        }
+        Command::EndRead => runtime.ask(AskCommand::EndRead).await,
+        Command::StartVote { task, cards } => {
+            runtime.ask(AskCommand::StartVote { task, cards }).await
+        }
+        Command::CastVote { card } => runtime.ask(AskCommand::CastVote(card)).await,
+        Command::RevealVotes => runtime.ask(AskCommand::Reveal).await,
+        Command::VoteAgain => runtime.ask(AskCommand::VoteAgain).await,
+        Command::StopVote => runtime.ask(AskCommand::StopVote).await,
+        Command::KeepEstimate { card } => runtime.ask(AskCommand::Keep(card)).await,
         Command::Status => {
             let sharing = serde_json::to_value(runtime.sharing_status()).unwrap_or_default();
             let events =

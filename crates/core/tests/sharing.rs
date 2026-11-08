@@ -11,18 +11,23 @@ use std::time::Duration;
 
 use specdeck_core::diag::AttemptEnd;
 use specdeck_core::environment::Environment;
+use specdeck_core::output_log::OutputLog;
 use specdeck_core::peer::LinkState;
 use specdeck_core::peer::PeerConfig;
+use specdeck_core::session::SessionView;
 use specdeck_core::session::{HostConfig, HostSession};
 use specdeck_core::sharing::{
-    Answer, HostLink, ServiceState, Sharing, SharingConfig, SharingEvent,
+    Answer, AskCommand, HostAsks, HostLink, ServiceState, Sharing, SharingConfig, SharingEvent,
 };
 use specdeck_core::viewer::{
     CONNECT_TIMEOUT, FileError, ViewerConfig, ViewerEvent, ViewerPhase, ViewerSession,
 };
 use specdeck_protocol::AgentId;
+use specdeck_protocol::asks::{
+    Card, CardSet, ReadAnswer, ReadState, ReadTarget, ReadView, VoteView,
+};
 use specdeck_protocol::control::{
-    LINKS_PROTOCOL_VERSION, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
+    ASKS_PROTOCOL_VERSION, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
     RefusalReason, SentLinkState, SharedFileInfo, SuggestionState,
 };
 use specdeck_protocol::frames::Record;
@@ -151,6 +156,8 @@ struct Seen {
     records: Vec<u64>,
     participants: Vec<Participant>,
     welcome: Option<u32>,
+    /// The host's asks as this viewer received them, every one.
+    asks: Vec<ViewerEvent>,
 }
 
 /// Collects viewer events until `done` holds, or panics after the timeout.
@@ -173,6 +180,7 @@ async fn until(
                 }
                 ViewerEvent::Participants(participants) => seen.participants = participants.clone(),
                 ViewerEvent::Welcome { viewer_id, .. } => seen.welcome = Some(*viewer_id),
+                ViewerEvent::ReadRequest(_) | ViewerEvent::Vote(_) => seen.asks.push(event.clone()),
                 _ => {}
             }
             if done(seen, &event) {
@@ -355,9 +363,21 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
     host_suggestions(&mut hosted.events, |list| list.len() == 1).await;
     hosted.session.input(b"later\r").unwrap();
 
+    // The host asks to read and starts a vote, which the older viewer must not hear of.
+    let notes = hosted.session.share_file("nick", "notes.md", b"# Notes\n".to_vec()).unwrap();
+    let read = AskCommand::Read {
+        target: ReadTarget::Shared { file: notes.file },
+        label: "notes.md".into(),
+        limit_s: 0,
+    };
+    assert_eq!(hosted.sharing.ask(read).await.unwrap(), Ok(()));
+    let vote = AskCommand::StartVote { task: "Estimate".into(), cards: CardSet::TShirt };
+    assert_eq!(hosted.sharing.ask(vote).await.unwrap(), Ok(()));
+    assert_eq!(hosted.sharing.ask(AskCommand::EndRead).await.unwrap(), Ok(()));
+
     // The older viewer keeps following the session, admitted once and never told anything
-    // its version cannot read. Version 4 reads requests and whole files, so it is told about
-    // suggestions and the whole-files setting, but not about links.
+    // its version cannot read. Version 5 reads requests, whole files, shared files and links,
+    // so it is told about those, but not about the host's asks or their entries.
     let mut newer_messages = Vec::new();
     tokio::time::timeout(WAIT, async {
         loop {
@@ -370,10 +390,15 @@ async fn an_older_viewer_watches_without_receiving_newer_messages() {
                         }
                     }
                 }
-                ViewerEvent::LinksAllowed { .. }
-                | ViewerEvent::Links(_)
+                ViewerEvent::ReadRequest(_)
+                | ViewerEvent::Vote(_)
                 | ViewerEvent::Reconnecting
                 | ViewerEvent::Welcome { .. } => newer_messages.push(event.clone()),
+                ViewerEvent::Timeline { event: step, .. }
+                    if matches!(step.entry, Entry::ReadDone { .. } | Entry::Estimated { .. }) =>
+                {
+                    newer_messages.push(event.clone())
+                }
                 _ => {}
             }
             if seen_older.text.contains("got:later") {
@@ -1312,15 +1337,12 @@ async fn host_links(
 const ROOM: &str = "https://excalidraw.com/#room=5c1e2a9b,Q3h9vX2m";
 
 #[tokio::test(flavor = "multi_thread")]
-async fn links_reach_only_viewers_that_can_read_them() {
+async fn links_reach_viewers() {
     let url = signalling().await;
     let mut hosted = host(&url, "nick").await;
     let code = ready(&mut hosted.events).await;
-    let older_version = LINKS_PROTOCOL_VERSION - 1;
-    assert!(older_version >= MIN_VIEWER_PROTOCOL_VERSION, "the previous version is admitted");
-    let (_older, mut older) = join_speaking(&url, &code, "anna", older_version);
-    let mut seen_older = Seen::default();
-    until(&mut older, &mut seen_older, |seen, _| seen.text.contains("ready")).await;
+    // Every viewer the host admits reads links since version 5 became the oldest, so the host's
+    // check for older viewers has no viewer left to test it with.
     let (_newer, mut newer) = join(&url, &code, "bob");
     let mut seen_newer = Seen::default();
     let allowed =
@@ -1343,32 +1365,6 @@ async fn links_reach_only_viewers_that_can_read_them() {
     hosted.session.remove_link(1);
     let removed = until(&mut newer, &mut seen_newer, |_, e| link_entry(e).is_some()).await;
     assert_eq!(link_entry(&removed), Some(&Entry::LinkRemoved { id: 1 }));
-
-    // The older viewer gets neither, nor the switch, and keeps following without reconnecting.
-    hosted.session.input(b"later\r").unwrap();
-    tokio::time::timeout(WAIT, async {
-        loop {
-            let event = older.recv().await.expect("viewer stopped");
-            assert!(link_entry(&event).is_none(), "a version 4 viewer got {event:?}");
-            assert!(
-                !matches!(event, ViewerEvent::LinksAllowed { .. } | ViewerEvent::Links(_)),
-                "a version 4 viewer got {event:?}"
-            );
-            assert_ne!(event, ViewerEvent::Reconnecting, "the older viewer dropped");
-            if let ViewerEvent::Records(records) = &event {
-                for record in records {
-                    if let Record::Output { bytes, .. } = record {
-                        seen_older.text.push_str(&String::from_utf8_lossy(bytes));
-                    }
-                }
-            }
-            if seen_older.text.contains("got:later") {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("the older viewer stopped following");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1516,4 +1512,403 @@ async fn a_late_joiner_never_receives_a_removed_links_address() {
             Entry::LinkRemoved { id: 1 },
         ]
     );
+}
+
+/// Waits for the host's view of the asks to satisfy `done`.
+async fn host_asks(
+    events: &mut UnboundedReceiver<SharingEvent>,
+    done: impl Fn(&HostAsks) -> bool,
+) -> HostAsks {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(SharingEvent::Asks(asks)) = events.recv().await
+                && done(&asks)
+            {
+                return *asks;
+            }
+        }
+    })
+    .await
+    .expect("the host's asks did not change as expected")
+}
+
+fn read_view(event: &ViewerEvent) -> Option<&Option<ReadView>> {
+    match event {
+        ViewerEvent::ReadRequest(open) => Some(open),
+        _ => None,
+    }
+}
+
+fn vote_view(event: &ViewerEvent) -> Option<&Option<VoteView>> {
+    match event {
+        ViewerEvent::Vote(open) => Some(open),
+        _ => None,
+    }
+}
+
+fn ask_entry(event: &ViewerEvent) -> Option<&Entry> {
+    match event {
+        ViewerEvent::Timeline { event, .. }
+            if matches!(event.entry, Entry::ReadDone { .. } | Entry::Estimated { .. }) =>
+        {
+            Some(&event.entry)
+        }
+        _ => None,
+    }
+}
+
+/// Asserts that a viewer never received another participant's card before the reveal, nor
+/// anyone's question text but its own `question`.
+fn assert_private(asks: &[ViewerEvent], own_cards: &[Card], question: Option<&str>) {
+    for event in asks {
+        if let Some(Some(vote)) = vote_view(event)
+            && vote.revealed.is_none()
+        {
+            assert!(vote.mine.is_none_or(|card| own_cards.contains(&card)), "{vote:?}");
+        }
+        if let Some(Some(read)) = read_view(event) {
+            assert!(read.questions.is_empty(), "{read:?}");
+            if let ReadAnswer::Question { text: Some(text) } = &read.mine {
+                assert_eq!(Some(text.as_str()), question, "{read:?}");
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asks_reach_each_viewer_as_they_may_see_them() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut anna_events) = join(&url, &code, "anna");
+    let mut seen_anna = Seen::default();
+    until(&mut anna_events, &mut seen_anna, |seen, _| seen.welcome.is_some()).await;
+    let (bob, mut bob_events) = join(&url, &code, "bob");
+    let mut seen_bob = Seen::default();
+    until(&mut bob_events, &mut seen_bob, |seen, _| seen.welcome.is_some()).await;
+    let (_carl, mut carl_events) = join_speaking(&url, &code, "carl", ASKS_PROTOCOL_VERSION - 1);
+    let mut seen_carl = Seen::default();
+    until(&mut carl_events, &mut seen_carl, |seen, _| seen.welcome.is_some()).await;
+    let (anna_id, bob_id, carl_id) =
+        (seen_anna.welcome.unwrap(), seen_bob.welcome.unwrap(), seen_carl.welcome.unwrap());
+
+    // A read request with a question from anna and bob ready.
+    let notes = hosted.session.share_file("nick", "notes.md", b"# Notes\n".to_vec()).unwrap();
+    let target = ReadTarget::Shared { file: notes.file };
+    let read = AskCommand::Read { target: target.clone(), label: "notes.md".into(), limit_s: 0 };
+    assert_eq!(hosted.sharing.ask(read.clone()).await.unwrap(), Ok(()));
+    let opened =
+        until(&mut anna_events, &mut seen_anna, |_, e| matches!(read_view(e), Some(Some(_)))).await;
+    let Some(Some(view)) = read_view(&opened) else { unreachable!() };
+    assert_eq!(view.target, target);
+    assert_eq!(
+        view.people,
+        [
+            (anna_id, ReadState::Reading),
+            (bob_id, ReadState::Reading),
+            (carl_id, ReadState::OlderApp)
+        ]
+    );
+    assert_eq!(
+        hosted.sharing.ask(read).await.unwrap(),
+        Err(specdeck_core::asks::AskRefusal::AlreadyOpen),
+        "one read request at a time"
+    );
+    let question = "Why not reuse the bucket?";
+    anna.answer_read(view.id, ReadAnswer::Question { text: Some(question.into()) });
+    bob.answer_read(view.id, ReadAnswer::Ready);
+    let host = host_asks(&mut hosted.events, |asks| {
+        asks.read.as_ref().is_some_and(|read| {
+            read.people.contains(&(bob_id, ReadState::Ready))
+                && read.people.contains(&(anna_id, ReadState::Question))
+        })
+    })
+    .await;
+    assert_eq!(host.read.unwrap().questions, [(anna_id, question.to_owned())]);
+    let mine = until(
+        &mut anna_events,
+        &mut seen_anna,
+        |_, e| matches!(read_view(e), Some(Some(view)) if view.mine != ReadAnswer::Reading),
+    )
+    .await;
+    let Some(Some(view)) = read_view(&mine) else { unreachable!() };
+    assert_eq!(view.mine, ReadAnswer::Question { text: Some(question.into()) });
+
+    // A vote beside it: the host votes M, anna L, bob M.
+    let vote = AskCommand::StartVote { task: "Show unreachable".into(), cards: CardSet::TShirt };
+    assert_eq!(hosted.sharing.ask(vote).await.unwrap(), Ok(()));
+    let opened =
+        until(&mut bob_events, &mut seen_bob, |_, e| matches!(vote_view(e), Some(Some(_)))).await;
+    let Some(Some(vote)) = vote_view(&opened) else { unreachable!() };
+    let (ask, round) = (vote.id, vote.round);
+    assert_eq!(vote.older, [carl_id]);
+    let (m, l) = (Card::Value(2), Card::Value(3));
+    assert_eq!(hosted.sharing.ask(AskCommand::CastVote(Some(m))).await.unwrap(), Ok(()));
+    anna.cast_vote(ask, round, Some(l));
+    bob.cast_vote(ask, round, Some(m));
+    let host = host_asks(&mut hosted.events, |asks| {
+        asks.vote.as_ref().is_some_and(|vote| vote.voted.len() == 3)
+    })
+    .await;
+    let host_vote = host.vote.unwrap();
+    assert_eq!((host_vote.mine, host_vote.revealed), (Some(m), None), "the host sees only its own");
+
+    until(
+        &mut bob_events,
+        &mut seen_bob,
+        |_, e| matches!(vote_view(e), Some(Some(vote)) if vote.voted.len() == 3),
+    )
+    .await;
+    assert_eq!(hosted.sharing.ask(AskCommand::Reveal).await.unwrap(), Ok(()));
+    let revealed = until(
+        &mut bob_events,
+        &mut seen_bob,
+        |_, e| matches!(vote_view(e), Some(Some(vote)) if vote.revealed.is_some()),
+    )
+    .await;
+    let Some(Some(revealed)) = vote_view(&revealed) else { unreachable!() };
+    assert_eq!(revealed.revealed, Some(vec![(0, m), (anna_id, l), (bob_id, m)]));
+    until(
+        &mut anna_events,
+        &mut seen_anna,
+        |_, e| matches!(vote_view(e), Some(Some(vote)) if vote.revealed.is_some()),
+    )
+    .await;
+    // Before the reveal, each got only their own card, and only anna her question's text.
+    assert_private(&seen_bob.asks, &[m], None);
+    assert_private(&seen_anna.asks, &[l], Some(question));
+
+    // A late joiner after the reveal gets the revealed votes.
+    let (_dave, mut dave_events) = join(&url, &code, "dave");
+    let late =
+        until(&mut dave_events, &mut Seen::default(), |_, e| matches!(vote_view(e), Some(Some(_))))
+            .await;
+    let Some(Some(late)) = vote_view(&late) else { unreachable!() };
+    assert_eq!(late.revealed.as_ref().map(Vec::len), Some(3));
+
+    // Closing both: the read request's entry, then the kept estimate's.
+    assert_eq!(hosted.sharing.ask(AskCommand::EndRead).await.unwrap(), Ok(()));
+    assert_eq!(hosted.sharing.ask(AskCommand::Keep(m)).await.unwrap(), Ok(()));
+    let entry = until(&mut bob_events, &mut seen_bob, |_, e| ask_entry(e).is_some()).await;
+    assert_eq!(
+        ask_entry(&entry),
+        Some(&Entry::ReadDone {
+            id: 1,
+            target,
+            label: "notes.md".into(),
+            ready: 1,
+            questions: 1,
+            of: 3,
+            time_up: false,
+        }),
+        "dave joined meanwhile and could answer"
+    );
+    let entry = until(&mut bob_events, &mut seen_bob, |_, e| ask_entry(e).is_some()).await;
+    assert!(matches!(
+        ask_entry(&entry),
+        Some(Entry::Estimated { kept, low, high, votes: 3, .. })
+            if *kept == m && *low == Some(m) && *high == Some(l)
+    ));
+
+    // Carl, on the previous protocol, got none of it and kept following.
+    hosted.session.input(b"later\r").unwrap();
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let event = carl_events.recv().await.expect("viewer stopped");
+            assert!(read_view(&event).is_none() && vote_view(&event).is_none(), "{event:?}");
+            assert!(ask_entry(&event).is_none(), "{event:?}");
+            assert_ne!(event, ViewerEvent::Reconnecting, "the older viewer dropped");
+            if let ViewerEvent::Records(records) = &event {
+                for record in records {
+                    if let Record::Output { bytes, .. } = record {
+                        seen_carl.text.push_str(&String::from_utf8_lossy(bytes));
+                    }
+                }
+            }
+            if seen_carl.text.contains("got:later") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the older viewer stopped following");
+}
+
+/// The outcome of each answer a viewer sends, in order, until `count` have come back.
+async fn answer_outcomes(
+    events: &mut UnboundedReceiver<ViewerEvent>,
+    count: usize,
+) -> Vec<Outcome> {
+    let mut sent = Vec::new();
+    let mut outcomes = std::collections::HashMap::new();
+    tokio::time::timeout(WAIT, async {
+        while outcomes.len() < count {
+            match events.recv().await.expect("viewer stopped") {
+                ViewerEvent::AnswerSent { id } => sent.push(id),
+                ViewerEvent::Reply { id, outcome } if sent.contains(&id) => {
+                    outcomes.insert(id, outcome);
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("answers were not replied to");
+    sent.iter().filter_map(|id| outcomes.get(id).copied()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn answers_have_a_rate_limit_of_their_own() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Allowed { suggestions: true }).await;
+
+    // Three suggestions use up the requests' limit.
+    for text in ["one", "two", "three"] {
+        anna.suggest(text.into());
+    }
+    host_suggestions(&mut hosted.events, |list| list.len() == 3).await;
+
+    let vote = AskCommand::StartVote { task: "Estimate".into(), cards: CardSet::StoryPoints };
+    assert_eq!(hosted.sharing.ask(vote).await.unwrap(), Ok(()));
+    let opened = until(&mut events, &mut seen, |_, e| matches!(vote_view(e), Some(Some(_)))).await;
+    let Some(Some(vote)) = vote_view(&opened) else { unreachable!() };
+    let (ask, round) = (vote.id, vote.round);
+
+    // Changing a vote a few times still counts, up to five at once.
+    for value in [0, 1, 2, 3, 4, 5] {
+        anna.cast_vote(ask, round, Some(Card::Value(value)));
+    }
+    let outcomes = answer_outcomes(&mut events, 6).await;
+    assert_eq!(outcomes[..5], [Outcome::Received; 5]);
+    assert_eq!(outcomes[5], Outcome::RateLimited);
+    // The fifth vote counted, the sixth did not.
+    let host = host_asks(&mut hosted.events, |asks| {
+        asks.vote.as_ref().is_some_and(|vote| vote.mine.is_none() && vote.voted.len() == 1)
+    })
+    .await;
+    assert_eq!(host.vote.unwrap().voted.len(), 1);
+    assert_eq!(hosted.sharing.ask(AskCommand::Reveal).await.unwrap(), Ok(()));
+    let revealed = until(
+        &mut events,
+        &mut seen,
+        |_, e| matches!(vote_view(e), Some(Some(vote)) if vote.revealed.is_some()),
+    )
+    .await;
+    let Some(Some(revealed)) = vote_view(&revealed) else { unreachable!() };
+    let anna_id = seen.welcome.unwrap();
+    assert_eq!(revealed.revealed, Some(vec![(anna_id, Card::Value(4))]));
+    assert_eq!(hosted.sharing.ask(AskCommand::VoteAgain).await.unwrap(), Ok(()));
+    let round = round + 1;
+
+    // Reconnecting does not refill it: a fresh limit would take three at once.
+    anna.interrupt(Duration::ZERO);
+    until(&mut events, &mut seen, |_, e| {
+        matches!(e, ViewerEvent::Welcome { reconnected: true, .. })
+    })
+    .await;
+    for value in [0, 1, 2] {
+        anna.cast_vote(ask, round, Some(Card::Value(value)));
+    }
+    let outcomes = answer_outcomes(&mut events, 3).await;
+    assert!(outcomes.contains(&Outcome::RateLimited), "{outcomes:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_vote_survives_a_reconnect_and_an_outage() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.welcome.is_some()).await;
+    let anna_id = seen.welcome.unwrap();
+    let vote = AskCommand::StartVote { task: "Estimate".into(), cards: CardSet::StoryPoints };
+    assert_eq!(hosted.sharing.ask(vote).await.unwrap(), Ok(()));
+    let opened = until(&mut events, &mut seen, |_, e| matches!(vote_view(e), Some(Some(_)))).await;
+    let Some(Some(vote)) = vote_view(&opened) else { unreachable!() };
+    let eight = Card::Value(4);
+    anna.cast_vote(vote.id, vote.round, Some(eight));
+    host_asks(&mut hosted.events, |asks| asks.vote.as_ref().is_some_and(|v| v.voted == [anna_id]))
+        .await;
+
+    // Reconnecting: anna gets her vote back and still counts as voted.
+    anna.interrupt(Duration::ZERO);
+    until(&mut events, &mut seen, |_, e| {
+        matches!(e, ViewerEvent::Welcome { reconnected: true, .. })
+    })
+    .await;
+    let back = until(&mut events, &mut seen, |_, e| matches!(vote_view(e), Some(Some(_)))).await;
+    let Some(Some(back)) = vote_view(&back) else { unreachable!() };
+    assert_eq!((back.mine, back.voted.as_slice()), (Some(eight), [anna_id].as_slice()));
+
+    // Away for a while: not shown or counted, and back with her vote.
+    anna.interrupt(Duration::from_secs(3));
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    host_asks(&mut hosted.events, |asks| asks.vote.as_ref().is_some_and(|v| v.voted.is_empty()))
+        .await;
+    host_asks(&mut hosted.events, |asks| asks.vote.as_ref().is_some_and(|v| v.voted == [anna_id]))
+        .await;
+    let back = until(
+        &mut events,
+        &mut seen,
+        |_, e| matches!(vote_view(e), Some(Some(view)) if view.mine.is_some()),
+    )
+    .await;
+    let Some(Some(back)) = vote_view(&back) else { unreachable!() };
+    assert_eq!(back.mine, Some(eight));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_read_request_closes_when_its_time_is_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(OutputLog::create(dir.path()).unwrap());
+    let view = SessionView::from_log(AgentId::OpenCode, log);
+    let notes = view
+        .share_file(
+            specdeck_core::shared_files::Sharer::Host,
+            "nick",
+            "notes.md",
+            b"# N\n".to_vec(),
+        )
+        .unwrap();
+    // No service to reach: the asks work without viewers.
+    let (sharing, mut events) = Sharing::start(
+        view.clone(),
+        SharingConfig {
+            signalling_url: "ws://127.0.0.1:9/signal".into(),
+            username: "nick".into(),
+            peer: loopback(),
+            viewer_limit: 20,
+        },
+    );
+    let read = || AskCommand::Read {
+        target: ReadTarget::Shared { file: notes.file },
+        label: "notes.md".into(),
+        limit_s: 120,
+    };
+    let entries = |view: &SessionView| -> Vec<Entry> {
+        view.timeline_from(0)
+            .into_iter()
+            .map(|event| event.entry)
+            .filter(|entry| matches!(entry, Entry::ReadDone { .. }))
+            .collect()
+    };
+
+    let start = tokio::time::Instant::now();
+    assert_eq!(sharing.ask(read()).await.unwrap(), Ok(()));
+    tokio::time::sleep(Duration::from_secs(119)).await;
+    assert!(entries(&view).is_empty(), "not before 120 seconds");
+    host_asks(&mut events, |asks| asks.read.is_none()).await;
+    assert!(start.elapsed() >= Duration::from_secs(120));
+    assert!(matches!(entries(&view)[..], [Entry::ReadDone { time_up: true, .. }]));
+
+    // Going on before the time is up closes it without `time_up`.
+    assert_eq!(sharing.ask(read()).await.unwrap(), Ok(()));
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    assert_eq!(sharing.ask(AskCommand::EndRead).await.unwrap(), Ok(()));
+    assert!(matches!(entries(&view)[1], Entry::ReadDone { time_up: false, .. }));
 }

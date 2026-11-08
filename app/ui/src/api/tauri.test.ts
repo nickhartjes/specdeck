@@ -33,8 +33,8 @@ describe('binary channel messages', () => {
 
 describe('viewer notifications', () => {
   it('saves the kinds in the app', async () => {
-    await tauriBridge.setViewerNotifications({ plans: true, documents: false, finished: true });
-    expect(tauri.invoke).toHaveBeenCalledWith('set_viewer_notifications', { kinds: { plans: true, documents: false, finished: true } });
+    await tauriBridge.setViewerNotifications({ plans: true, documents: false, finished: true, reads: true, estimates: false });
+    expect(tauri.invoke).toHaveBeenCalledWith('set_viewer_notifications', { kinds: { plans: true, documents: false, finished: true, reads: true, estimates: false } });
   });
 
   it('notifies through the app', async () => {
@@ -69,6 +69,42 @@ describe('viewer notifications', () => {
     stop();
     await vi.waitFor(() => expect(tauri.unlisten).toHaveBeenCalled());
     tauri.listen.mockClear();
+  });
+});
+
+describe("the host's asks", () => {
+  it('ask to read and estimate through the app', async () => {
+    await tauriBridge.hostAskToRead({ changes: { fromSeq: 4, toSeq: 9 } }, 'The changes in the last prompt', 120);
+    expect(tauri.invoke).toHaveBeenCalledWith('host_ask_to_read', {
+      target: { changes: { fromSeq: 4, toSeq: 9 } },
+      label: 'The changes in the last prompt',
+      limitS: 120,
+    });
+    await tauriBridge.hostEndRead();
+    expect(tauri.invoke).toHaveBeenCalledWith('host_end_read');
+    await tauriBridge.hostStartVote('Show unreachable', 't-shirt');
+    expect(tauri.invoke).toHaveBeenCalledWith('host_start_vote', { task: 'Show unreachable', cards: 't-shirt' });
+    await tauriBridge.hostCastVote({ value: 2 });
+    expect(tauri.invoke).toHaveBeenCalledWith('host_cast_vote', { card: { value: 2 } });
+    await tauriBridge.hostCastVote(null);
+    expect(tauri.invoke).toHaveBeenCalledWith('host_cast_vote', { card: null });
+    for (const [call, command] of [
+      [tauriBridge.hostRevealVotes, 'host_reveal_votes'],
+      [tauriBridge.hostVoteAgain, 'host_vote_again'],
+      [tauriBridge.hostStopVote, 'host_stop_vote'],
+    ] as const) {
+      await call();
+      expect(tauri.invoke).toHaveBeenCalledWith(command);
+    }
+    await tauriBridge.hostKeepEstimate('unsure');
+    expect(tauri.invoke).toHaveBeenCalledWith('host_keep_estimate', { card: 'unsure' });
+  });
+
+  it('are answered by viewers through the app', async () => {
+    await tauriBridge.answerRead(3, { question: { text: 'Why not reuse the bucket?' } });
+    expect(tauri.invoke).toHaveBeenCalledWith('answer_read', { ask: 3, answer: { question: { text: 'Why not reuse the bucket?' } } });
+    await tauriBridge.castVote(4, 2, 'break');
+    expect(tauri.invoke).toHaveBeenCalledWith('cast_vote', { ask: 4, round: 2, card: 'break' });
   });
 });
 

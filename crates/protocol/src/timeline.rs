@@ -237,6 +237,31 @@ pub enum Entry {
     LinkRemoved {
         id: u32,
     },
+    /// A read request closed (`read-and-estimate`): what was read, how many of those who could
+    /// answer were ready or had a question, and whether the time was up. No names, no question
+    /// texts. Protocol version 6: never sent to older viewers, which cannot decode it.
+    ReadDone {
+        id: u32,
+        target: crate::asks::ReadTarget,
+        /// What the request named the target, such as a file's name.
+        label: String,
+        ready: u16,
+        questions: u16,
+        of: u16,
+        time_up: bool,
+    },
+    /// The host kept an estimate: the task, the cards, the kept card, the lowest and highest
+    /// value card voted (`None` when every vote was ? or ☕) and the number of votes. No names
+    /// or single votes. Protocol version 6: never sent to older viewers.
+    Estimated {
+        id: u32,
+        task: String,
+        cards: crate::asks::CardSet,
+        kept: crate::asks::Card,
+        low: Option<crate::asks::Card>,
+        high: Option<crate::asks::Card>,
+        votes: u16,
+    },
     /// An OpenSpec change the agent works on; each one replaces the previous for that change.
     Plan {
         change: String,
@@ -579,9 +604,9 @@ mod tests {
 
     #[test]
     fn an_unknown_kind_cannot_be_decoded() {
-        // Why `FileText` is held back from version 3 viewers, and `Link` and `LinkRemoved` from
-        // version 4: their apps decode every event into `TimelineEvent`, and a kind they do not
-        // know fails the whole frame.
+        // Why `FileText` is held back from version 3 viewers, `Link` and `LinkRemoved` from
+        // version 4, and `ReadDone` and `Estimated` from version 5: their apps decode every event
+        // into `TimelineEvent`, and a kind they do not know fails the whole frame.
         let json = serde_json::json!({
             "outputSeq": 1, "at": 2, "kind": "no-such-kind", "promptId": "p"
         });
@@ -610,6 +635,47 @@ mod tests {
             serde_json::from_value::<Entry>(gone).unwrap(),
             Entry::Link { url: None, title: None, session_only: false, .. }
         ));
+    }
+
+    #[test]
+    fn read_requests_and_estimates() {
+        use crate::asks::{Card, CardSet, ReadTarget};
+        let read = Entry::ReadDone {
+            id: 1,
+            target: ReadTarget::Document { path: "openspec/changes/x/design.md".into() },
+            label: "design.md".into(),
+            ready: 2,
+            questions: 1,
+            of: 3,
+            time_up: true,
+        };
+        let json = serde_json::json!({
+            "kind": "read-done", "id": 1,
+            "target": { "document": { "path": "openspec/changes/x/design.md" } },
+            "label": "design.md", "ready": 2, "questions": 1, "of": 3, "timeUp": true
+        });
+        assert_eq!(serde_json::to_value(&read).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), read);
+        let estimated = Entry::Estimated {
+            id: 2,
+            task: "Show unreachable".into(),
+            cards: CardSet::StoryPoints,
+            kept: Card::Value(3),
+            low: Some(Card::Value(2)),
+            high: None,
+            votes: 3,
+        };
+        let json = serde_json::json!({
+            "kind": "estimated", "id": 2, "task": "Show unreachable", "cards": "story-points",
+            "kept": { "value": 3 }, "low": { "value": 2 }, "high": null, "votes": 3
+        });
+        assert_eq!(serde_json::to_value(&estimated).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), estimated);
+        // Nothing in them is large, so fitting never changes them.
+        for entry in [read, estimated] {
+            let event = TimelineEvent { output_seq: 1, at: 2, entry, truncated: false };
+            assert_eq!(fit(event.clone(), MAX_EVENT_JSON_BYTES), event);
+        }
     }
 
     #[test]

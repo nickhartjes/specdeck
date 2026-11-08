@@ -254,3 +254,54 @@ describe('shared links', () => {
     expect(onRemoveLink).toHaveBeenCalledWith(1);
   });
 });
+
+describe('read requests and estimates', () => {
+  const stamp = (n: number) => ({ outputSeq: n, at: 1_700_000_000_000 + n });
+  const read: TimelineEvent = {
+    ...stamp(2),
+    kind: 'read-done',
+    id: 1,
+    target: { document: { path: 'openspec/changes/x/design.md' } },
+    label: 'design.md',
+    ready: 2,
+    questions: 1,
+    of: 3,
+    timeUp: true,
+  };
+  const estimated: TimelineEvent = {
+    ...stamp(3),
+    kind: 'estimated',
+    id: 2,
+    task: 'Show unreachable after three missed heartbeats',
+    cards: 'story-points',
+    kept: { value: 3 },
+    low: { value: 2 },
+    high: { value: 4 },
+    votes: 3,
+  };
+  const show = (events: TimelineEvent[], extra: Partial<Parameters<typeof TimelinePanel>[0]> = {}) =>
+    render(
+      <BridgeContext.Provider value={fakeBridge('host')}>
+        <TimelinePanel model={buildTimeline(events)} timelineSupported agentName="Claude Code" matches={new Set()} current={null} onJump={() => {}} {...extra} />
+      </BridgeContext.Provider>,
+    );
+
+  it('shows them at their moment, with counts and no names', () => {
+    show([{ ...stamp(1), kind: 'prompt', promptId: 'p1', text: 'First' }, read, estimated]);
+    const turn = screen.getByRole('article', { name: 'Prompt 1' });
+    const card = within(turn).getByRole('group', { name: 'Read request: design.md' });
+    expect(card.textContent).toContain('2 of 3 ready, 1 with a question');
+    expect(card.textContent).toContain('the time was up');
+    const kept = within(turn).getByRole('group', { name: /^Estimate: Show unreachable/ });
+    expect(kept.textContent).toContain('Estimated in story points');
+    expect(within(kept).getByRole('img', { name: '5' })).toBeTruthy();
+    expect(kept.textContent).toContain('Estimated in story points · from 3 to 8 · 3 votes');
+  });
+
+  it('lists an estimate of a terminal session below its note', () => {
+    show([estimated], { timelineSupported: false, terminal: true });
+    expect(screen.getByText('A terminal session has no timeline')).toBeTruthy();
+    const list = screen.getByRole('region', { name: 'Read requests and estimates' });
+    expect(within(list).getByRole('group', { name: /^Estimate: / })).toBeTruthy();
+  });
+});

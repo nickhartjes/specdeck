@@ -12,7 +12,7 @@ Open **Settings** with **SpecDeck › Settings…** or **⌘,** on macOS, or **F
 | Your name | The name others see in sessions you start or join from now on |
 | Appearance | **System** follows your computer's light or dark appearance; **Light** and **Dark** keep SpecDeck that way. Also under **View › Appearance**. See [The window](#the-window) |
 | Show notifications | Turns all of SpecDeck's notifications on or off |
-| While you watch a session | Which [notifications](#notifications) you get about a session you watch: a plan is ready for review, a document changed, the agent finished |
+| While you watch a session | Which [notifications](#notifications) you get about a session you watch: a plan is ready for review, a document changed, the agent finished, the host asks you to read, the host asks for an estimate |
 | Screen reader support | Lets screen readers (VoiceOver, Narrator, Orca) read the terminal. Off unless you turn it on: while it is on, typing in the terminal of a session you host can repeat text |
 | Give Claude a browser | Claude Code sessions you start from now on get [a browser of their own](/specdeck/guide/browser/). On by default; only on macOS |
 | Show screenshots in the timeline | Pictures that Claude's browser and other MCP tools return, such as [screenshots](/specdeck/guide/browser/#screenshots-in-the-timeline), show in the timeline, for viewers too. Applies to sessions you start from now on. On by default |
@@ -35,7 +35,7 @@ While SpecDeck is not the window in front, or its window is closed, it tells you
 | Host | Someone joins or leaves |
 | Host | Claude Code finishes a prompt, or asks your permission |
 | Viewer | The host ends the session, or removes you |
-| Viewer | A plan is ready for review, a document changed, or the agent finished, as you chose under **While you watch a session** |
+| Viewer | A plan is ready for review, a document changed, the agent finished, or the host asks you to read or to estimate, as you chose under **While you watch a session** |
 
 Click a notification to bring the session to the front. Nothing is shown while you are looking at SpecDeck. To turn notifications off, use **Show notifications** in Settings.
 
@@ -48,8 +48,12 @@ Choose what calls you back to a session you watch:
 | A plan is ready for review | Claude presents a plan to the host, or writes or revises an [OpenSpec plan](/specdeck/guide/documents/) | Yes |
 | A document changed | The agent creates or changes a Markdown document | Yes |
 | The agent finished | The agent finished a prompt and waits for the host's next one | No |
+| The host asks you to read | The host [asks everyone to read](/specdeck/guide/read-and-estimate/) something | Yes |
+| The host asks for an estimate | The host starts a vote, or a new round of one | Yes |
 
 You get at most one notification each time the agent finishes a prompt, naming everything in it: *Plan add-login is ready for review*, with *README.md changed too* below it. Claude's plan in plan mode is the exception: you hear about it at once, since Claude stops for it. Ticking off tasks while the agent works through a plan does not notify you. What happened before you joined, and a prompt the agent was already working on when you joined, never notifies you.
+
+The host's read requests and votes notify you on their own, outside that one per prompt. A request or vote that was already open when you joined, or that comes back after you reconnect, doesn't notify you.
 
 Clicking one of these opens what its title names, in the preview tab:
 
@@ -59,6 +63,7 @@ Clicking one of these opens what its title names, in the preview tab:
 | *README.md changed*, or *README.md and 2 other documents changed* | `README.md` |
 | *Claude Code has a plan for you to review* | Claude Code's plan, in a tab of its own, which shows whether the host approved it |
 | *Claude Code finished* | Nothing; the session comes to the front |
+| *Henk asks you to read*, *Henk asks for an estimate* | Nothing; the session comes to the front, where the request waits |
 
 It also works for an older notification, and after the host ended the session: you see the latest version you received, even of a document deleted since. Once you left the session, a click opens nothing.
 

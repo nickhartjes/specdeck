@@ -1,0 +1,120 @@
+/* The host's asks (`read-and-estimate`): the read request and vote in the request row, their
+   dialogs, the changes tab and the timeline cards. Kept apart from styles.css, as links.css is. */
+
+.requests { display: grid; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); max-height: 50vh; overflow-y: auto; }
+.ask-banner { display: grid; gap: 10px; padding: 12px 16px 14px; background: var(--accent-soft); font-size: 13px; }
+.ask-banner svg { width: 15px; height: 15px; flex: none; }
+.ask-banner-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.ask-banner-head > svg { color: var(--accent); }
+.ask-banner-head > strong { font-size: 14px; }
+.ask-banner-head .spacer { flex: 1; }
+.ask-time {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border); font-variant-numeric: tabular-nums; font-weight: 600;
+}
+.ask-time.ending { color: var(--working); border-color: var(--working); }
+.ask-note { margin: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.ask-task { overflow-wrap: anywhere; }
+.btn.answered.ready { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
+.btn.answered.question { background: var(--working-soft); color: var(--working); border-color: var(--working); }
+.ask-question { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.ask-question label { display: grid; gap: 4px; flex: 1 1 260px; }
+
+/* How far everyone is: ready, a question, still reading. */
+.read-progress { display: flex; align-items: center; gap: 10px; }
+.read-bar { display: flex; flex: 0 1 220px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--surface); gap: 2px; }
+.read-bar > span { flex-basis: 0; transition: flex-grow 240ms ease; }
+.read-bar .ready { background: var(--ok); }
+.read-bar .question { background: var(--working); }
+.read-bar .reading { background: var(--border-strong); }
+.ask-people { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-state {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 8px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border); font-size: 12px;
+}
+.ask-state .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); }
+.ask-state.ready .dot { background: var(--ok); }
+.ask-state.question .dot { background: var(--working); }
+.ask-state.older-app { color: var(--text-faint); border-style: dashed; }
+.ask-questions ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.ask-questions summary { cursor: pointer; width: fit-content; }
+.ask-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ask-actions .keep { display: inline-flex; align-items: center; gap: 6px; }
+.ask-actions .keep .field { width: auto; padding-block: 2px; }
+
+/* Planning poker: your hand of cards, and a seat for everyone at the table. */
+.vote-body { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 24px; }
+.vote-hand { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 8px; }
+.vote-card {
+  width: 42px; height: 58px; padding: 0; border-radius: 7px; border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--text); font: inherit; font-size: 18px; font-weight: 700;
+  font-variant-numeric: tabular-nums; cursor: pointer; box-shadow: 0 1px 0 var(--border);
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+.vote-card.wide { font-size: 15px; }
+.vote-card:hover { transform: translateY(-3px); box-shadow: 0 4px 0 var(--border); }
+.vote-card.on {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+  transform: translateY(-8px); box-shadow: 0 8px 14px -6px var(--accent);
+}
+.vote-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.vote-table {
+  list-style: none; margin: 0; padding: 10px 12px 8px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 6px;
+  border-radius: 12px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.seat { display: grid; justify-items: center; align-content: start; gap: 5px; width: 56px; }
+.seat-name { font-size: 11.5px; color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat-card, .seat-flip { display: block; width: 34px; height: 46px; }
+.seat-back, .seat-front { box-sizing: border-box; width: 100%; height: 100%; border-radius: 5px; display: grid; place-items: center; }
+.seat-back {
+  border: 1px solid var(--accent);
+  background: var(--accent) repeating-linear-gradient(45deg, transparent 0 4px, color-mix(in srgb, var(--on-accent) 18%, transparent) 4px 5px);
+}
+.seat-front {
+  display: none; background: var(--surface); border: 1px solid var(--border-strong);
+  font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; color: var(--text);
+}
+.seat-empty .seat-back { background: transparent; border: 1.5px dashed var(--border-strong); }
+/* Turned over when the host reveals. */
+.seat-shown .seat-back, .seat-none .seat-back { display: none; }
+.seat-shown .seat-front, .seat-none .seat-front { display: grid; animation: card-turn 320ms cubic-bezier(.3, .7, .3, 1) both; }
+.seat-none .seat-front { color: var(--text-faint); border-style: dashed; background: transparent; }
+.seat-shown .seat-name { color: var(--text); }
+.vote-table > .seat:nth-child(2) .seat-front { animation-delay: 60ms; }
+.vote-table > .seat:nth-child(3) .seat-front { animation-delay: 120ms; }
+.vote-table > .seat:nth-child(n + 4) .seat-front { animation-delay: 180ms; }
+@keyframes card-turn { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.vote-spread { color: var(--text); font-size: 14px; }
+
+.ask-dialog { width: min(480px, 100%); }
+.ask-form { display: grid; gap: 10px; }
+.ask-form label { display: grid; gap: 4px; font-size: 13px; }
+.ask-form fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 2px; }
+.ask-form legend { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 2px; }
+.ask-form .check { display: flex; align-items: flex-start; gap: 8px; padding-top: 2px; overflow-wrap: anywhere; }
+.ask-choices { display: grid; gap: 10px; max-height: 40vh; overflow-y: auto; }
+
+.changes-tab { display: grid; gap: 12px; padding: 12px; align-content: start; overflow: auto; }
+
+.ask-card {
+  display: grid; gap: 4px; margin: 6px 0; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  font-size: 13px; overflow-wrap: anywhere;
+}
+.ask-card.estimate { grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; }
+.ask-card-body { display: grid; gap: 4px; min-width: 0; }
+.ask-card svg { width: 14px; height: 14px; flex: none; }
+.ask-card-head { display: flex; align-items: center; gap: 7px; }
+.ask-card-head svg { color: var(--accent); }
+.ask-when { margin-left: auto; white-space: nowrap; }
+.ask-card-head .ask-task { font-weight: 600; }
+.nowrap { white-space: nowrap; }
+.ask-card.estimate .ask-card-head { align-items: flex-start; }
+.card-face {
+  display: grid; place-items: center; width: 34px; height: 46px; border-radius: 5px;
+  border: 1px solid var(--accent); background: var(--surface); color: var(--accent);
+  font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; box-shadow: 2px 2px 0 var(--accent-soft);
+}
+.card-face.wide { font-size: 13px; }
+.inline-icon { width: 13px; height: 13px; vertical-align: -2px; }
