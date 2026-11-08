@@ -25,7 +25,7 @@ Claude's response text SHALL appear in the timeline under the prompt it answers,
 - **THEN** the timeline shows them formatted as a code block and a list
 
 ### Requirement: Capture tool calls
-Each tool Claude Code uses SHALL appear as a timeline entry showing the tool, its input, and whether it succeeded, failed, or did not run. The input SHALL NOT carry file contents: the new text of a written file, the old and new text of an edit, and a notebook cell's new source are left out, since the diff shows the change. File paths in the input SHALL be shown as other paths in the timeline are: relative inside the session folder, starting with `~` elsewhere in the home folder, otherwise unchanged. Shell commands SHALL be shown as typed.
+Each tool Claude Code uses SHALL appear as a timeline entry showing the tool, its input, and whether it succeeded, failed, or did not run. The input SHALL NOT carry file contents: the new text of a written file, the old and new text of an edit, and a notebook cell's new source are left out, since the diff shows the change. Nor SHALL it carry text Claude types into a sensitive or unknown field of its browser (`agent-browser`, *Sensitive fields stay hidden*). File paths in the input SHALL be shown as other paths in the timeline are: relative inside the session folder, starting with `~` elsewhere in the home folder, otherwise unchanged. Shell commands SHALL be shown as typed.
 
 #### Scenario: Claude runs a command
 - **WHEN** Claude Code runs a shell command
@@ -42,6 +42,10 @@ Each tool Claude Code uses SHALL appear as a timeline entry showing the tool, it
 #### Scenario: Claude edits a file outside the session folder
 - **WHEN** Claude Code edits a file in the host's home folder but outside the session folder
 - **THEN** the tool entry names the file by a path starting with `~`, and carries neither the old nor the new text
+
+#### Scenario: Claude types a password in its browser
+- **WHEN** Claude types into the password field of a page in its browser
+- **THEN** the tool entry names the field and says the text is hidden, and does not carry the text
 
 ### Requirement: File change diffs
 Each file change made by Claude Code's file-editing tools inside the session folder SHALL appear in the timeline with a diff showing exactly what changed in that file. When the session folder is in a git repository, files inside the session folder that Claude Code's shell commands create, change or delete SHALL also appear, with their diffs, under the command that changed them. Outside a git repository, changes made by shell commands are not shown. Snapshots for this SHALL NOT change the repository and SHALL NOT read files outside the session folder. A file outside the session folder SHALL appear as changed, by its path, without a diff. A path is inside the session folder when it is after symlinks are resolved.
@@ -290,7 +294,7 @@ A tool call of Claude Code itself that has no result when the host's next prompt
 - **THEN** the helper's command stays open until it gets its own result
 
 ### Requirement: Older viewers keep working
-The answers, plan decisions, permission decisions, helper reports and screenshots SHALL be sent in a form that viewers on an earlier app version of the same protocol version ignore, so that those viewers still show the timeline as before.
+The answers, plan decisions, permission decisions, helper reports, screenshots and the elements of browser steps SHALL be sent in a form that viewers on an earlier app version of the same protocol version ignore, so that those viewers still show the timeline as before.
 
 #### Scenario: Viewer on an earlier version
 - **WHEN** a viewer on an app version without this change joins a session in which Claude asked a question
@@ -299,6 +303,14 @@ The answers, plan decisions, permission decisions, helper reports and screenshot
 #### Scenario: Screenshot for an earlier version
 - **WHEN** a viewer on an app version without screenshots watches Claude take a screenshot
 - **THEN** their timeline shows the screenshot's tool call as before, without the image, and the viewer stays connected
+
+#### Scenario: Browser click for an earlier version
+- **WHEN** a viewer on an app version without element names watches Claude click the *Sign in* button
+- **THEN** their timeline shows "Clicked on the page in its browser", and the viewer stays connected
+
+#### Scenario: Password for an earlier version
+- **WHEN** a viewer on an app version without element names watches Claude type a password in its browser
+- **THEN** their timeline does not carry the password
 
 ### Requirement: Entries too large to send whole
 The host SHALL send every timeline entry in a form small enough for every viewer's connection to accept. An entry too large for that, such as the diff of a very large created file, SHALL be cut to fit and marked, and participants SHALL see a note that it is shown in part. Sending a large entry SHALL NOT disconnect any viewer.

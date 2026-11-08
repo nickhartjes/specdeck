@@ -188,6 +188,15 @@ export type ToolOutcome =
   | { kind: 'report'; text: string; truncated: boolean }
   | Screenshot;
 
+/** The element a click or typing in Claude's browser acts on, from Claude's last read of the page. */
+export interface Target {
+  /** As the browser says it: `button`, `link`, `email field`, a role. */
+  kind: string;
+  label?: string;
+  /** A password field or the like; the session never sends what was typed into it. */
+  sensitive: boolean;
+}
+
 /** An image an MCP tool returned, such as a browser's screenshot; without `image` when it was left out. */
 export interface Screenshot {
   kind: 'screenshot';
@@ -218,7 +227,7 @@ export type TimelineEvent = Stamp &
     | { kind: 'prompt'; promptId: string; text: string }
     | { kind: 'message'; promptId: string; messageId: string; text: string; final: boolean }
     | { kind: 'response'; promptId: string; text: string }
-    | { kind: 'tool-call'; promptId: string; toolUseId: string; toolName: string; input: Record<string, unknown> }
+    | { kind: 'tool-call'; promptId: string; toolUseId: string; toolName: string; input: Record<string, unknown>; target?: Target }
     | {
         kind: 'tool-result';
         promptId: string;

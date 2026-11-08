@@ -1,7 +1,7 @@
 // Turns the flat list of timeline events into what the timeline panel shows: one turn per
 // prompt, with the agent's text and tool calls in order, and the files it touched.
 
-import type { DiffHunk, Permission, TimelineEvent, TokenCounts, ToolOutcome } from '../api/types';
+import type { DiffHunk, Permission, Target, TimelineEvent, TokenCounts, ToolOutcome } from '../api/types';
 
 export type ToolStatus = 'running' | 'succeeded' | 'failed' | 'not-run';
 
@@ -37,6 +37,8 @@ export interface ToolItem {
   id: string;
   toolName: string;
   input: Record<string, unknown>;
+  /** The element a click or typing in Claude's browser acts on. */
+  target?: Target;
   status: ToolStatus;
   error?: string;
   /** What the host decided or a helper reported, once known. */
@@ -197,6 +199,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
           id: event.toolUseId,
           toolName: event.toolName,
           input: event.input,
+          ...(event.target && { target: event.target }),
           status: 'running',
           changes: [],
           outputSeq: event.outputSeq,

@@ -3,7 +3,7 @@ import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, Share2, 
 import type { ShareStep } from '../model/sharedFiles';
 import type { AskItem, LinkItem, TimelineModel, ToolItem, Turn } from '../model/timeline';
 import { SHOWN_IN_PART, toolSummary } from '../model/timeline';
-import { liveLine, screenshotOf, summarize, type Step, type SummaryEntry } from '../model/steps';
+import { liveLine, named, screenshotOf, summarize, typedTextHidden, type Step, type SummaryEntry } from '../model/steps';
 import type { Steps } from '../api/types';
 import { DiffView } from './DiffView';
 import { formatTokens } from '../model/statusbar';
@@ -412,6 +412,8 @@ function ToolView({ item, showChanges, onSelect, onOpenScreenshot }: { item: Too
         <div className="tool-body">
           {item.error && <div className="error-text selectable">{item.error}</div>}
           {item.truncated && <p className="hint">{SHOWN_IN_PART}</p>}
+          {item.target && <p className="hint">On {item.target.label ? `${named(item.target)}, ${item.target.kind}` : named(item.target)}</p>}
+          {typedTextHidden(item) && <p className="hint">Text hidden</p>}
           {item.changes.length > 0
             ? item.changes.map((change, i) => <DiffView key={i} change={change} />)
             : (interactionBody(item) ?? <pre className="tool-input selectable">{JSON.stringify(item.input, null, 2)}</pre>)}

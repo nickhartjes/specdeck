@@ -1,0 +1,28 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 1,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "default",
+  "prompt_id": "f8f341cb-8d57-4efe-8e46-b9da7f227b13",
+  "session_id": "244b377e-5ea7-433f-9476-601eb8aff67e",
+  "tool_input": {
+    "max_results": 4,
+    "query": "select:mcp__specdeck__navigate,mcp__specdeck__read_page,mcp__specdeck__type,mcp__specdeck__click"
+  },
+  "tool_name": "ToolSearch",
+  "tool_response": {
+    "matches": [
+      "mcp__specdeck__navigate",
+      "mcp__specdeck__read_page",
+      "mcp__specdeck__type",
+      "mcp__specdeck__click"
+    ],
+    "query": "select:mcp__specdeck__navigate,mcp__specdeck__read_page,mcp__specdeck__type,mcp__specdeck__click",
+    "total_deferred_tools": 27
+  },
+  "tool_use_id": "toolu_01TzaYF1zrkz7sL2wEUK5T4S",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/244b377e-5ea7-433f-9476-601eb8aff67e.jsonl"
+}
