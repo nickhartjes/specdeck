@@ -27,7 +27,7 @@ Run pnpm and openspec through `mise exec node@24.22.2 -- ...`, cargo with `--off
 ## 5. Integration
 
 - [x] 5.1 Run the Rust tests (`cargo test --offline -- --test-threads=3`), `pnpm test` and `pnpm lint` in `app/ui`, and `openspec validate host-ask-notifications --strict`. All pass.
-- [ ] 5.2 Hand-test with `just local-dev` (a host and a viewer app, telling them apart by `SPECDECK_PROFILE`). Ask to read with a 2-minute limit, put the host's window in the background, and from the viewer ask a question, then mark ready. Then let a second request time out, and run a vote. Check each notification appears, nothing appears with the host's window in front, and a question's click opens the question texts. Record the outcome in the PR.
+- [x] 5.2 Hand-test with `just local-dev` (a host and a viewer app, telling them apart by `SPECDECK_PROFILE`). Ask to read with a 2-minute limit, put the host's window in the background, and from the viewer ask a question, then mark ready. Then let a second request time out, and run a vote. Check each notification appears, nothing appears with the host's window in front, and a question's click opens the question texts. Record the outcome in the PR.
 
 ## Workflow follow-up
 
