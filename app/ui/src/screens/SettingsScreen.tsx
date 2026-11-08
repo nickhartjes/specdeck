@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { VIEWER_NOTIFICATION_KINDS } from '../model/viewerNotices';
 import { errorMessage, useBridge } from '../api/bridge';
 import type { Profile, ServiceCheck } from '../api/types';
 import { APPEARANCES } from '../appearance';
@@ -106,8 +107,30 @@ export function SettingsScreen() {
             Show notifications
           </label>
           <span id="settings-notifications-hint" className="field-hint">
-            When someone joins or leaves your session, when the agent waits for you, and when a session you watch ends. Only
-            while SpecDeck is not in front.
+            When someone joins or leaves your session, and when the agent waits for you. Only while SpecDeck is not in front.
+          </span>
+        </div>
+      </div>
+      <div className="row">
+        <span id="settings-viewer-notifications">While you watch a session</span>
+        <div>
+          <div role="group" aria-labelledby="settings-viewer-notifications" aria-describedby="settings-viewer-notifications-hint" style={{ display: 'flex', flexDirection: 'column' }}>
+            {VIEWER_NOTIFICATION_KINDS.map(({ kind, label }) => (
+              <label key={kind} className="check">
+                <input
+                  type="checkbox"
+                  checked={profile.viewerNotifications[kind]}
+                  disabled={!profile.notifications}
+                  onChange={async (event) =>
+                    setProfile(await bridge.setViewerNotifications({ ...profile.viewerNotifications, [kind]: event.target.checked }))
+                  }
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <span id="settings-viewer-notifications-hint" className="field-hint">
+            At most one notification each time the agent finishes a turn. You always hear when a session you watch ends.
           </span>
         </div>
       </div>

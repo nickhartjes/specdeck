@@ -1,9 +1,10 @@
 //! The WebAssembly build, run in Node: `just web-test`.
 #![cfg(target_arch = "wasm32")]
 
+use specdeck_protocol::files::{self, FilesReply};
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
-use specdeck_web::{WebViewer, parse_join_link};
+use specdeck_web::{FileFetch, FileUpload, WebViewer, parse_join_link};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -64,6 +65,38 @@ fn suggestions_are_numbered_and_checked_before_sending() {
     assert_eq!(js_sys_get(&update, "outcome").as_string().as_deref(), Some("Received"));
     let unanswered = viewer.unanswered_requests();
     assert_eq!(js_sys_get(&unanswered, "length").as_f64(), Some(1.0));
+}
+
+#[wasm_bindgen_test]
+fn a_fetched_file_is_checked_and_fetched_again_once_when_altered() {
+    let content = b"# Notes";
+    let mut fetch = FileFetch::new(3, content.len() as u64, &files::sha256(content)).unwrap();
+    assert!(!fetch.request().is_empty());
+    let chunk = |bytes: &[u8]| {
+        files::encode_reply(&FilesReply::Chunk { file: 3, offset: 0, bytes: bytes.to_vec() })
+    };
+    let retry = fetch.on_reply(&chunk(b"# Notez"));
+    assert!(!js_sys_get(&retry, "retry").is_undefined(), "fetched again after a bad hash");
+    let done = fetch.on_reply(&chunk(content));
+    assert!(!js_sys_get(&done, "done").is_undefined(), "arrived whole");
+    let other = fetch.on_reply(&files::encode_reply(&FilesReply::Gone { file: 4 }));
+    assert!(js_sys_get(&other, "failed").is_undefined(), "about another file");
+}
+
+#[wasm_bindgen_test]
+fn a_file_to_share_is_announced_with_its_hash_and_sent_after_ready() {
+    let mut viewer = WebViewer::new(CODE).unwrap();
+    let request = viewer.share_file("notes.md", b"# Notes").unwrap();
+    assert_eq!(js_sys_get(&request, "id").as_f64(), Some(1.0));
+    assert!(viewer.share_file("", b"x").is_err());
+    let mut upload = FileUpload::new(5, b"# Notes");
+    assert_eq!(js_sys_get(&upload.next_chunks(), "length").as_f64(), Some(1.0));
+    let finished = files::encode_reply(&FilesReply::Finished {
+        upload: 5,
+        outcome: specdeck_protocol::control::Outcome::Received,
+    });
+    let update = upload.on_reply(&finished);
+    assert_eq!(js_sys_get(&update, "finished").as_string().as_deref(), Some("Received"));
 }
 
 #[wasm_bindgen_test]

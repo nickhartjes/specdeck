@@ -65,4 +65,31 @@ describe('files panel', () => {
     expect(screen.getByText('No file list for OpenCode')).toBeInTheDocument();
     expect(screen.getByText(/This session’s files can’t be listed/)).toBeInTheDocument();
   });
+
+  it('has a Shared tab only where the session takes shared files', async () => {
+    const shared = {
+      files: [],
+      me: 0,
+      host: true,
+      canShare: true,
+      hostName: 'Nick',
+      agentName: 'Claude Code',
+      share: vi.fn(),
+      open: vi.fn(),
+      remove: vi.fn(),
+      save: vi.fn(),
+      say: vi.fn(),
+    };
+    const { onTab } = panel({ shared });
+    const tab = screen.getByRole('tab', { name: /Shared/ });
+    expect(tab).toHaveTextContent('0');
+    await userEvent.click(tab);
+    expect(onTab).toHaveBeenCalledWith('shared');
+  });
+
+  it('shows Code where Shared was chosen in a session without shared files', () => {
+    panel({ tab: 'shared' });
+    expect(screen.queryByRole('tab', { name: /Shared/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Code/ })).toHaveAttribute('aria-selected', 'true');
+  });
 });

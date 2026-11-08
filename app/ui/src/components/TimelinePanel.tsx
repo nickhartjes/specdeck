@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, X } from 'lucide-react';
+import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, Share2, X } from 'lucide-react';
+import type { ShareStep } from '../model/sharedFiles';
 import type { LinkItem, TimelineModel, ToolItem, Turn } from '../model/timeline';
 import { SHOWN_IN_PART, toolSummary } from '../model/timeline';
 import { liveLine, screenshotOf, summarize, type Step, type SummaryEntry } from '../model/steps';
@@ -35,6 +36,11 @@ interface Props {
   onOpenChange?: (path: string, toolUseId: string) => void;
   /** Opens a call's screenshot full size in a tab; kept rather than a preview with `keep`. */
   onOpenScreenshot?: OpenScreenshot;
+  /** Files people shared, as steps among the prompts (`session-timeline` spec: Shared files in the timeline). */
+  shares?: ShareStep[];
+  /** The ids of files still shared; a step for any other is marked removed. */
+  sharedNow?: Set<number>;
+  onOpenShared?: (file: number, name: string) => void;
   /** Above the timeline: sharing links, and the links waiting on the host (`shared-links`). */
   linksBar?: ReactNode;
   /** The host's: removes a shared link. */
@@ -47,7 +53,7 @@ type OpenScreenshot = (item: ToolItem, keep: boolean) => void;
 
 const TIME = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 
-export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump, onStep, onOpenChange, onOpenScreenshot, linksBar, onRemoveLink }: Props) {
+export function TimelinePanel({ model, timelineSupported, agentName, steps = 'details', live = false, onReadPlan, terminal = false, matches, current, onJump, onStep, onOpenChange, onOpenScreenshot, shares = [], sharedNow, onOpenShared, linksBar, onRemoveLink }: Props) {
   const select = useCallback<Select>(
     (item) => {
       const change = item.changes[0];
@@ -166,7 +172,7 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
           <span>Timeline paused: {model.unavailable} The terminal keeps working.</span>
         </div>
       )}
-      {model.turns.length === 0 ? (
+      {model.turns.length === 0 && shares.length === 0 ? (
         <div className="empty">
           <History aria-hidden />
           <strong>No prompts yet</strong>
@@ -174,7 +180,10 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
         </div>
       ) : (
         <div className="timeline">
-          {model.turns.map((turn, i) => (
+          {model.turns.map((turn, i) => [
+            ...sharesBefore(shares, model.turns, i).map((share) => (
+              <ShareView key={`share-${share.file}`} share={share} removed={!sharedNow?.has(share.file)} onOpen={onOpenShared} />
+            )),
             <TurnView
               key={turn.promptId}
               turn={turn}
@@ -189,10 +198,40 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
               onSelect={select}
               onOpenScreenshot={onOpenScreenshot}
               onRemoveLink={onRemoveLink}
-            />
+            />,
+          ])}
+          {sharesBefore(shares, model.turns, model.turns.length).map((share) => (
+            <ShareView key={`share-${share.file}`} share={share} removed={!sharedNow?.has(share.file)} onOpen={onOpenShared} />
           ))}
           {live && lastTurn && <LiveLine turn={lastTurn} plansBefore={plansBeforeLast} agentName={agentName} />}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** The shares that happened before turn `index` started and after the one before it; all later ones for the end. */
+function sharesBefore(shares: ShareStep[], turns: Turn[], index: number): ShareStep[] {
+  const from = index === 0 ? -Infinity : turns[index - 1]!.at;
+  const to = index < turns.length ? turns[index]!.at : Infinity;
+  return shares.filter((share) => share.at >= from && share.at < to);
+}
+
+/** "Sanne shared wireframe.png", which opens the file, or says it was removed. */
+function ShareView({ share, removed, onOpen }: { share: ShareStep; removed: boolean; onOpen?: (file: number, name: string) => void }) {
+  const who = share.byLabel || (share.by === 0 ? 'The host' : 'A viewer');
+  return (
+    <div className="share-step">
+      <Share2 aria-hidden />
+      <span className="time">{TIME.format(share.at)}</span>
+      {removed ? (
+        <span>
+          {who} shared {share.name} <span className="muted">(removed)</span>
+        </span>
+      ) : (
+        <button className="link" onClick={() => onOpen?.(share.file, share.name)}>
+          {who} shared {share.name}
+        </button>
       )}
     </div>
   );

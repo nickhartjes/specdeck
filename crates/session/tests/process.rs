@@ -775,6 +775,43 @@ async fn whole_code_files_follow_the_hosts_setting() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_host_shares_reads_puts_and_removes_a_file() {
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let mut process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let code = started(&mut app, folder.path(), &url).await;
+    let mut terminal = String::new();
+    app.send(&Command::Attach).await;
+    let snapshot = app
+        .until(
+            &mut terminal,
+            |e| matches!(e, Event::HostEvent { event } if event["type"] == "snapshot"),
+        )
+        .await;
+    let Event::HostEvent { event: snapshot } = snapshot else { unreachable!() };
+    assert_eq!(snapshot["sharedFilesPossible"], true);
+    assert_eq!(snapshot["filesAllowed"], false, "off when a session starts");
+    assert_eq!(snapshot["sharedFiles"], serde_json::json!([]));
+
+    let file = share_notes(&mut app, &mut terminal).await;
+    let (viewer, mut viewer_events) = join(&url, &code);
+    viewer_until(
+        &mut viewer_events,
+        |e| matches!(e, ViewerEvent::Files(files) if files.len() == 1),
+    )
+    .await;
+    let fetched = tokio::time::timeout(WAIT, viewer.fetch_file(file)).await.unwrap().unwrap();
+    assert_eq!(fetched.unwrap(), b"# Notes\n");
+    read_refuse_and_put(&mut app, &mut terminal, folder.path(), file).await;
+    allow_and_remove(&mut app, &mut terminal, file).await;
+
+    app.send(&Command::End).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;
+    process.exits().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn links_are_shared_removed_and_refused_in_a_terminal_session() {
     let url = signalling().await;
     let folder = tempfile::tempdir().unwrap();
@@ -847,4 +884,51 @@ async fn links_are_shared_removed_and_refused_in_a_terminal_session() {
     app.send(&Command::End).await;
     app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;
     process.exits().await;
+}
+
+/// "# Notes\n" in base64.
+const NOTES: &str = "IyBOb3Rlcwo=";
+
+/// Shares `notes.md` as the host; its file id.
+async fn share_notes(app: &mut App, terminal: &mut String) -> u32 {
+    app.send(&Command::ShareFile { id: 1, name: "notes.md".into(), data: NOTES.into() }).await;
+    let answer = app.until(terminal, |e| matches!(e, Event::Answer { id: 1, .. })).await;
+    let Event::Answer { value: Some(info), error: None, .. } = answer else { panic!("{answer:?}") };
+    assert_eq!(info["name"], "notes.md");
+    assert_eq!(info["kind"], "markdown");
+    assert_eq!(info["byLabel"], "Nick");
+    app.until(terminal, |e| {
+        matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["files"][0]["name"] == "notes.md")
+    })
+    .await;
+    info["file"].as_u64().unwrap() as u32
+}
+
+async fn read_refuse_and_put(app: &mut App, terminal: &mut String, folder: &Path, file: u32) {
+    // An executable's first bytes.
+    app.send(&Command::ShareFile { id: 2, name: "tool.exe".into(), data: "TVoAkA==".into() }).await;
+    let refused = app.until(terminal, |e| matches!(e, Event::Answer { id: 2, .. })).await;
+    assert!(matches!(refused, Event::Answer { value: None, error: Some(_), .. }), "{refused:?}");
+
+    app.send(&Command::ReadSharedFile { id: 3, file }).await;
+    let read = app.until(terminal, |e| matches!(e, Event::Answer { id: 3, .. })).await;
+    assert!(matches!(&read, Event::Answer { value: Some(value), .. } if value == NOTES));
+
+    app.send(&Command::PutSharedFile { id: 4, file }).await;
+    let put = app.until(terminal, |e| matches!(e, Event::Answer { id: 4, .. })).await;
+    assert!(matches!(&put, Event::Answer { value: Some(value), .. } if value == "shared/notes.md"));
+    assert_eq!(std::fs::read(folder.join("shared/notes.md")).unwrap(), b"# Notes\n");
+}
+
+async fn allow_and_remove(app: &mut App, terminal: &mut String, file: u32) {
+    app.send(&Command::AllowFiles { files: true }).await;
+    app.until(terminal, |e| {
+        matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["filesAllowed"] == true)
+    })
+    .await;
+    app.send(&Command::RemoveSharedFile { file }).await;
+    app.until(terminal, |e| {
+        matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["files"] == serde_json::json!([]))
+    })
+    .await;
 }

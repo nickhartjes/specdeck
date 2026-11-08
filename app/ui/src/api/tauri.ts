@@ -7,7 +7,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exportFileName } from '../model/diagnostics';
 import type { Bridge } from './bridge';
 import type { MenuCommand } from '../menu/menu';
-import type { AgentVersion, Appearance, DiagnosticsStatus, HostEvent, JoinLink, Profile, RunningSession, ServiceCheck, UpdateState, ViewEvent } from './types';
+import type { AgentVersion, Appearance, DiagnosticsStatus, HostEvent, JoinLink, Profile, RunningSession, ServiceCheck, SharedFileInfo, UpdateState, ViewEvent } from './types';
 
 function channel<T>(handler: (message: T) => void): Channel<T> {
   const ch = new Channel<T>();
@@ -29,12 +29,19 @@ function bytesChannel(handler: (data: ArrayBuffer) => void): Channel<ArrayBuffer
   return channel((message) => handler(asArrayBuffer(message)));
 }
 
+/** A file's name for a command that takes its bytes raw; headers carry only ASCII. */
+function fileHeaders(name: string): Record<string, string> {
+  return { 'x-file-name': encodeURIComponent(name) };
+}
+
 export const tauriBridge: Bridge = {
   getProfile: () => invoke<Profile>('get_profile'),
   agentVersions: () => invoke<AgentVersion[]>('agent_versions'),
   openInstallPage: (agent) => invoke('open_install_page', { agent }),
   setUsername: (username) => invoke<Profile>('set_username', { username }),
   setNotifications: (enabled) => invoke<Profile>('set_notifications', { enabled }),
+  setViewerNotifications: (kinds) => invoke<Profile>('set_viewer_notifications', { kinds }),
+  viewerNotify: (kind, title, body) => invoke('viewer_notify', { kind, title, body }),
   setCheckUpdates: (enabled) => invoke<Profile>('set_check_updates', { enabled }),
   setScreenReader: (enabled) => invoke<Profile>('set_screen_reader', { enabled }),
   setVerboseLogging: (enabled) => invoke<Profile>('set_verbose_logging', { enabled }),
@@ -80,6 +87,11 @@ export const tauriBridge: Bridge = {
   hostAllowSuggestions: (on) => invoke('host_allow_suggestions', { on }),
   hostShareCode: (wholeFiles) => invoke('host_share_code', { wholeFiles }),
   hostAnswerSuggestion: (viewerId, id, text) => invoke('host_answer_suggestion', { viewerId, id, text }),
+  hostAllowFiles: (on) => invoke('host_allow_files', { on }),
+  hostShareFile: (name, bytes) => invoke<SharedFileInfo>('host_share_file', bytes, { headers: fileHeaders(name) }),
+  hostRemoveSharedFile: (file) => invoke('host_remove_shared_file', { file }),
+  hostReadSharedFile: async (file) => asArrayBuffer(await invoke<ArrayBuffer>('host_read_shared_file', { file })),
+  hostPutSharedFile: (file) => invoke<string>('host_put_shared_file', { file }),
   hostShareLink: (url, title, sessionOnly) => invoke('host_share_link', { url, title, sessionOnly }),
   hostAnswerLink: (viewerId, id, share) => invoke('host_answer_link', { viewerId, id, share }),
   hostRemoveLink: (id) => invoke('host_remove_link', { id }),
@@ -89,6 +101,10 @@ export const tauriBridge: Bridge = {
     invoke('join_session', { code, server, terminal: bytesChannel(terminal), events: channel<ViewEvent>(events) }),
   leaveSession: () => invoke('leave_session'),
   suggestPrompt: (text) => invoke('suggest_prompt', { text }),
+  viewerShareFile: (name, bytes) => invoke('viewer_share_file', bytes, { headers: fileHeaders(name) }),
+  viewerOpenFile: async (file) => asArrayBuffer(await invoke<ArrayBuffer>('viewer_open_file', { file })),
+  viewerRemoveFile: (file) => invoke('viewer_remove_file', { file }),
+  saveSharedFile: (name, bytes) => invoke<boolean>('save_shared_file', bytes, { headers: fileHeaders(name) }),
   sendLink: (url, title, sessionOnly) => invoke('send_link', { url, title, sessionOnly }),
   openLink: (id) => invoke('open_shared_link', { id }),
   takeJoinLink: () => invoke<JoinLink | null>('take_join_link'),

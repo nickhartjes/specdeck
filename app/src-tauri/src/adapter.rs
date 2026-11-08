@@ -11,13 +11,19 @@ use specdeck_local::{Compat, Frame, Protocol, compat};
 use specdeck_session::messages::{Command, Event};
 
 /// Commands added in this release (`viewer-to-host-channel`, `files-documents-and-code`,
-/// `shared-links`), which a session of the release before it does not know. Its snapshot has no
-/// `suggestionsPossible`, `wholeFilesPossible` or `linksPossible`, so the window offers none of
-/// them; this keeps a stray one from reaching it. Remove a release later.
-const NEW_COMMANDS: [&str; 7] = [
+/// `shared-files`, `shared-links`), which a session of the release before it does not know. Its
+/// snapshot has no `suggestionsPossible`, `wholeFilesPossible`, `sharedFilesPossible` or
+/// `linksPossible`, so the window offers none of them; this keeps a stray one from reaching it.
+/// Remove a release later.
+const NEW_COMMANDS: [&str; 12] = [
     "allow-requests",
     "answer-suggestion",
     "share-code",
+    "allow-files",
+    "share-file",
+    "remove-shared-file",
+    "read-shared-file",
+    "put-shared-file",
     "share-link",
     "answer-link",
     "remove-link",
@@ -188,9 +194,17 @@ mod tests {
             answer: specdeck_session::messages::SuggestionAnswer::Decline,
         };
         let share = Command::ShareCode { whole_files: true };
-        assert!(command(previous, &allow).is_none());
-        assert!(command(previous, &answer).is_none());
-        assert!(command(previous, &share).is_none());
+        let files = [
+            Command::AllowFiles { files: true },
+            Command::ShareFile { id: 1, name: "a.md".into(), data: "YQ==".into() },
+            Command::RemoveSharedFile { file: 1 },
+            Command::ReadSharedFile { id: 2, file: 1 },
+            Command::PutSharedFile { id: 3, file: 1 },
+        ];
+        for new in [&allow, &answer, &share].into_iter().chain(&files) {
+            assert!(command(previous, new).is_none(), "{new:?} reached the previous release");
+            assert!(command(Protocol::own(), new).is_some(), "{new:?} did not reach this one");
+        }
         assert!(command(previous, &Command::Status).is_some());
         assert!(command(Protocol::own(), &allow).is_some());
         assert!(command(Protocol::own(), &answer).is_some());

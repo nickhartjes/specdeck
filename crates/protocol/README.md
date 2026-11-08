@@ -6,7 +6,7 @@ Current version: `PROTOCOL_VERSION = 5` ([`src/control.rs`](src/control.rs)). Ho
 
 - Version 5 added shared links: the `link` and `link-removed` timeline entries, the `ShareLink` request, and the host's `LinksAllowed` and `Links`. Which links are accepted is decided by `check_link` ([`src/links.rs`](src/links.rs)), used by the sharer, the host and every participant before opening one. Version 4 viewers are admitted and watch as before, suggestions included: the host never sends them a link entry, `LinksAllowed` or `Links`, and they can't share links.
 
-- Version 4 added the whole text of code files: the `file-text` timeline entry and the host's setting for it (`Shared`). Version 3 viewers are admitted and watch as before, suggestions included: the host never sends them a `file-text` event or `Shared`. It skips such an event for them, which they see as a gap in the event sequence, as they already accept.
+- Version 4 added the whole text of code files: the `file-text` timeline entry and the host's setting for it (`Shared`). It also added shared files: the `files` channel, the `file-shared` entry, `FilesAllowed`, `Files`, and the `ShareFile` and `RemoveFile` requests with their outcomes. Version 3 viewers are admitted and watch as before, suggestions included: the host never sends them a `file-text` or `file-shared` event, `Shared`, `FilesAllowed` or `Files`, and does not accept a `files` channel from them. It skips such an event for them, which they see as a gap in the event sequence, as they already accept.
 - Version 3 added requests from viewers to the host (`Send`) and the host's answers (`Allowed`, `Reply`, `Suggestions`). Version 2 viewers are admitted and watch read-only: the host never sends them a version 3 message, which they could not decode and would answer by reconnecting.
 - Version 2 added Codex, Grok and pi to the agents; postcard encodes the agent by its index, so apps that speak version 1 cannot read a `Welcome` for them.
 
@@ -22,12 +22,15 @@ Not compatible with SpecDeck 0.x.
 
 ## Channels
 
-Each viewer has one WebRTC peer connection to the host with two reliable, ordered data channels:
+Each viewer has one WebRTC peer connection to the host with reliable, ordered data channels, all opened by the viewer:
 
 | Channel | Content | Encoding |
 |---|---|---|
 | `control` | Handshake, participants, status, session end, viewers' requests | postcard ([`src/control.rs`](src/control.rs)) |
 | `stream` | Terminal records, history, timeline events | Signed binary frames ([`src/frames.rs`](src/frames.rs)) |
+| `files` (v4) | The bytes of shared files, both ways | postcard ([`src/files.rs`](src/files.rs)) |
+
+`files` is a channel of its own so that a 10 MB file never holds up terminal output on `stream`.
 
 ## Control messages
 
@@ -40,7 +43,7 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `Hello` | `protocol_version`, `username`, `last_output_seq?`, `last_event_seq?`, `resume_token?` | First message on a connection. When reconnecting, the `last_*` fields say where the viewer left off and `resume_token` lets it take its old place |
 | `Resend` | `from_output_seq` | Send records again from this sequence, after a gap or a failed verification |
 | `Leave` | | The viewer is leaving |
-| `Send` (v3) | `id`, `request` | A request to the host. `request` is `Suggest { text }`, or (v5) `ShareLink { url, title?, session_only }`, where `url` must be in the normalized form `check_link` returns and `title` 1 to 120 characters without control characters. `id` is the viewer's own and unique among its requests; a repeated id is answered again without taking the request twice, so a viewer resends unanswered requests after reconnecting |
+| `Send` (v3) | `id`, `request` | A request to the host. `request` is `Suggest { text }`, (v4) `ShareFile { name, size, sha256 }` (name 1 to 255 bytes) or `RemoveFile { file }`, or (v5) `ShareLink { url, title?, session_only }`, where `url` must be in the normalized form `check_link` returns and `title` 1 to 120 characters without control characters. `id` is the viewer's own and unique among its requests; a repeated id is answered again without taking the request twice, so a viewer resends unanswered requests after reconnecting. A `ShareFile` is not resent: its upload belongs to the connection |
 
 ### Host to viewer
 
@@ -52,9 +55,11 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `Status` | `status` | `Starting`, `Working`, `Waiting`, `Exited` or `Unknown` (agents whose events are not captured) |
 | `SessionEnded` | | The host closed the session |
 | `Allowed` (v3) | `suggestions` | What viewers may send; on admission and on every change |
-| `Reply` (v3) | `id`, `outcome` | To the sender only: `Received`, `Off` (the host has turned that kind off) or `RateLimited` (3 at once, then 1 every 10 seconds per viewer, not reset by reconnecting) |
+| `Reply` (v3) | `id`, `outcome` | To the sender only: `Received`, `Off` (the host has turned that kind off) or `RateLimited` (3 at once, then 1 every 10 seconds per viewer, not reset by reconnecting). For files (v4) also `Ready { upload }` (send the bytes as that upload on `files`), `TooLarge`, `Full`, `NotAllowedType` and `Gone` |
 | `Suggestions` (v3) | `mine[]` (`id`, `text`, `state`) | To one viewer: their own suggestions in this session, `Waiting`, `Sent { edited }` or `Declined`; on admission and on every change |
 | `Shared` (v4) | `whole_files` | Whether the host shares whole code files; on admission and on every change |
+| `FilesAllowed` (v4) | `files` | Whether viewers may share files; on admission and on every change |
+| `Files` (v4) | `files[]` (`file`, `name`, `kind`, `media_type`, `size`, `sha256`, `by`, `by_label`, `at_ms`) | The files shared now, oldest first; on admission and on every change |
 | `LinksAllowed` (v5) | `links` | Whether viewers may send links; on admission and on every change |
 | `Links` (v5) | `mine[]` (`id`, `url`, `title?`, `session_only`, `state`) | To one viewer: their newest 50 links in this session, `Waiting`, `Shared` or `Declined`; on admission and on every change |
 
@@ -71,7 +76,7 @@ viewer                                      host
   | <-- Welcome {..., session_public_key} ----  |
   | <-- Participants, Status -----------------  |
   | <-- Allowed, Suggestions (v3 viewers) ----  |
-  | <-- Shared (v4 viewers) ------------------  |
+  | <-- Shared, FilesAllowed, Files (v4) -----  |
   | <-- LinksAllowed, Links (v5 viewers) -----  |
   | <== history, then live records and ======  |
   |     timeline events on `stream`             |
@@ -112,6 +117,21 @@ A viewer applies a record only if its sequence is exactly one higher than the la
 
 A viewer that was admitted reconnects through the session's **rejoin room** (from `Welcome`), not the invite code: the host keeps that room open for the whole session, so a viewer that was offline while the host made a new code can still return. Its offer and the host's answer are authenticated with the viewer's resume token instead of the code's auth key; the host tries the tokens of the viewers it admitted. A removed viewer's token is forgotten, so it cannot return this way. When the host closed the session the rejoin room is gone, and the viewer is told the session ended.
 
+## Shared files
+
+Messages on `files` ([`src/files.rs`](src/files.rs)), postcard, at most 64 KB of content plus 64 bytes each:
+
+| Direction | Message | Meaning |
+|---|---|---|
+| viewer to host | `Fetch { file, from }` | Send the file's bytes from offset `from`; replaces a fetch still running |
+| viewer to host | `Cancel { file }` | Stop sending it |
+| viewer to host | `Upload { upload, offset, bytes }` | A chunk of an upload the host accepted with `Ready`, in order, at most 512 KB beyond the last `Ack` |
+| host to viewer | `Chunk { file, offset, bytes }` | A chunk of a fetched file, in order |
+| host to viewer | `Gone { file }` | Removed, or never existed |
+| host to viewer | `Ack { upload, received }` | Bytes of the upload the host has |
+
+Chunks are not signed: the signed `file-shared` event announces `size` and `sha256`, and the receiver checks the whole file against them, discarding it and fetching again when it does not match. The host sends a viewer only files that were shared, by the id it issued; a viewer cannot name a path. An upload becomes a shared file only after the host checked its hash and its type from its content (PNG, JPEG, GIF, WebP, Markdown or UTF-8 text), and within the limits: 10 MB a file, 50 MB a session, 20 MB a viewer. Chunks of an upload the host no longer has (refused, timed out, switched off) are ignored; a chunk out of order or past the announced size disconnects the viewer.
+
 ## Timeline events
 
 `TimelineEvent` ([`src/timeline.rs`](src/timeline.rs)) has `outputSeq`, `at` (milliseconds since the epoch) and an entry tagged by `kind`:
@@ -128,6 +148,7 @@ A viewer that was admitted reconnects through the session's **rejoin room** (fro
 | `file-read` | A file the agent read |
 | `document` | The whole text of a Markdown file the agent created or changed, after its `file-change`; `text` is null when too large |
 | `file-text` (v4) | The whole text of a code file the agent created or changed, after its `file-change`, only while the host shares whole code files; `text` is null when too large. Never sent to version 3 viewers |
+| `file-shared` (v4) | Someone shared a file: `file`, `name`, `fileKind` (`image`, `markdown` or `text`), `mediaType`, `size`, `sha256` (hex), `by` (participant id, 0 for the host) and `byLabel`. Its bytes come on `files` and are checked against `size` and `sha256`. Never sent to version 3 viewers |
 | `link` (v5) | A link shared with everyone: `id` (from 1 within the session), `url`, `title?`, `by` (the label of whoever shared it) and `sessionOnly`. `url` is null once the host removed it: the host then also sends the stored entry without it to anyone who receives it later. Never sent to version 4 viewers |
 | `link-removed` (v5) | The host removed the link `id`. Never sent to version 4 viewers |
 | `timeline-unavailable` | Structured events cannot be captured; the terminal mirror still works |

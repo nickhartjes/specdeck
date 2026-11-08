@@ -2,6 +2,7 @@
 //! one, finding the ones that run, and passing the host's window and commands to them over the
 //! local protocol.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
 use std::sync::{Arc, Mutex};
@@ -26,6 +27,8 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the Connection status panel waits for a session's answer.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a command with an answer may take, such as sharing a 10 MB file.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The binary's file name.
 const BINARY: &str = if cfg!(windows) { "specdeck-session.exe" } else { "specdeck-session" };
@@ -75,6 +78,9 @@ struct ClientState {
     started: Option<oneshot::Sender<Result<(), String>>>,
     status: Option<oneshot::Sender<ProcessStatus>>,
     ended: Vec<oneshot::Sender<()>>,
+    /// Commands waiting for their `answer`, by id.
+    answers: HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>,
+    next_answer: u64,
     over: bool,
     /// The session's links, as they passed to the window.
     links: LinkBook,
@@ -161,6 +167,65 @@ impl SessionClient {
             None => SuggestionAnswer::Decline,
         };
         self.send(&Command::AnswerSuggestion { viewer_id, id, answer });
+    }
+
+    /// Whether viewers may share files.
+    pub fn allow_files(&self, on: bool) {
+        self.send(&Command::AllowFiles { files: on });
+    }
+
+    /// Shares a file the host chose; the file as the session lists it (`SharedFileInfo`).
+    pub async fn share_file(
+        &self,
+        name: String,
+        bytes: &[u8],
+    ) -> Result<serde_json::Value, String> {
+        use base64::Engine as _;
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        self.ask(|id| Command::ShareFile { id, name, data }).await
+    }
+
+    pub fn remove_shared_file(&self, file: u32) {
+        self.send(&Command::RemoveSharedFile { file });
+    }
+
+    /// A shared file's bytes.
+    pub async fn read_shared_file(&self, file: u32) -> Result<Vec<u8>, String> {
+        use base64::Engine as _;
+        let value = self.ask(|id| Command::ReadSharedFile { id, file }).await?;
+        let data = value.as_str().ok_or("The file could not be read.")?;
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|_| "The file could not be read.".to_owned())
+    }
+
+    /// Puts a shared file into `shared/` in the session folder; the path it was written to.
+    pub async fn put_shared_file(&self, file: u32) -> Result<String, String> {
+        let value = self.ask(|id| Command::PutSharedFile { id, file }).await?;
+        Ok(value.as_str().unwrap_or_default().to_owned())
+    }
+
+    /// Sends the command `make` builds with a fresh id, and waits for its answer.
+    async fn ask(&self, make: impl FnOnce(u64) -> Command) -> Result<serde_json::Value, String> {
+        let (sender, receiver) = oneshot::channel();
+        let id = {
+            let mut state = self.state.lock().unwrap();
+            if state.over {
+                return Err("The session has ended.".into());
+            }
+            state.next_answer += 1;
+            let id = state.next_answer;
+            state.answers.insert(id, sender);
+            id
+        };
+        self.send(&make(id));
+        let answer = tokio::time::timeout(ANSWER_TIMEOUT, receiver).await;
+        self.state.lock().unwrap().answers.remove(&id);
+        match answer {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("The session has ended.".into()),
+            Err(_) => Err("The session did not answer in time.".into()),
+        }
     }
 
     /// Shares the host's own link; the window checked it, and the session checks it again.
@@ -287,6 +352,7 @@ pub async fn connect(
             if let Some(started) = state.started.take() {
                 let _ = started.send(Err("The session process stopped.".into()));
             }
+            state.answers.clear();
             std::mem::take(&mut state.ended)
         };
         for sender in waiting {
@@ -346,6 +412,14 @@ fn receive(
             match started {
                 Some(started) => drop(started.send(Err(message))),
                 None => tracing::warn!("session.command_failed"),
+            }
+        }
+        Event::Answer { id, value, error } => {
+            if let Some(answer) = state.lock().unwrap().answers.remove(&id) {
+                let _ = answer.send(match (value, error) {
+                    (_, Some(error)) => Err(error),
+                    (value, None) => Ok(value.unwrap_or_default()),
+                });
             }
         }
         Event::Status { sharing, events } => {

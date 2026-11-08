@@ -70,6 +70,14 @@ Next to the session's name, a label shows whether the agent is working or waitin
 
 Agents report their state through the terminal (the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)), so a program shows up here only if it supports it. The host is notified when an agent or program waits for them while the SpecDeck window is in the background.
 
+## Get called back
+
+You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session).
+
+### Notifications in the browser
+
+In the web viewer, notifications are off until you turn them on: open the layout button and tick **While this tab is in the background** under **Notifications**. Your browser asks whether the page may show notifications. Once you allow it, choose the same kinds as in the app. The browser remembers your choice, so you are not asked again. They show only while the tab is hidden or the browser is not in front. If the browser does not allow notifications, the menu says so; allow them for the page in your browser's site settings and try again.
+
 ## Read the session
 
 | To | Do this |
@@ -81,6 +89,7 @@ Agents report their state through the terminal (the [Program Status Protocol](ht
 | See a step's change | Select the step. A step that changed a file opens that file's diffs in a tab, at that change; any other step shows the terminal at its line, highlighted for a moment |
 | See which files changed | Look in **Files**, under **Documents** or **Code**. Each file says whether the agent created, changed or only read it. Select a changed file to see all its diffs in order; select a file it only read to see where in the terminal it read it |
 | See a whole code file | Open a changed file from **Code** and switch from **Changes** to **Whole file, changes marked**: the file as it is now, with the lines changed in this session marked and where lines were removed. It works when the host shares whole files (otherwise the tab says the host shares only the changes), and for changes made since. Each file keeps the view you chose for the rest of the session; a step in the timeline always shows its change |
+| See files people shared | Look in **Files › Shared**, under **Shared with everyone**: wireframes, notes or logs the host or other viewers shared, newest first. Select one to open it; **Save a copy** saves it on your computer. A share also shows in the timeline. See below |
 | Open a file for a while | A single click opens a file in a preview tab, in italics, which the next file you open replaces. Double-click the file or the tab to keep it open; scrolling or selecting text in a preview keeps it too |
 | Show or hide the files, the terminal or the timeline | Press **⌘1**, **⌘2**, **⌘3** (macOS) or **Ctrl+1**, **Ctrl+2**, **Ctrl+3** (Windows, Linux), from left to right. **⌘2** or **Ctrl+2** goes to the terminal tab, and adds it in Overview |
 | Copy | Select text in the terminal, the timeline or a diff and copy it: **⌘C** on macOS; on Windows and Linux **Ctrl+C** copies while text is selected (in your own terminal, without a selection it interrupts the agent, as in any terminal) and **Ctrl+Shift+C** always copies. Copying never sends anything to the session |
@@ -88,6 +97,12 @@ Agents report their state through the terminal (the [Program Status Protocol](ht
 | Read the terminal larger or smaller | The terminal keeps the host's size and scales its text to fill the width of the tab area, following the latest output. Give it more room (a wider window, narrower or closed side panels) for larger text. [Zoom](/specdeck/guide/keyboard/) makes the rest of the window larger; the terminal keeps filling its tab |
 
 What you scroll, search or open only changes your own view.
+
+## Share a file
+
+When the host lets viewers share files, **Files › Shared** has **Share files**: choose files, or drop them there. Images (PNG, JPEG, GIF, WebP), Markdown and text files up to 10 MB can be shared, up to 20 MB of your files in a session. Everyone in the session sees them, with your name. You can remove your own files.
+
+A file you share goes to the host's SpecDeck first, which checks it and passes it on. It never reaches the agent unless the host puts it in the session folder. When the host has not turned sharing on, the **Shared** tab says so.
 
 ## Links
 

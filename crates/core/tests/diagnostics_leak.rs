@@ -16,7 +16,7 @@ use specdeck_core::session::{HostConfig, HostSession};
 use specdeck_core::sharing::{Answer, Sharing, SharingConfig, SharingEvent};
 use specdeck_core::viewer::{CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession};
 use specdeck_protocol::AgentId;
-use specdeck_protocol::control::PROTOCOL_VERSION;
+use specdeck_protocol::control::{Outcome, PROTOCOL_VERSION};
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::timeline::Entry;
 use specdeck_server::{Config, Service, TurnConfig};
@@ -36,6 +36,8 @@ const TURN_SECRET: &str = "Marker-Turn-Secret";
 const SUGGESTION_MARKER: &str = "Marker-Suggestion-Text";
 const CODE_PATH_MARKER: &str = "marker-code-path.rs";
 const CODE_TEXT_MARKER: &str = "Marker-Code-Text";
+const FILE_NAME_MARKER: &str = "Marker-Shared-Name";
+const FILE_TEXT_MARKER: &str = "Marker-Shared-Text";
 const LINK_PATH_MARKER: &str = "marker-link-path";
 const LINK_KEY_MARKER: &str = "Marker-Link-Key";
 const LINK_TITLE_MARKER: &str = "Marker-Link-Title";
@@ -197,6 +199,43 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     assert!(sharing.answer_suggestion(suggestion.viewer, suggestion.id, edited).await.unwrap());
     sharing.allow_suggestions(false);
     until(&mut events, &mut text, |_, e| *e == ViewerEvent::Allowed { suggestions: false }).await;
+    // A file the host shares and one the viewer shares, each fetched, then both removed.
+    let host_file = session
+        .share_file(
+            HOST_NAME,
+            &format!("{FILE_NAME_MARKER}.md"),
+            FILE_TEXT_MARKER.as_bytes().to_vec(),
+        )
+        .unwrap();
+    let fetched = tokio::time::timeout(WAIT, async {
+        loop {
+            let got = viewer.fetch_file(host_file.file).await.unwrap();
+            if got.is_ok() {
+                return got;
+            }
+            // Asked before the viewer heard of the file.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fetched.unwrap(), FILE_TEXT_MARKER.as_bytes());
+    session.allow_viewer_files(true);
+    until(&mut events, &mut text, |_, e| *e == ViewerEvent::FilesAllowed { files: true }).await;
+    let name = format!("{FILE_NAME_MARKER}.log");
+    let shared = viewer.share_file(
+        name,
+        format!(
+            "{FILE_TEXT_MARKER}
+"
+        )
+        .into_bytes(),
+    );
+    assert_eq!(tokio::time::timeout(WAIT, shared).await.unwrap(), Ok(Outcome::Received));
+    let viewer_file = session.view().shared_files().last().unwrap().file;
+    viewer.remove_file(viewer_file);
+    session.remove_shared_file(host_file.file).unwrap();
+    session.put_shared_file(host_file.file).unwrap_err();
 
     // Links: the viewer sends one, which the host shares; the host shares one of its own and
     // removes it, and turns viewers' links off.
@@ -249,6 +288,12 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "host.links_allowed",
         "viewer.request_sent",
         "viewer.request_reply",
+        "host.file_shared",
+        "host.file_sent",
+        "host.file_removed",
+        "host.files_allowed",
+        "viewer.file_fetched",
+        "viewer.file_uploaded",
         "host.traffic",
         "viewer.traffic",
     ] {
@@ -269,6 +314,8 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         SUGGESTION_MARKER,
         CODE_PATH_MARKER,
         CODE_TEXT_MARKER,
+        FILE_NAME_MARKER,
+        FILE_TEXT_MARKER,
         LINK_PATH_MARKER,
         LINK_KEY_MARKER,
         LINK_TITLE_MARKER,

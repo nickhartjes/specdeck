@@ -15,9 +15,12 @@ import type {
   Profile,
   RunningSession,
   ServiceCheck,
+  SharedFileInfo,
   TerminalSnapshot,
   UpdateState,
   ViewEvent,
+  ViewerNotificationKind,
+  ViewerNotifications,
 } from './types';
 
 /** Receives terminal data as the binary stream described in src/terminal/stream.ts. */
@@ -30,6 +33,9 @@ export interface Bridge {
   openInstallPage(agent: AgentId): Promise<void>;
   setUsername(username: string): Promise<Profile>;
   setNotifications(enabled: boolean): Promise<Profile>;
+  setViewerNotifications(kinds: ViewerNotifications): Promise<Profile>;
+  /** Notifies about the session this window watches, unless that kind is off or the window is in front. */
+  viewerNotify(kind: ViewerNotificationKind, title: string, body: string): Promise<void>;
   setCheckUpdates(enabled: boolean): Promise<Profile>;
   setScreenReader(enabled: boolean): Promise<Profile>;
   setVerboseLogging(enabled: boolean): Promise<Profile>;
@@ -65,6 +71,14 @@ export interface Bridge {
   hostShareCode(wholeFiles: boolean): Promise<void>;
   /** Types `text` (the suggestion, maybe edited) into the agent's prompt and submits it, or declines the suggestion when `text` is null. */
   hostAnswerSuggestion(viewerId: number, id: number, text: string | null): Promise<void>;
+  /** Lets viewers share files, or stops them; files already shared stay. */
+  hostAllowFiles(on: boolean): Promise<void>;
+  /** Shares a file the host chose; fails with why it was refused. */
+  hostShareFile(name: string, bytes: ArrayBuffer): Promise<SharedFileInfo>;
+  hostRemoveSharedFile(file: number): Promise<void>;
+  hostReadSharedFile(file: number): Promise<ArrayBuffer>;
+  /** Puts a shared file into shared/ in the session folder; the path it was written to. */
+  hostPutSharedFile(file: number): Promise<string>;
   /** Shares the host's own link with everyone; `url` is checked again on the Rust side. */
   hostShareLink(url: string, title: string | null, sessionOnly: boolean): Promise<void>;
   /** Shares a viewer's waiting link with everyone as they sent it, or declines it. */
@@ -79,6 +93,14 @@ export interface Bridge {
   leaveSession(): Promise<void>;
   /** Suggests a prompt to the host of the watched session; fails for text the host would refuse. */
   suggestPrompt(text: string): Promise<void>;
+  /** Shares a file with everyone in the watched session; fails with why the host refused it. */
+  viewerShareFile(name: string, bytes: ArrayBuffer): Promise<void>;
+  /** A shared file's bytes, fetched from the host and checked. */
+  viewerOpenFile(file: number): Promise<ArrayBuffer>;
+  /** Removes a file this viewer shared. */
+  viewerRemoveFile(file: number): Promise<void>;
+  /** Saves a copy of a shared file where the person chooses; false when they cancelled. */
+  saveSharedFile(name: string, bytes: ArrayBuffer): Promise<boolean>;
   /** Sends the host of the watched session a link to share; fails for a link the host would refuse. */
   sendLink(url: string, title: string | null, sessionOnly: boolean): Promise<void>;
   /** Opens shared link `id` of this window's session in the default browser; never an address the window names. */

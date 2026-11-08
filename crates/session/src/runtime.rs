@@ -9,17 +9,20 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use specdeck_core::browser::BrowserHandler;
 use specdeck_core::environment::Environment;
 use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession, SessionEvent};
+use specdeck_core::shared_files::{PutError, Refusal};
 use specdeck_core::sharing::{
     Answer, HostLink, HostSuggestion, MAX_VIEWERS, Sharing, SharingConfig, SharingEvent,
     SharingStatus,
 };
-use specdeck_protocol::control::{Participant, Role, SentLinkState};
+use specdeck_protocol::control::{Participant, Role, SentLinkState, SharedFileInfo};
 use specdeck_protocol::links::{LinkRefusal, MAX_LINK_TITLE_CHARS};
 use specdeck_protocol::timeline::{Entry, TimelineEvent};
 use specdeck_protocol::{AgentId, AgentStatus};
@@ -69,6 +72,12 @@ pub enum HostEvent {
         whole_files_possible: bool,
         /// Whether viewers can open whole code files.
         whole_files: bool,
+        /// True: sessions of this release take shared files.
+        shared_files_possible: bool,
+        /// Whether viewers may share files.
+        files_allowed: bool,
+        /// The files shared now, oldest first.
+        shared_files: Vec<SharedFileInfo>,
         /// Links can be shared; absent from sessions of the release before `shared-links`.
         links_possible: bool,
         links_allowed: bool,
@@ -106,6 +115,11 @@ pub enum HostEvent {
     /// Whether viewers can open whole code files, after the host changed it.
     Shared {
         whole_files: bool,
+    },
+    /// The shared files, or whether viewers may share them, changed.
+    SharedFiles {
+        files: Vec<SharedFileInfo>,
+        files_allowed: bool,
     },
     /// Whether viewers may send links, after the host changed it.
     LinksAllowed {
@@ -270,7 +284,7 @@ pub struct HostRuntime {
     pub folder: PathBuf,
     /// The sharing service, fixed for the session.
     service: String,
-    /// The host's name, for links shared before the participant list arrives.
+    /// The host's name, as files and links they share show it.
     username: String,
     session: HostSession,
     sharing: Sharing,
@@ -374,6 +388,10 @@ impl HostRuntime {
                             let mut ui = shared.lock().unwrap();
                             ui.exited = Some(code);
                             ui.send(HostEvent::Exited { code });
+                        }
+                        Some(SessionEvent::SharedFiles { files, viewers_allowed }) => {
+                            let files_allowed = viewers_allowed;
+                            shared.lock().unwrap().send(HostEvent::SharedFiles { files, files_allowed });
                         }
                         Some(SessionEvent::Output | SessionEvent::Resized { .. }) => {}
                         None => break,
@@ -496,6 +514,9 @@ impl HostRuntime {
                 suggestions: ui.suggestions.clone(),
                 whole_files_possible: self.agent.has_timeline(),
                 whole_files: self.session.whole_files(),
+                shared_files_possible: true,
+                files_allowed: view.files_allowed(),
+                shared_files: view.shared_files(),
                 links_possible: true,
                 links_allowed: ui.links_allowed,
                 viewer_links: ui.viewer_links.clone(),
@@ -603,6 +624,57 @@ impl HostRuntime {
         self.session.share_whole_files(on);
     }
 
+    /// Lets viewers share files, or stops them; files already shared stay.
+    pub fn allow_viewer_files(&self, on: bool) {
+        self.session.allow_viewer_files(on);
+    }
+
+    /// Shares a file the host chose in their window, `data` in base64.
+    pub fn share_file(&self, name: &str, data: &str) -> Result<SharedFileInfo, String> {
+        let bytes = BASE64.decode(data).map_err(|_| "The file could not be read.".to_owned())?;
+        let size = bytes.len() as u64;
+        let result = self.session.share_file(&self.username, name, bytes);
+        let (kind, outcome) = match &result {
+            Ok(info) => (info.kind.as_str(), "shared"),
+            Err(refusal) => ("unknown", refusal.as_str()),
+        };
+        specdeck_core::diag::host_file_shared(0, kind, size, outcome);
+        result.map_err(refusal_message)
+    }
+
+    pub fn remove_shared_file(&self, file: u32) {
+        if self.session.remove_shared_file(file).is_ok() {
+            specdeck_core::diag::host_file_removed(0);
+        }
+    }
+
+    /// A shared file's bytes in base64, for the host's window.
+    pub fn read_shared_file(&self, file: u32) -> Result<String, String> {
+        let shared =
+            self.session.shared_file(file).ok_or_else(|| refusal_message(Refusal::Gone))?;
+        Ok(BASE64.encode(&shared.bytes))
+    }
+
+    /// Puts a shared file into `shared/` in the session folder; the path it was written to.
+    pub fn put_shared_file(&self, file: u32) -> Result<String, String> {
+        let size = self.session.shared_file(file).map_or(0, |shared| shared.info.size);
+        let result = self.session.put_shared_file(file);
+        let outcome = match &result {
+            Ok(_) => "put",
+            Err(PutError::Gone) => "gone",
+            Err(PutError::OutsideFolder | PutError::NotAFolder) => "outside",
+            Err(PutError::NoFreeName) => "no_name",
+            Err(PutError::Io(_)) => "io",
+        };
+        specdeck_core::diag::host_file_put(size, outcome);
+        result.map_err(|error| match error {
+            PutError::Io(_) => {
+                "The file could not be written to shared/ in the session folder.".into()
+            }
+            error => format!("Not put in the session folder: {error}."),
+        })
+    }
+
     /// Declines a waiting suggestion, or types `text` into the agent's prompt and submits it. A
     /// suggestion that is not waiting, for example one already sent, is not typed again.
     pub async fn answer_suggestion(
@@ -681,6 +753,20 @@ impl HostRuntime {
         self.sharing.close();
         self.session.stop();
     }
+}
+
+/// Why a file was not shared, as the host's window shows it.
+fn refusal_message(refusal: Refusal) -> String {
+    match refusal {
+        Refusal::TooLarge => "Files can be up to 10 MB.",
+        Refusal::Full => "The session's shared files are full (50 MB). Remove some to make room.",
+        Refusal::NotAllowedType => {
+            "Only images (PNG, JPEG, GIF, WebP), Markdown and text files can be shared."
+        }
+        Refusal::Gone => "That file is no longer shared.",
+        Refusal::Off => "Sharing files is turned off.",
+    }
+    .into()
 }
 
 #[cfg(test)]

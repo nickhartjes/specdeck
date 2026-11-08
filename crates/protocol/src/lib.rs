@@ -2,6 +2,7 @@
 
 mod agent;
 pub mod control;
+pub mod files;
 pub mod frames;
 pub mod invite;
 pub mod links;

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Copy, Link2, Power, RefreshCw } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, HostEvent, HostLink, HostSuggestion, Participant, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
+import type { AgentId, AgentStatus, HostEvent, HostLink, HostSuggestion, Participant, SharedFileInfo, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
+import { shareEach, type SharedFiles } from '../components/SharedFiles';
+import { useSharedBytes } from './useSharedBytes';
 import { SuggestionsInbox } from '../components/SuggestionsInbox';
 import { LinksBar } from '../components/LinksBar';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -57,6 +59,11 @@ interface State {
   wholeFilesPossible: boolean;
   /** Whether viewers can open whole code files. */
   wholeFiles: boolean;
+  /** False for sessions of the previous release, which take no shared files. */
+  sharedFilesPossible: boolean;
+  /** Whether viewers may share files. */
+  filesAllowed: boolean;
+  sharedFiles: SharedFileInfo[];
   /** False for sessions of the previous release, which can't share links. */
   linksPossible: boolean;
   /** Whether viewers may send links. */
@@ -87,6 +94,9 @@ const initial: State = {
   arrived: null,
   wholeFilesPossible: false,
   wholeFiles: false,
+  sharedFilesPossible: false,
+  filesAllowed: false,
+  sharedFiles: [],
   linksPossible: false,
   linksAllowed: false,
   viewerLinks: [],
@@ -107,11 +117,16 @@ export function hostReducer(state: State, event: HostEvent | { type: 'limit'; li
         suggestions: event.suggestions ?? [],
         wholeFilesPossible: event.wholeFilesPossible ?? false,
         wholeFiles: event.wholeFiles ?? false,
+        sharedFilesPossible: event.sharedFilesPossible ?? false,
+        filesAllowed: event.filesAllowed ?? false,
+        sharedFiles: event.sharedFiles ?? [],
         // A session of the previous release says nothing of links: it can't share them.
         linksPossible: event.linksPossible ?? false,
         linksAllowed: event.linksAllowed ?? false,
         viewerLinks: event.viewerLinks ?? [],
       };
+    case 'shared-files':
+      return { ...state, sharedFiles: event.files, filesAllowed: event.filesAllowed };
     case 'allowed':
       return { ...state, suggestionsAllowed: event.suggestions };
     case 'shared':
@@ -216,6 +231,28 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
   const statusBar = useMemo(() => statusBarInfo(state.timeline, state.timelineSupported), [state.timeline, state.timelineSupported]);
   const folderName = state.folder.split(/[\\/]/).filter(Boolean).at(-1) ?? state.folder;
   const viewers = state.participants.filter((p) => p.role === 'Viewer').length;
+  const open = useSharedBytes(state.sharedFiles, bridge.hostReadSharedFile);
+  const hostName = state.participants.find((p) => p.role === 'Host')?.label ?? 'You';
+  const shared = useMemo<SharedFiles | undefined>(
+    () =>
+      state.sharedFilesPossible
+        ? {
+            files: state.sharedFiles,
+            me: 0,
+            host: true,
+            canShare: true,
+            hostName,
+            agentName: terminal ? 'The shell' : agentName,
+            share: (files) => void shareEach(files, bridge.hostShareFile, showToast),
+            open,
+            remove: (file) => void bridge.hostRemoveSharedFile(file).catch((e) => showToast(errorMessage(e))),
+            put: (file) => bridge.hostPutSharedFile(file),
+            save: bridge.saveSharedFile,
+            say: showToast,
+          }
+        : undefined,
+    [state.sharedFilesPossible, state.sharedFiles, hostName, terminal, agentName, bridge, showToast, open],
+  );
 
   const copy = async (text: string, message: string) => {
     try {
@@ -281,6 +318,11 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
               ? { allowed: state.suggestionsAllowed, onChange: (on) => void bridge.hostAllowSuggestions(on).catch((e) => showToast(errorMessage(e))) }
               : undefined
           }
+          files={
+            state.sharedFilesPossible
+              ? { allowed: state.filesAllowed, onChange: (on) => void bridge.hostAllowFiles(on).catch((e) => showToast(errorMessage(e))) }
+              : undefined
+          }
           links={
             state.linksPossible
               ? { allowed: state.linksAllowed, onChange: (on) => void bridge.hostAllowLinks(on).catch((e) => showToast(errorMessage(e))) }
@@ -334,6 +376,7 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
         onThemeColors={onThemeColors}
         onTerminalState={onTerminalState}
         wholeFiles={state.wholeFiles}
+        shared={shared}
         linksBar={linksBar}
         onRemoveLink={state.linksPossible ? onRemoveLink : undefined}
         prompts={

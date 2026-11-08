@@ -6,6 +6,8 @@ interface Props {
   wholeFiles?: { on: boolean; onChange: (on: boolean) => void };
   /** Whether viewers may suggest prompts, with its switch; absent where they cannot. */
   suggestions?: { allowed: boolean; onChange: (on: boolean) => void };
+  /** Whether viewers may share files, with its switch; absent where the session takes none. */
+  files?: { allowed: boolean; onChange: (on: boolean) => void };
   /** Whether viewers may send links, with its switch; absent for a session that can't share links. */
   links?: { allowed: boolean; onChange: (on: boolean) => void };
   agentName?: string;
@@ -16,7 +18,7 @@ interface Props {
  * do, from a button in the toolbar. Not shown when there is nothing to set, as in a terminal
  * session.
  */
-export function SharingSettings({ wholeFiles, suggestions, links, agentName = 'the agent' }: Props) {
+export function SharingSettings({ wholeFiles, suggestions, files, links, agentName = 'the agent' }: Props) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -41,7 +43,7 @@ export function SharingSettings({ wholeFiles, suggestions, links, agentName = 't
     };
   }, [open]);
 
-  if (!wholeFiles && !suggestions && !links) return null;
+  if (!wholeFiles && !suggestions && !files && !links) return null;
   return (
     <div className="sharing-menu">
       <button
@@ -77,6 +79,18 @@ export function SharingSettings({ wholeFiles, suggestions, links, agentName = 't
               <span>
                 Viewers can suggest prompts
                 <span className="field-hint"> · nothing reaches {agentName} until you send it</span>
+              </span>
+            </label>
+          )}
+          {files && (
+            <label className="check">
+              <input type="checkbox" checked={files.allowed} onChange={(event) => files.onChange(event.target.checked)} />
+              <span>
+                Viewers can share files
+                <span className="field-hint">
+                  {' '}
+                  · their files reach you and everyone in the session; {agentName} sees one only when you put it in the session folder
+                </span>
               </span>
             </label>
           )}

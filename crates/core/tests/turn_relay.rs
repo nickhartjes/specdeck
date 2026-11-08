@@ -123,39 +123,57 @@ fn verified(
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs the local signalling and coturn: just local-test"]
-async fn peers_connect_through_turn_only() {
-    // RUST_LOG=debug shows libdatachannel's ICE log.
-    let _ = env_logger::try_init();
-    let url =
-        std::env::var("SPECDECK_SIGNALLING_URL").unwrap_or("ws://127.0.0.1:18081/signal".into());
-    let keys = InviteCode::generate().keys();
-    let mut host_ws: Socket = tokio_tungstenite::connect_async(&url).await.unwrap().0;
-    let mut viewer_ws: Socket = tokio_tungstenite::connect_async(&url).await.unwrap().0;
+fn signalling_url() -> String {
+    std::env::var("SPECDECK_SIGNALLING_URL").unwrap_or("ws://127.0.0.1:18081/signal".into())
+}
 
-    send(&mut host_ws, ClientMessage::TurnCredentials).await;
-    let ServerMessage::TurnCredentials { urls, username, credential, .. } =
-        recv(&mut host_ws).await
-    else {
-        panic!("no TURN credentials")
+/// TURN servers from a credentials answer, for a peer connection's configuration.
+fn ice_servers(message: ServerMessage) -> Vec<String> {
+    let ServerMessage::TurnCredentials { urls, username, credential, .. } = message else {
+        panic!("no TURN credentials: {message:?}")
     };
-    let ice: Vec<String> =
-        urls.iter().filter_map(|u| turn_url_with_credentials(u, &username, &credential)).collect();
-    println!("TURN servers: {urls:?}");
+    urls.iter().filter_map(|u| turn_url_with_credentials(u, &username, &credential)).collect()
+}
 
-    send(&mut host_ws, ClientMessage::Host { room: keys.room_id.clone() }).await;
+/// Opens `room` and returns the host's signalling connection and TURN servers. Only members get
+/// TURN credentials, so the room comes first.
+async fn host(room: &str) -> (Socket, Vec<String>) {
+    let mut host_ws: Socket = tokio_tungstenite::connect_async(signalling_url()).await.unwrap().0;
+    send(&mut host_ws, ClientMessage::Host { room: room.into() }).await;
     assert!(matches!(recv(&mut host_ws).await, ServerMessage::RoomOpened { .. }));
-    send(&mut viewer_ws, ClientMessage::Join { room: keys.room_id.clone() }).await;
-    let ServerMessage::Joined { connection } = recv(&mut viewer_ws).await else { panic!() };
-    assert!(matches!(recv(&mut host_ws).await, ServerMessage::ViewerJoined { .. }));
+    send(&mut host_ws, ClientMessage::TurnCredentials).await;
+    let ice = ice_servers(recv(&mut host_ws).await);
+    (host_ws, ice)
+}
 
-    let (mut host_pc, mut host_local, _) = peer(&ice);
-    let (mut viewer_pc, mut viewer_local, viewer_forward) = peer(&ice);
+/// A viewer connected to the host through the relay. Its peer connections keep their relay
+/// allocations while it lives.
+struct Relayed {
+    host_pc: Box<RtcPeerConnection<Peer>>,
+    viewer_pc: Box<RtcPeerConnection<Peer>>,
+    _channel: Box<RtcDataChannel<Forward>>,
+    _viewer_ws: Socket,
+}
+
+/// Joins `room` as a new viewer, with its own TURN credentials, and connects it to the host with
+/// relayed candidates only. Signals for the host's other viewers are ignored.
+async fn relayed_viewer(
+    host_ws: &mut Socket,
+    host_ice: &[String],
+    room: &str,
+    auth: [u8; 32],
+) -> Relayed {
+    let mut viewer_ws: Socket = tokio_tungstenite::connect_async(signalling_url()).await.unwrap().0;
+    send(&mut viewer_ws, ClientMessage::Join { room: room.into() }).await;
+    let ServerMessage::Joined { connection } = recv(&mut viewer_ws).await else { panic!() };
+    send(&mut viewer_ws, ClientMessage::TurnCredentials).await;
+    let viewer_ice = ice_servers(recv(&mut viewer_ws).await);
+
+    let (mut host_pc, mut host_local, _) = peer(host_ice);
+    let (mut viewer_pc, mut viewer_local, viewer_forward) = peer(&viewer_ice);
     // Creating the channel makes the viewer's connection produce its offer.
     let mut channel = viewer_pc.create_data_channel("control", viewer_forward).unwrap();
 
-    let auth = keys.auth_key;
     let mut viewer_open = false;
     // Remote candidates wait until the local side has its own relay address; checks started
     // before that are sent without the relay and can leave the connection stuck.
@@ -189,11 +207,11 @@ async fn peers_connect_through_turn_only() {
             Some(local) = host_local.recv() => match local {
                 Local::Description(d) => {
                     eprintln!("host: local {:?}", d.sdp_type);
-                    send(&mut host_ws, ClientMessage::Signal { connection: connection.clone(), payload: signed(&auth, &connection, &d) }).await;
+                    send(host_ws, ClientMessage::Signal { connection: connection.clone(), payload: signed(&auth, &connection, &d) }).await;
                 }
                 Local::Candidate(c) => {
                     eprintln!("host: candidate {}", c.candidate);
-                    send(&mut host_ws, ClientMessage::Signal { connection: connection.clone(), payload: SignalPayload::Candidate { candidate: c.candidate, mid: c.mid } }).await;
+                    send(host_ws, ClientMessage::Signal { connection: connection.clone(), payload: SignalPayload::Candidate { candidate: c.candidate, mid: c.mid } }).await;
                 }
                 Local::Message(bytes) => break bytes,
                 Local::Open => {}
@@ -204,7 +222,8 @@ async fn peers_connect_through_turn_only() {
                     }
                 }
             },
-            message = recv(&mut host_ws) => match message {
+            message = recv(host_ws) => match message {
+                ServerMessage::Signal { connection: other, .. } if other != connection => {}
                 ServerMessage::Signal { payload: SignalPayload::Description(d), .. } => {
                     host_pc.set_remote_description(&verified(&auth, &connection, &d, DescriptionKind::Offer)).unwrap();
                 }
@@ -212,6 +231,7 @@ async fn peers_connect_through_turn_only() {
                     let candidate = IceCandidate { candidate, mid };
                     if host_gathered { host_pc.add_remote_candidate(&candidate).unwrap() } else { host_pending.push(candidate) }
                 }
+                ServerMessage::ViewerJoined { .. } => {}
                 other => panic!("host got {other:?}"),
             },
             message = recv(&mut viewer_ws) => match message {
@@ -229,8 +249,38 @@ async fn peers_connect_through_turn_only() {
 
     assert!(viewer_open);
     assert_eq!(received, b"hello through the relay");
-    let pair = viewer_pc.selected_candidate_pair().expect("no selected candidate pair");
+    Relayed { host_pc, viewer_pc, _channel: channel, _viewer_ws: viewer_ws }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the local signalling and coturn: just local-test"]
+async fn peers_connect_through_turn_only() {
+    // RUST_LOG=debug shows libdatachannel's ICE log.
+    let _ = env_logger::try_init();
+    let keys = InviteCode::generate().keys();
+    let (mut host_ws, host_ice) = host(&keys.room_id).await;
+    println!("TURN servers: {host_ice:?}");
+    let relayed = relayed_viewer(&mut host_ws, &host_ice, &keys.room_id, keys.auth_key).await;
+    let pair = relayed.viewer_pc.selected_candidate_pair().expect("no selected candidate pair");
     println!("selected pair: local {} / remote {}", pair.local, pair.remote);
     assert!(pair.local.contains("typ relay"), "{}", pair.local);
-    drop(channel);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the local signalling and coturn: just local-test"]
+async fn a_host_relays_twenty_viewers_on_one_credential() {
+    let _ = env_logger::try_init();
+    let keys = InviteCode::generate().keys();
+    let (mut host_ws, host_ice) = host(&keys.room_id).await;
+    // Every host-side connection allocates with the host's one credential; coturn's per-credential
+    // quota must leave room for the app's maximum of 20 viewers.
+    let mut viewers = Vec::new();
+    for i in 0..20 {
+        viewers.push(relayed_viewer(&mut host_ws, &host_ice, &keys.room_id, keys.auth_key).await);
+        println!("viewer {} connected through the relay", i + 1);
+    }
+    for relayed in &viewers {
+        let pair = relayed.host_pc.selected_candidate_pair().expect("no selected candidate pair");
+        assert!(pair.local.contains("typ relay"), "{}", pair.local);
+    }
 }

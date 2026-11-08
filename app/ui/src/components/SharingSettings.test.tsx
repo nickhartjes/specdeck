@@ -33,4 +33,15 @@ describe('sharing settings', () => {
     const { container } = render(<SharingSettings />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it('lets viewers share files only when the host turns it on', async () => {
+    const onChange = vi.fn();
+    render(<SharingSettings files={{ allowed: false, onChange }} agentName="Claude Code" />);
+    await userEvent.click(screen.getByRole('button', { name: 'Sharing settings' }));
+    const box = screen.getByRole('checkbox', { name: /Viewers can share files/ });
+    expect(box).not.toBeChecked();
+    expect(screen.getByText(/Claude Code sees one only when you put it in the session folder/)).toBeInTheDocument();
+    await userEvent.click(box);
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
 });

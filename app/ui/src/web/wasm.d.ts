@@ -16,6 +16,18 @@ declare module 'specdeck-web-wasm' {
     suggest(text: string): unknown;
     sendLink(url: string, title: string | null | undefined, sessionOnly: boolean): unknown;
     unansweredRequests(): unknown;
+    shareFile(name: string, bytes: Uint8Array): unknown;
+    removeFile(file: number): unknown;
+  }
+  export class FileFetch {
+    constructor(file: number, size: bigint, sha256: Uint8Array);
+    request(): Uint8Array;
+    onReply(bytes: Uint8Array): unknown;
+  }
+  export class FileUpload {
+    constructor(upload: number, bytes: Uint8Array);
+    nextChunks(): unknown;
+    onReply(bytes: Uint8Array): unknown;
   }
   export function parseJoinLink(link: string): { code: string; service?: string } | undefined;
 }

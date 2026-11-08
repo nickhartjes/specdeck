@@ -31,6 +31,22 @@ describe('binary channel messages', () => {
   });
 });
 
+describe('viewer notifications', () => {
+  it('saves the kinds in the app', async () => {
+    await tauriBridge.setViewerNotifications({ plans: true, documents: false, finished: true });
+    expect(tauri.invoke).toHaveBeenCalledWith('set_viewer_notifications', { kinds: { plans: true, documents: false, finished: true } });
+  });
+
+  it('notifies through the app', async () => {
+    await tauriBridge.viewerNotify('plans', 'Plan add-login is ready for review', 'Claude Code wrote proposal.');
+    expect(tauri.invoke).toHaveBeenCalledWith('viewer_notify', {
+      kind: 'plans',
+      title: 'Plan add-login is ready for review',
+      body: 'Claude Code wrote proposal.',
+    });
+  });
+});
+
 describe('appearance', () => {
   it('is saved by the app', async () => {
     await tauriBridge.setAppearance('dark');

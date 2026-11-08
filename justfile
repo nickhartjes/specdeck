@@ -118,7 +118,8 @@ local-up:
 local-down:
     scripts/local-kubectl.sh delete -k deploy/k8s/local --ignore-not-found
 
-# Check that two peers connect through the local coturn with direct connections disabled
+# Check that two peers connect through the local coturn with direct connections disabled, and
+# that the relay refuses private addresses
 local-test: local-up
     #!/usr/bin/env bash
     set -euo pipefail
@@ -126,6 +127,8 @@ local-test: local-up
     trap 'kill $! 2>/dev/null || true' EXIT
     until curl -sf http://127.0.0.1:18081/health >/dev/null; do sleep 0.25; done
     SPECDECK_SIGNALLING_URL=ws://127.0.0.1:18081/signal cargo test -p specdeck-core --test turn_relay -- --ignored --nocapture
+    # The relay refuses private and special-purpose addresses, and still relays to public ones.
+    node scripts/turn-denied-peers.mjs ws://127.0.0.1:18081/signal
 
 # Local test setup: the sharing service and coturn on Colima's k3s, plus a host app and a viewer app (own settings each)
 local-dev: local-up

@@ -54,6 +54,7 @@ Fill in `.env`:
 | `TURN_EXTERNAL_IP` | The server's public IPv4 address |
 | `TURN_SECRET` | A random secret shared by the server and coturn: `openssl rand -hex 32` |
 | `TURN_MIN_PORT`, `TURN_MAX_PORT` | The relay range you opened in the firewall |
+| `TURN_TOTAL_QUOTA` | Optional: relay allocations in total, as many as the relay range has ports (default `100`) |
 
 Keep `.env` private: anyone with `TURN_SECRET` can use your relay.
 
@@ -101,6 +102,7 @@ Restarting the server does not end sessions that are already connected; new view
 
 ## Notes
 
-- coturn uses the host's network (`network_mode: host`), so it advertises the server's real address and needs no published port per relay port. It refuses to relay to private and loopback ranges, so the relay cannot be used to reach the server's own services or its local network.
+- coturn uses the host's network (`network_mode: host`), so it advertises the server's real address and needs no published port per relay port. It refuses to relay to private, loopback and other special-purpose ranges, over IPv4 and IPv6, so the relay cannot be used to reach the server's own services or its local network.
 - The server needs its public address on its own interface. Behind 1:1 NAT, coturn needs extra settings (`--external-ip=<public>/<private>` and allowing its own private address as a peer) that this setup does not include.
-- Each relayed viewer uses about two relay ports; 100 ports cover about 50 relayed viewers at once. Most connections are direct and use none.
+- Each relayed viewer uses about two relay ports; 100 ports cover about 50 relayed viewers at once. Most connections are direct and use none. If you widen the relay range, raise `TURN_TOTAL_QUOTA` with it.
+- coturn limits each relayed connection to 20 Mbit/s, so one session cannot take the whole uplink.

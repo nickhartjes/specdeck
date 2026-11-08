@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Eye, LogOut, WifiOff } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, SentLink, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
+import { shareEach, type SharedFiles } from '../components/SharedFiles';
+import { Toast, useToast } from '../components/Toast';
+import { useSharedBytes } from './useSharedBytes';
 import { SuggestPanel } from '../components/SuggestPanel';
 import { LinksBar } from '../components/LinksBar';
 import { StatusPill } from '../components/StatusPill';
@@ -17,6 +20,7 @@ import { formatCode } from '../model/code';
 import { AGENT_NAMES } from './HostScreen';
 import { Workspace, type WorkspaceHandle } from './Workspace';
 import { setTimelineEvents } from '../model/heartbeat';
+import { createViewerNotices, DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 
 /** What to tell the viewer when their session ends, and whether they can still read it. */
 export const END_MESSAGES: Record<EndReason, { title: string; text: string; keepReading?: boolean; retry?: boolean }> = {
@@ -32,6 +36,11 @@ export const END_MESSAGES: Record<EndReason, { title: string; text: string; keep
   'service-unavailable': {
     title: 'SpecDeck cannot reach its sharing service',
     text: 'Check your internet connection, then try again.',
+    retry: true,
+  },
+  'service-busy': {
+    title: 'The sharing service is busy',
+    text: 'It is serving as many sessions as it can. Try again in a few minutes.',
     retry: true,
   },
   'network-blocked': {
@@ -72,6 +81,11 @@ interface State {
   sent: { id: number; outcome: RequestOutcome | null } | null;
   /** Whether the host shares whole code files; a host of the previous release never does. */
   wholeFiles: boolean;
+  /** Whether the host lets viewers share files; null while the host has not said, as older hosts never do. */
+  filesAllowed: boolean | null;
+  sharedFiles: SharedFileInfo[];
+  /** Bytes received of files being fetched, by file. */
+  fileProgress: ReadonlyMap<number, number>;
   /** Whether the host lets viewers send links; null while the host has not said, as older hosts never do. */
   linksAllowed: boolean | null;
   /** This viewer's links and what became of each. */
@@ -85,6 +99,9 @@ interface State {
 const initial: State = {
   suggestionsAllowed: null,
   wholeFiles: false,
+  filesAllowed: null,
+  sharedFiles: [],
+  fileProgress: new Map(),
   linksAllowed: null,
   myLinks: [],
   linkSending: false,
@@ -134,6 +151,12 @@ export function viewerReducer(state: State, event: ViewEvent | { type: 'link-sen
       return { ...state, mine: event.mine };
     case 'shared':
       return { ...state, wholeFiles: event.wholeFiles };
+    case 'files-allowed':
+      return { ...state, filesAllowed: event.files };
+    case 'shared-files':
+      return { ...state, sharedFiles: event.files };
+    case 'file-progress':
+      return { ...state, fileProgress: new Map(state.fileProgress).set(event.file, event.received) };
     case 'links-allowed':
       return { ...state, linksAllowed: event.links };
     case 'links':
@@ -169,13 +192,37 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   const [state, dispatch] = useReducer(viewerReducer, initial);
   useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
 
+  // What the viewer is notified about; the switches are read again on every status change, so
+  // a change in Settings applies by the end of the turn.
+  const notices = useMemo(
+    () =>
+      createViewerNotices({
+        switches: DEFAULT_VIEWER_NOTIFICATIONS,
+        notify: ({ kind, title, body }) => void bridge.viewerNotify(kind, title, body).catch(() => {}),
+      }),
+    [bridge],
+  );
+  useEffect(() => () => notices.dispose(), [notices]);
+  const onEvent = (event: ViewEvent) => {
+    dispatch(event);
+    if (event.type === 'joined' || event.type === 'status') {
+      void bridge
+        .getProfile()
+        .then((profile) => notices.setSwitches(profile.viewerNotifications))
+        .catch(() => {});
+    }
+    if (event.type === 'joined') notices.joined(AGENT_NAMES[event.agent]);
+    else if (event.type === 'status') notices.status(event.status);
+    else if (event.type === 'timeline') notices.timeline(event.event);
+  };
+
   const joined = useRef(false);
   useEffect(() => {
     // Join once, also when React mounts the screen twice in development.
     if (joined.current) return;
     joined.current = true;
     bridge
-      .joinSession(code, server ?? null, (data) => workspace.current?.terminalData(data), dispatch)
+      .joinSession(code, server ?? null, (data) => workspace.current?.terminalData(data), onEvent)
       .catch((error) => onLeave({ code, server, message: errorMessage(error) }));
     // Joins once per screen; leaving is explicit or happens when the window closes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -197,6 +244,30 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   const terminal = state.agent === 'terminal';
   const ending = state.ended ? END_MESSAGES[state.ended] : null;
   const statusBar = useMemo(() => statusBarInfo(state.timeline, state.timelineSupported), [state.timeline, state.timelineSupported]);
+  const [toast, showToast] = useToast();
+  const open = useSharedBytes(state.sharedFiles, bridge.viewerOpenFile);
+  const hostName = host?.label ?? 'The host';
+  const live = state.phase !== 'ended';
+  const shared = useMemo<SharedFiles | undefined>(
+    () =>
+      // Hosts that take no shared files never say whether viewers may share them.
+      state.filesAllowed !== null
+        ? {
+            files: state.sharedFiles,
+            me: state.viewerId,
+            host: false,
+            canShare: state.filesAllowed && live,
+            hostName,
+            agentName: terminal ? 'The shell' : agentName,
+            share: (files) => void shareEach(files, bridge.viewerShareFile, showToast),
+            open,
+            remove: (file) => void bridge.viewerRemoveFile(file).catch((e) => showToast(errorMessage(e))),
+            save: bridge.saveSharedFile,
+            say: showToast,
+          }
+        : undefined,
+    [state.filesAllowed, state.sharedFiles, state.viewerId, live, hostName, terminal, agentName, bridge, showToast, open],
+  );
 
   // Ended before ever joining: explain, and offer to try again.
   if (ending && !ending.keepReading && state.viewerId === undefined) {
@@ -273,6 +344,8 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
           timelineSupported={state.timelineSupported}
           timeline={state.timeline}
           wholeFiles={state.wholeFiles}
+          shared={shared}
+          sharedProgress={state.fileProgress}
           linksBar={
             // Hosts that can't take links never say whether they allow them.
             state.linksAllowed !== null && state.phase !== 'ended' ? (
@@ -323,6 +396,7 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
         )}
       </div>
       <StatusBar info={statusBar} />
+      <Toast message={toast} />
       {asking && (
         <FirstJoinDialog
           onChoose={(preset) => {

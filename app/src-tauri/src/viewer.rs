@@ -7,10 +7,10 @@ use std::time::Duration;
 use serde::Serialize;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::viewer::{
-    CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession, ViewerStatus,
+    CONNECT_TIMEOUT, FileError, ViewerConfig, ViewerEvent, ViewerSession, ViewerStatus,
 };
 use specdeck_protocol::control::{
-    Outcome, PROTOCOL_VERSION, Participant, SentLink, Suggestion, valid_suggestion,
+    Outcome, PROTOCOL_VERSION, Participant, SentLink, SharedFileInfo, Suggestion, valid_suggestion,
 };
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::links::{check_link, valid_title};
@@ -52,6 +52,20 @@ pub enum ViewEvent {
     Shared {
         whole_files: bool,
     },
+    /// Whether the host lets viewers share files.
+    FilesAllowed {
+        files: bool,
+    },
+    /// The files shared in the session now.
+    SharedFiles {
+        files: Vec<SharedFileInfo>,
+    },
+    /// Bytes of a shared file this viewer is opening.
+    FileProgress {
+        file: u32,
+        received: u64,
+        size: u64,
+    },
     /// A request was numbered; its replies carry this id.
     RequestSent {
         id: u32,
@@ -89,6 +103,8 @@ pub enum EndReason {
     InvalidCode,
     TooManyAttempts,
     ServiceUnavailable,
+    /// The sharing service is at a capacity limit.
+    ServiceBusy,
     NetworkBlocked,
     /// This app is older than the host's.
     UpdateApp,
@@ -169,6 +185,30 @@ impl ViewerRuntime {
         Ok(())
     }
 
+    /// Shares a file with everyone, if the host allows it; refused with why otherwise.
+    pub async fn share_file(&self, name: String, bytes: Vec<u8>) -> Result<(), String> {
+        let outcome = self.session.share_file(name, bytes).await;
+        match outcome.map_err(|_| "The session has ended.".to_owned())? {
+            Outcome::Received => Ok(()),
+            outcome => Err(share_refusal(outcome).into()),
+        }
+    }
+
+    /// A shared file's bytes, fetched from the host and checked.
+    pub async fn open_file(&self, file: u32) -> Result<Vec<u8>, String> {
+        match self.session.fetch_file(file).await {
+            Ok(Ok(bytes)) => Ok(bytes),
+            Ok(Err(FileError::Gone)) => Err("That file is no longer shared.".into()),
+            Ok(Err(error)) => Err(format!("The file could not be opened: {error}.")),
+            Err(_) => Err("The session has ended.".into()),
+        }
+    }
+
+    /// Removes a file this viewer shared.
+    pub fn remove_file(&self, file: u32) {
+        self.session.remove_file(file);
+    }
+
     /// Sends the host a link to share; refused in plain words when the host would refuse it,
     /// so a slip in the window never costs the viewer its connection. Sent in the normalized
     /// form the host requires.
@@ -201,6 +241,24 @@ impl ViewerRuntime {
     }
 }
 
+/// Why the host did not take a file, as the viewer's window shows it.
+fn share_refusal(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Off => "The host has not turned on sharing files.",
+        Outcome::TooLarge => "Files can be up to 10 MB.",
+        Outcome::Full => {
+            "There is no room for more of your files in this session. Remove some first."
+        }
+        Outcome::NotAllowedType => {
+            "Only images (PNG, JPEG, GIF, WebP), Markdown and text files can be shared."
+        }
+        Outcome::Gone => "The file did not reach the host intact. Share it again.",
+        Outcome::RateLimited | Outcome::Received | Outcome::Ready { .. } => {
+            "The host did not take the file. Share it again."
+        }
+    }
+}
+
 fn translate(event: ViewerEvent) -> Option<ViewEvent> {
     use specdeck_protocol::control::RefusalReason as Refusal;
     Some(match event {
@@ -215,6 +273,11 @@ fn translate(event: ViewerEvent) -> Option<ViewEvent> {
         ViewerEvent::Reconnecting => ViewEvent::Reconnecting,
         ViewerEvent::Allowed { suggestions } => ViewEvent::Allowed { suggestions },
         ViewerEvent::Shared { whole_files } => ViewEvent::Shared { whole_files },
+        ViewerEvent::FilesAllowed { files } => ViewEvent::FilesAllowed { files },
+        ViewerEvent::Files(files) => ViewEvent::SharedFiles { files },
+        ViewerEvent::FileProgress { file, received, size } => {
+            ViewEvent::FileProgress { file, received, size }
+        }
         ViewerEvent::RequestSent { id } => ViewEvent::RequestSent { id },
         ViewerEvent::Reply { id, outcome } => ViewEvent::Reply { id, outcome },
         ViewerEvent::Suggestions(mine) => ViewEvent::Suggestions { mine },
@@ -235,6 +298,7 @@ fn translate(event: ViewerEvent) -> Option<ViewEvent> {
         ViewerEvent::ServiceUnavailable => {
             ViewEvent::Ended { reason: EndReason::ServiceUnavailable }
         }
+        ViewerEvent::ServiceBusy => ViewEvent::Ended { reason: EndReason::ServiceBusy },
         ViewerEvent::CannotConnect => ViewEvent::Ended { reason: EndReason::NetworkBlocked },
     })
 }

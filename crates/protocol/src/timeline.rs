@@ -208,6 +208,19 @@ pub enum Entry {
         path: String,
         text: Option<String>,
     },
+    /// Someone shared a file with everyone (`shared-files`). Its bytes travel on the `files`
+    /// channel, checked against `size` and `sha256` (hex). `by` is the participant id, 0 for the
+    /// host. Protocol version 4: never sent to older viewers, which cannot decode it.
+    FileShared {
+        file: u32,
+        name: String,
+        file_kind: crate::control::FileKind,
+        media_type: String,
+        size: u64,
+        sha256: String,
+        by: u32,
+        by_label: String,
+    },
     /// A link shared with everyone in the session (`shared-links`); `url` is `None` once the
     /// host removed it. `id` counts from 1 within the session, `by` is the label of whoever
     /// shared it. Protocol version 5: never sent to older viewers, which cannot decode it.
@@ -538,6 +551,30 @@ mod tests {
         assert_eq!(serde_json::to_value(file(Some("fn main() {}"))).unwrap(), json);
         assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), file(Some("fn main() {}")));
         assert_eq!(serde_json::to_value(file(None)).unwrap()["text"], Value::Null);
+    }
+
+    #[test]
+    fn shared_files_carry_what_to_check_them_against() {
+        let entry = Entry::FileShared {
+            file: 3,
+            name: "wireframe.png".into(),
+            file_kind: crate::control::FileKind::Image,
+            media_type: "image/png".into(),
+            size: 2048,
+            sha256: "ab".repeat(32),
+            by: 2,
+            by_label: "Sanne".into(),
+        };
+        let json = serde_json::json!({
+            "kind": "file-shared", "file": 3, "name": "wireframe.png", "fileKind": "image",
+            "mediaType": "image/png", "size": 2048, "sha256": "ab".repeat(32), "by": 2,
+            "byLabel": "Sanne"
+        });
+        assert_eq!(serde_json::to_value(&entry).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), entry);
+        // Nothing in it is large, so fitting never changes it.
+        let event = TimelineEvent { output_seq: 1, at: 2, entry: entry.clone(), truncated: false };
+        assert_eq!(fit(event, MAX_EVENT_JSON_BYTES).entry, entry);
     }
 
     #[test]

@@ -4874,6 +4874,7 @@ dependencies = [
 name = "specdeck-session"
 version = "1.6.0"
 dependencies = [
+ "base64 0.23.1",
  "serde",
  "serde_json",
  "specdeck-core",

@@ -146,6 +146,7 @@ struct Profile {
     hosted_sessions: usize,
     watched_sessions: usize,
     notifications: bool,
+    viewer_notifications: settings::ViewerNotifications,
     /// How the user followed sessions before layouts, to make their first layout from.
     view: Option<View>,
     /// How the user arranges the session window; `None` until they answered the first-join question.
@@ -221,6 +222,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
         hosted_sessions,
         watched_sessions,
         notifications: settings.notifications,
+        viewer_notifications: settings.viewer_notifications,
         view: settings.view,
         layout: settings.layout,
         translucent: state.translucent.load(Ordering::Relaxed),
@@ -673,6 +675,48 @@ async fn set_sharing_service(
     Ok(profile(&state, window.label()))
 }
 
+#[tauri::command]
+async fn set_viewer_notifications(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    kinds: settings::ViewerNotifications,
+) -> Result<Profile, String> {
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.viewer_notifications = kinds;
+        state.save(&settings);
+    }
+    settings_changed(&app);
+    Ok(profile(&state, window.label()))
+}
+
+/// Notifies a viewer about the session its window watches (`viewer-notifications` design
+/// decision 4), unless they turned that kind off; the rest is up to `notify`.
+#[tauri::command]
+async fn viewer_notify(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    kind: settings::ViewerNotificationKind,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    let id = match state.sessions.lock().unwrap().of_window(window.label()) {
+        Some((id, Session::Viewer(_))) => id,
+        _ => return Err("This window does not watch a session.".into()),
+    };
+    // Only the kind and what became of it are recorded, never the text.
+    let outcome = if !state.settings.lock().unwrap().viewer_notifications.allows(kind) {
+        "kind-off"
+    } else {
+        let (title, body) = notify::viewer_text(&title, &body);
+        if try_notify(&app, id, &title, &body) { "shown" } else { "held" }
+    };
+    tracing::info!(kind = kind.name(), outcome, "viewer.notified");
+    Ok(())
+}
+
 /// Whether a sharing service, as a normalized URL, can be reached.
 #[tauri::command]
 async fn check_sharing_service(service: String) -> Result<ServiceCheck, String> {
@@ -682,6 +726,11 @@ async fn check_sharing_service(service: String) -> Result<ServiceCheck, String> 
 /// Shows a notification about session `id`, if the user wants them and the session's window is
 /// not in front. With several sessions open, the title says which one.
 fn notify(app: &AppHandle, id: SessionId, title: &str, body: &str) {
+    try_notify(app, id, title, body);
+}
+
+/// As `notify`, saying whether the notification was shown.
+fn try_notify(app: &AppHandle, id: SessionId, title: &str, body: &str) -> bool {
     let state = app.state::<AppState>();
     let enabled = state.settings.lock().unwrap().notifications;
     let (window, title) = {
@@ -689,7 +738,7 @@ fn notify(app: &AppHandle, id: SessionId, title: &str, body: &str) {
         let title = notify::title(title, sessions.name(id), sessions.count());
         (sessions.window_of(id).map(str::to_owned), title)
     };
-    notify::notify(app, &state.notices, id, window.as_deref(), enabled, &title, body);
+    notify::notify(app, &state.notices, id, window.as_deref(), enabled, &title, body)
 }
 
 #[tauri::command]
@@ -1052,6 +1101,151 @@ async fn host_answer_suggestion(
     text: Option<String>,
 ) -> Result<(), String> {
     with_host(&state, &window, |host| host.answer_suggestion(viewer_id, id, text))
+}
+
+#[tauri::command]
+async fn host_allow_files(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    on: bool,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.allow_files(on))
+}
+
+/// The bytes and name of a file a window hands over: the body raw, the name in the
+/// `x-file-name` header, percent-encoded.
+fn handed_file(request: &tauri::ipc::Request<'_>) -> Result<(String, Vec<u8>), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("The file did not arrive.".into());
+    };
+    let name = request
+        .headers()
+        .get("x-file-name")
+        .and_then(|name| name.to_str().ok())
+        .map(percent_decode)
+        .unwrap_or_default();
+    Ok((name, bytes.clone()))
+}
+
+/// `text` with `%XX` sequences decoded, as `encodeURIComponent` writes them.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok());
+        match (bytes[i], hex.and_then(|h| u8::from_str_radix(h, 16).ok())) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Shares a file the host chose or dropped in their window; answers with the file as listed.
+#[tauri::command]
+async fn host_share_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<serde_json::Value, String> {
+    let (name, bytes) = handed_file(&request)?;
+    let host = state.host_of(window.label())?;
+    host.share_file(name, &bytes).await
+}
+
+#[tauri::command]
+async fn host_remove_shared_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    file: u32,
+) -> Result<(), String> {
+    with_host(&state, &window, |host| host.remove_shared_file(file))
+}
+
+#[tauri::command]
+async fn host_read_shared_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    file: u32,
+) -> Result<tauri::ipc::Response, String> {
+    let host = state.host_of(window.label())?;
+    Ok(tauri::ipc::Response::new(host.read_shared_file(file).await?))
+}
+
+/// Puts a shared file into `shared/` in the session folder; the path it was written to.
+#[tauri::command]
+async fn host_put_shared_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    file: u32,
+) -> Result<String, String> {
+    let host = state.host_of(window.label())?;
+    host.put_shared_file(file).await
+}
+
+fn viewer_of(state: &AppState, window: &WebviewWindow) -> Result<Arc<ViewerRuntime>, String> {
+    match state.sessions.lock().unwrap().of_window(window.label()) {
+        Some((_, Session::Viewer(viewer))) => Ok(viewer),
+        _ => Err("This window does not watch a session.".into()),
+    }
+}
+
+/// Shares a file the viewer chose or dropped, if the host allows it.
+#[tauri::command]
+async fn viewer_share_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<(), String> {
+    let (name, bytes) = handed_file(&request)?;
+    let viewer = viewer_of(&state, &window)?;
+    viewer.share_file(name, bytes).await
+}
+
+/// A shared file's bytes, fetched from the host.
+#[tauri::command]
+async fn viewer_open_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    file: u32,
+) -> Result<tauri::ipc::Response, String> {
+    let viewer = viewer_of(&state, &window)?;
+    Ok(tauri::ipc::Response::new(viewer.open_file(file).await?))
+}
+
+#[tauri::command]
+async fn viewer_remove_file(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    file: u32,
+) -> Result<(), String> {
+    viewer_of(&state, &window)?.remove_file(file);
+    Ok(())
+}
+
+/// Saves a copy of a shared file where the person chooses; false when they cancelled.
+#[tauri::command]
+async fn save_shared_file(
+    app: AppHandle,
+    window: WebviewWindow,
+    request: tauri::ipc::Request<'_>,
+) -> Result<bool, String> {
+    let (name, bytes) = handed_file(&request)?;
+    let dialog = app.dialog().file().set_parent(&window).set_file_name(&name);
+    let chosen = tauri::async_runtime::spawn_blocking(move || dialog.blocking_save_file())
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(path) = chosen.and_then(|path| path.into_path().ok()) else { return Ok(false) };
+    std::fs::write(&path, bytes)
+        .map_err(|error| format!("The copy could not be saved: {error}"))?;
+    Ok(true)
 }
 
 /// Suggests a prompt to the host of the session this window watches.
@@ -2170,6 +2364,8 @@ pub fn run() {
             get_profile,
             set_username,
             set_notifications,
+            set_viewer_notifications,
+            viewer_notify,
             set_check_updates,
             set_screen_reader,
             set_appearance,
@@ -2201,6 +2397,15 @@ pub fn run() {
             host_allow_suggestions,
             host_share_code,
             host_answer_suggestion,
+            host_allow_files,
+            host_share_file,
+            host_remove_shared_file,
+            host_read_shared_file,
+            host_put_shared_file,
+            viewer_share_file,
+            viewer_open_file,
+            viewer_remove_file,
+            save_shared_file,
             suggest_prompt,
             host_share_link,
             host_answer_link,
@@ -2236,6 +2441,13 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_names_from_the_window_are_decoded() {
+        assert_eq!(percent_decode("ci%20failure%20%C3%A9.log"), "ci failure é.log");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("a%zz"), "a%zz");
+    }
 
     #[test]
     fn terminal_is_offered_last_and_always_installed() {

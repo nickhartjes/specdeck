@@ -7,9 +7,10 @@
 
 use serde::Serialize;
 use specdeck_protocol::control::{
-    self, Outcome, PROTOCOL_VERSION, Participant, RefusalReason, SentLink, Suggestion,
-    ViewerMessage, ViewerRequest, valid_suggestion,
+    self, MAX_FILE_NAME_BYTES, Outcome, PROTOCOL_VERSION, Participant, RefusalReason, SentLink,
+    SharedFileInfo, Suggestion, ViewerMessage, ViewerRequest, valid_suggestion,
 };
+use specdeck_protocol::files::{self, FetchStep, Fetching, FilesReply, Uploading};
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::links::{MAX_LINK_BYTES, valid_title};
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
@@ -62,6 +63,12 @@ enum Control {
     Suggestions {
         mine: Vec<Suggestion>,
     },
+    FilesAllowed {
+        files: bool,
+    },
+    Files {
+        files: Vec<SharedFileInfo>,
+    },
     LinksAllowed {
         links: bool,
     },
@@ -91,6 +98,15 @@ struct Stream {
     /// A control message to send back, asking for records again.
     #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes_opt")]
     resend: Option<Vec<u8>>,
+}
+
+/// Bytes that become a `Uint8Array`.
+struct Bytes(Vec<u8>);
+
+impl Serialize for Bytes {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bytes(&self.0)
+    }
 }
 
 /// Bytes as a `Uint8Array` rather than an array of numbers.
@@ -177,6 +193,23 @@ impl WebViewer {
         Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
     }
 
+    /// A file to share with everyone: `{ id, message }`, `message` to send on the control
+    /// channel once admitted. When the host answers `Ready`, its bytes go out through a
+    /// [`FileUpload`].
+    #[wasm_bindgen(js_name = shareFile)]
+    pub fn share_file(&mut self, name: &str, bytes: &[u8]) -> Result<JsValue, JsError> {
+        if name.is_empty() || name.len() > MAX_FILE_NAME_BYTES {
+            return Err(JsError::new("A file name is 1 to 255 bytes."));
+        }
+        let request = ViewerRequest::ShareFile {
+            name: name.to_owned(),
+            size: bytes.len() as u64,
+            sha256: files::sha256(bytes),
+        };
+        let (id, message) = self.state.send_request(request);
+        Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
+    }
+
     /// A link for the host to share: `{ id, message }`, as [`suggest`](Self::suggest). The page
     /// checks the link with the browser's own URL parser first (`app/ui/src/model/links.ts`),
     /// which follows the same standard as the host's check; `check_link` is left out of the
@@ -199,6 +232,13 @@ impl WebViewer {
         let request = ViewerRequest::ShareLink { url: url.to_owned(), title, session_only };
         let (id, message) = self.state.send_request(request);
         Ok(to_js(&Request { id, message: Some(control::encode(&message)) }))
+    }
+
+    /// Removes a file this viewer shared: `{ id, message }`.
+    #[wasm_bindgen(js_name = removeFile)]
+    pub fn remove_file(&mut self, file: u32) -> JsValue {
+        let (id, message) = self.state.send_request(ViewerRequest::RemoveFile { file });
+        to_js(&Request { id, message: Some(control::encode(&message)) })
     }
 
     /// The requests the host has not answered, `[{ id, message }]`, to send once admitted:
@@ -241,6 +281,8 @@ impl WebViewer {
             ControlUpdate::Reply { id, outcome } => Control::Reply { id, outcome },
             ControlUpdate::Suggestions(mine) => Control::Suggestions { mine },
             ControlUpdate::Shared { whole_files } => Control::Shared { whole_files },
+            ControlUpdate::FilesAllowed { files } => Control::FilesAllowed { files },
+            ControlUpdate::Files(files) => Control::Files { files },
             ControlUpdate::LinksAllowed { links } => Control::LinksAllowed { links },
             ControlUpdate::Links(mine) => Control::Links { mine },
             ControlUpdate::Retry => Control::Retry,
@@ -259,6 +301,106 @@ impl WebViewer {
             StreamUpdate::Timeline { event, .. } => stream.timeline = Some(event),
         }
         to_js(&stream)
+    }
+}
+
+/// What a message on the files channel did to a fetch: `{ progress?, done?, retry?, failed? }`;
+/// all absent when it was about something else.
+#[derive(Serialize, Default)]
+struct FetchUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes_opt")]
+    done: Option<Vec<u8>>,
+    /// A request to send on the files channel, fetching it again.
+    #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes_opt")]
+    retry: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    failed: bool,
+    /// The host no longer has it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    gone: bool,
+}
+
+/// Fetching one shared file, checked against the size and hash the host announced.
+#[wasm_bindgen]
+pub struct FileFetch(Fetching);
+
+#[wasm_bindgen]
+impl FileFetch {
+    #[wasm_bindgen(constructor)]
+    pub fn new(file: u32, size: u64, sha256: &[u8]) -> Result<FileFetch, JsError> {
+        let sha256: [u8; 32] = sha256.try_into().map_err(|_| JsError::new("not a SHA-256"))?;
+        Ok(Self(Fetching::start(file, size, sha256).0))
+    }
+
+    /// The request that starts the fetch, or continues it after reconnecting.
+    pub fn request(&self) -> Vec<u8> {
+        files::encode_request(&self.0.resume())
+    }
+
+    /// What a message on the files channel means for this fetch.
+    #[wasm_bindgen(js_name = onReply)]
+    pub fn on_reply(&mut self, bytes: &[u8]) -> JsValue {
+        let Ok(reply) = files::decode_reply(bytes) else { return to_js(&FetchUpdate::default()) };
+        let gone = matches!(reply, FilesReply::Gone { .. });
+        let update = match self.0.on_reply(&reply) {
+            None => FetchUpdate::default(),
+            Some(FetchStep::Partial { received }) => {
+                FetchUpdate { progress: Some(received), ..FetchUpdate::default() }
+            }
+            Some(FetchStep::Done(bytes)) => {
+                FetchUpdate { done: Some(bytes), ..FetchUpdate::default() }
+            }
+            Some(FetchStep::Retry(request)) => FetchUpdate {
+                retry: Some(files::encode_request(&request)),
+                ..FetchUpdate::default()
+            },
+            Some(FetchStep::Failed) => FetchUpdate { failed: true, gone, ..FetchUpdate::default() },
+        };
+        to_js(&update)
+    }
+}
+
+/// What a message on the files channel did to an upload: `{ acked?, finished? }`.
+#[derive(Serialize, Default)]
+struct UploadUpdate {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    acked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finished: Option<Outcome>,
+}
+
+/// Sending one file the host accepted, within the upload window.
+#[wasm_bindgen]
+pub struct FileUpload(Uploading);
+
+#[wasm_bindgen]
+impl FileUpload {
+    #[wasm_bindgen(constructor)]
+    pub fn new(upload: u32, bytes: &[u8]) -> FileUpload {
+        Self(Uploading::new(upload, bytes.to_vec()))
+    }
+
+    /// The chunks that may be sent on the files channel now, as `Uint8Array`s.
+    #[wasm_bindgen(js_name = nextChunks)]
+    pub fn next_chunks(&mut self) -> JsValue {
+        let chunks: Vec<Bytes> =
+            self.0.next_chunks().iter().map(|chunk| Bytes(files::encode_request(chunk))).collect();
+        to_js(&chunks)
+    }
+
+    /// What a message on the files channel means for this upload.
+    #[wasm_bindgen(js_name = onReply)]
+    pub fn on_reply(&mut self, bytes: &[u8]) -> JsValue {
+        let Ok(reply) = files::decode_reply(bytes) else { return to_js(&UploadUpdate::default()) };
+        let update = match reply {
+            FilesReply::Finished { upload, outcome } if upload == self.0.upload() => {
+                UploadUpdate { finished: Some(outcome), ..UploadUpdate::default() }
+            }
+            reply => UploadUpdate { acked: self.0.on_ack(&reply), ..UploadUpdate::default() },
+        };
+        to_js(&update)
     }
 }
 

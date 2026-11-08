@@ -126,6 +126,21 @@ function fakeCore(): FakeCore {
     },
     unansweredRequests: () => core.unanswered,
     unanswered: [],
+    shareFile: (name) => ({ id: 50 + name.length, message: new Uint8Array([3, 50 + name.length]) }),
+    removeFile: (file) => ({ id: 90, message: new Uint8Array([3, 90, file]) }),
+    // Fetches: [5, file] asks; a reply [1] is a chunk, [2] the end, [3] gone.
+    fetchFile: (file) => ({
+      request: () => new Uint8Array([5, file]),
+      onReply: (bytes) => (bytes[0] === 1 ? { progress: 1 } : bytes[0] === 2 ? { done: new Uint8Array([42]) } : bytes[0] === 3 ? { failed: true, gone: true } : {}),
+    }),
+    // Uploads: one chunk [6, upload]; a reply [4] finishes it.
+    uploadFile: (upload) => {
+      let sent = false;
+      return {
+        nextChunks: () => (sent ? [] : ((sent = true), [new Uint8Array([6, upload])])),
+        onReply: (bytes) => (bytes[0] === 4 ? { finished: 'Received' as const } : {}),
+      };
+    },
   };
   return core;
 }
@@ -164,8 +179,8 @@ const welcome: ControlUpdate = { type: 'welcome', viewerId: 2, agent: 'claude-co
 async function reachHost(sockets: FakeSocket[], peers: FakePeer[]) {
   const socket = sockets.at(-1)!;
   socket.open();
-  socket.receive({ type: 'turn-credentials', urls: ['turn:turn.example.com:3478?transport=udp'], username: 'u', credential: 'c', ttlSeconds: 60 });
   socket.receive({ type: 'joined', connection: 'c1' });
+  socket.receive({ type: 'turn-credentials', urls: ['turn:turn.example.com:3478?transport=udp'], username: 'u', credential: 'c', ttlSeconds: 60 });
   await vi.advanceTimersByTimeAsync(0);
   socket.receive({ type: 'signal', connection: 'c1', payload: { type: 'description', kind: 'answer', sdp: 'answer-sdp', mac: 'm' } });
   await vi.advanceTimersByTimeAsync(0);
@@ -184,15 +199,16 @@ describe('web viewer connection', () => {
   it('joins the code’s room with TURN, signs its offer and applies a valid answer', async () => {
     const { sockets, peers } = setup();
     const { socket, peer } = await reachHost(sockets, peers);
-    expect(socket.sent[0]).toEqual({ type: 'turn-credentials' });
-    expect(socket.sent[1]).toEqual({ type: 'join', room: 'code-room' });
+    // Credentials only after joining: the service gives them only to members.
+    expect(socket.sent[0]).toEqual({ type: 'join', room: 'code-room' });
+    expect(socket.sent[1]).toEqual({ type: 'turn-credentials' });
     expect(socket.sent[2]).toEqual({
       type: 'signal',
       connection: 'c1',
       payload: { type: 'description', kind: 'offer', sdp: 'offer-sdp', mac: 'mac-c1' },
     });
     expect(peer.config.iceServers).toEqual([{ urls: 'turn:turn.example.com:3478?transport=udp', username: 'u', credential: 'c' }]);
-    expect(peer.channels.map((channel) => channel.label)).toEqual(['control', 'stream']);
+    expect(peer.channels.map((channel) => channel.label)).toEqual(['control', 'stream', 'files']);
     expect(peer.remote).toEqual({ type: 'answer', sdp: 'answer-sdp' });
   });
 
@@ -235,6 +251,47 @@ describe('web viewer connection', () => {
     expect(second.peer.channel('control').sent.slice(1)).toEqual([new Uint8Array([3, 1]), new Uint8Array([3, 2])]);
   });
 
+  it('opens a files channel, fetches one file at a time and shares files after the host is ready', async () => {
+    const core = fakeCore();
+    const file = { file: 7, name: 'a.md', kind: 'markdown', mediaType: 'text/markdown', size: 1, sha256: [], by: 0, byLabel: 'nick', atMs: 1 } as const;
+    core.controls.push(
+      welcome,
+      { type: 'files-allowed', files: true },
+      { type: 'files', files: [{ ...file, sha256: [] }] },
+      { type: 'reply', id: 54, outcome: { Ready: { upload: 3 } } },
+    );
+    const { sockets, peers, events, connection } = setup(core);
+    const { peer } = await reachHost(sockets, peers);
+    expect(peer.channels.map((channel) => channel.label)).toEqual(['control', 'stream', 'files']);
+    const control = peer.channel('control');
+    const files = peer.channel('files');
+    control.open();
+    files.open();
+    control.receive([0]);
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'files-allowed', files: true });
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'shared-files', files: [file] });
+
+    const opened = connection.openFile(7);
+    const missing = connection.openFile(8);
+    expect(files.sent).toEqual([new Uint8Array([5, 7])]);
+    files.receive([1]);
+    expect(events.at(-1)).toEqual({ type: 'file-progress', file: 7, received: 1, size: 1 });
+    files.receive([2]);
+    expect(new Uint8Array(await opened)).toEqual(new Uint8Array([42]));
+    await expect(missing).rejects.toThrow('no longer shared');
+
+    const shared = connection.shareFile('b.md', new Uint8Array([1]));
+    expect(control.sent.at(-1)).toEqual(new Uint8Array([3, 54]));
+    control.receive([0]);
+    expect(files.sent.at(-1)).toEqual(new Uint8Array([6, 3]));
+    files.receive([4]);
+    await expect(shared).resolves.toBe('Received');
+    // Files report back on their own: the suggestions' latest request stays as it was.
+    expect(events.some((event) => event.type === 'request-sent')).toBe(false);
+  });
+
   it('sends links to the host and passes on what became of them', async () => {
     const core = fakeCore();
     const mine = [{ id: 1, url: 'https://example.com/', title: null, sessionOnly: false, state: 'Waiting' as const }];
@@ -257,10 +314,31 @@ describe('web viewer connection', () => {
   it('says the code is invalid when its room does not exist', async () => {
     const { sockets, events } = setup();
     sockets[0]!.open();
-    sockets[0]!.receive({ type: 'error', code: 'turn-unavailable' });
     sockets[0]!.receive({ type: 'error', code: 'room-not-found' });
     await vi.advanceTimersByTimeAsync(0);
     expect(events).toEqual([{ type: 'ended', reason: 'invalid-code' }]);
+    expect(sockets[0]!.closed).toBe(true);
+  });
+
+  it('starts the peer only once the relay is known', async () => {
+    const { sockets, peers } = setup();
+    const socket = sockets[0]!;
+    socket.open();
+    socket.receive({ type: 'joined', connection: 'c1' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(peers).toEqual([]);
+    socket.receive({ type: 'error', code: 'turn-unavailable' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(peers).toHaveLength(1);
+    expect(peers[0]!.config.iceServers).toEqual([]);
+  });
+
+  it('says the sharing service is busy', async () => {
+    const { sockets, events } = setup();
+    sockets[0]!.open();
+    sockets[0]!.receive({ type: 'error', code: 'server-busy' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events).toEqual([{ type: 'ended', reason: 'service-busy' }]);
     expect(sockets[0]!.closed).toBe(true);
   });
 
@@ -298,7 +376,7 @@ describe('web viewer connection', () => {
     expect(peer.closed).toBe(true);
     await vi.advanceTimersByTimeAsync(250);
     const second = await reachHost(sockets, peers);
-    expect(second.socket.sent[1]).toEqual({ type: 'join', room: 'rejoin' });
+    expect(second.socket.sent[0]).toEqual({ type: 'join', room: 'rejoin' });
     second.peer.channel('control').open();
     second.peer.channel('control').receive([0]);
     expect(events.at(-1)).toEqual({ type: 'reconnected' });
@@ -333,8 +411,8 @@ describe('web viewer connection', () => {
     const { sockets, peers } = setup();
     const socket = sockets[0]!;
     socket.open();
-    socket.receive({ type: 'error', code: 'turn-unavailable' });
     socket.receive({ type: 'joined', connection: 'c1' });
+    socket.receive({ type: 'error', code: 'turn-unavailable' });
     await vi.advanceTimersByTimeAsync(0);
     socket.receive({ type: 'signal', connection: 'c1', payload: { type: 'candidate', candidate: 'candidate:1', mid: '0' } });
     await vi.advanceTimersByTimeAsync(0);

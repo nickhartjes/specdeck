@@ -2,7 +2,7 @@
 // open /?demo=start, /?demo=host or /?demo=viewer) and for component tests. Never used by the app.
 
 import type { Bridge, TerminalSink } from './bridge';
-import type { DiagnosticsStatus, HostEvent, HostLink, HostSuggestion, Participant, Profile, SentLink, Suggestion, TimelineEvent, ViewEvent } from './types';
+import type { DiagnosticsStatus, FileKind, HostEvent, HostLink, HostSuggestion, Participant, Profile, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from './types';
 import { formatCode } from '../model/code';
 import { applyAppearance } from '../appearance';
 
@@ -17,6 +17,7 @@ export const demoProfile: Profile = {
   ],
   lastAgent: 'claude-code',
   notifications: true,
+  viewerNotifications: { plans: true, documents: true, finished: false },
   view: null,
   layout: null,
   translucent: false,
@@ -317,6 +318,60 @@ export function demoBridge(screen: string): Bridge {
   let viewerEvents: ((event: ViewEvent) => void) | null = null;
   const mine: Suggestion[] = [];
   let nextRequest = 1;
+  // Shared files, held as the session process would: the list, and each file's bytes.
+  const demoFile = (file: number, name: string, kind: FileKind, text: string, by: number, byLabel: string): [SharedFileInfo, ArrayBuffer] => {
+    const bytes = new TextEncoder().encode(text);
+    const mediaType = kind === 'markdown' ? 'text/markdown' : 'text/plain';
+    return [{ file, name, kind, mediaType, size: bytes.byteLength, sha256: [], by, byLabel, atMs: Date.now() - (5 - file) * 60_000 }, bytes.buffer];
+  };
+  const sharedBytes = new Map<number, ArrayBuffer>();
+  let sharedFiles: SharedFileInfo[] = [];
+  for (const [info, bytes] of [
+    demoFile(1, 'acceptance-criteria.md', 'markdown', '# Acceptance criteria\n\n- A viewer sees **Host unreachable** within 10 seconds.\n- The terminal keeps the last output.\n', 3, 'Sanne'),
+    demoFile(2, 'ci-failure.log', 'text', "thread 'viewer_reconnects' panicked at crates/core/tests/sharing.rs:211:9:\nassertion failed: viewer saw Ended before Unreachable\ntest result: FAILED. 19 passed; 1 failed\n", 2, 'Mo'),
+  ]) {
+    sharedFiles.push(info);
+    sharedBytes.set(info.file, bytes);
+  }
+  let nextFile = 3;
+  let filesAllowed = screen !== 'host';
+  const fileKind = (name: string): FileKind => (/\.(png|jpe?g|gif|webp)$/i.test(name) ? 'image' : /\.(md|markdown)$/i.test(name) ? 'markdown' : 'text');
+  const addFile = (name: string, bytes: ArrayBuffer, by: number, byLabel: string): SharedFileInfo => {
+    const kind = fileKind(name);
+    const mediaType = kind === 'image' ? `image/${name.split('.').at(-1)!.toLowerCase().replace('jpg', 'jpeg')}` : kind === 'markdown' ? 'text/markdown' : 'text/plain';
+    const info: SharedFileInfo = { file: nextFile++, name, kind, mediaType, size: bytes.byteLength, sha256: [], by, byLabel, atMs: Date.now() };
+    sharedFiles = [...sharedFiles, info];
+    sharedBytes.set(info.file, bytes.slice(0));
+    const step: TimelineEvent = {
+      outputSeq: 0,
+      at: info.atMs,
+      kind: 'file-shared',
+      file: info.file,
+      name,
+      fileKind: kind,
+      mediaType,
+      size: info.size,
+      sha256: '',
+      by,
+      byLabel,
+    };
+    hostEvents?.({ type: 'timeline', event: step });
+    hostEvents?.({ type: 'shared-files', files: sharedFiles, filesAllowed });
+    viewerEvents?.({ type: 'timeline', event: step });
+    viewerEvents?.({ type: 'shared-files', files: sharedFiles });
+    return info;
+  };
+  const removeFile = (file: number) => {
+    sharedFiles = sharedFiles.filter((info) => info.file !== file);
+    sharedBytes.delete(file);
+    hostEvents?.({ type: 'shared-files', files: sharedFiles, filesAllowed });
+    viewerEvents?.({ type: 'shared-files', files: sharedFiles });
+  };
+  const fileBytes = async (file: number) => {
+    const bytes = sharedBytes.get(file);
+    if (!bytes) throw new Error('That file is no longer shared.');
+    return bytes.slice(0);
+  };
   // Links: one from a viewer waits for the host; shared ones go into both timelines.
   let hostLinks: HostLink[] = [
     { viewer: 2, id: 9, from: 'Sanne', url: 'https://staging.example.com/s/demo', title: 'Staging: the new pill', sessionOnly: false, state: 'Waiting' },
@@ -337,6 +392,8 @@ export function demoBridge(screen: string): Bridge {
     openInstallPage: async () => {},
     setUsername: async (username) => ({ ...profile, username }),
     setNotifications: async (notifications) => ({ ...profile, notifications }),
+    setViewerNotifications: async (viewerNotifications) => ({ ...profile, viewerNotifications }),
+    viewerNotify: async () => {},
     setCheckUpdates: async (checkUpdates) => ({ ...profile, checkUpdates }),
     setScreenReader: async (screenReader) => ({ ...profile, screenReader }),
     setVerboseLogging: async (verboseLogging) => ({ ...profile, verboseLogging }),
@@ -381,6 +438,9 @@ export function demoBridge(screen: string): Bridge {
         suggestions: hostSuggestions,
         wholeFilesPossible: true,
         wholeFiles: false,
+        sharedFilesPossible: true,
+        filesAllowed,
+        sharedFiles,
         linksPossible: true,
         linksAllowed: true,
         viewerLinks: hostLinks,
@@ -410,6 +470,14 @@ export function demoBridge(screen: string): Bridge {
       );
       hostEvents?.({ type: 'suggestions', suggestions: hostSuggestions });
     },
+    hostAllowFiles: async (on) => {
+      filesAllowed = on;
+      hostEvents?.({ type: 'shared-files', files: sharedFiles, filesAllowed });
+    },
+    hostShareFile: async (name, bytes) => addFile(name, bytes, 0, 'Nick'),
+    hostRemoveSharedFile: async (file) => removeFile(file),
+    hostReadSharedFile: fileBytes,
+    hostPutSharedFile: async (file) => `shared/${sharedFiles.find((info) => info.file === file)?.name ?? 'file'}`,
     hostShareLink: async (url, title, sessionOnly) => shareLink(url, title, 'Nick', sessionOnly),
     hostAnswerLink: async (viewerId, id, share) => {
       const link = hostLinks.find((l) => l.viewer === viewerId && l.id === id && l.state === 'Waiting');
@@ -454,6 +522,8 @@ export function demoBridge(screen: string): Bridge {
         events({ type: 'allowed', suggestions: params.get('suggestions') !== 'off' });
         events({ type: 'shared', wholeFiles: params.get('whole') === 'on' });
         events({ type: 'suggestions', mine: [] });
+        events({ type: 'files-allowed', files: params.get('files') !== 'off' });
+        events({ type: 'shared-files', files: sharedFiles });
         events({ type: 'links-allowed', links: params.get('links') !== 'off' });
         events({ type: 'links', mine: [] });
         // A viewer takes the host's size from the stream's resize records, as from the engine.
@@ -476,6 +546,13 @@ export function demoBridge(screen: string): Bridge {
         viewerEvents?.({ type: 'suggestions', mine: mine.map((s) => ({ ...s })) });
       }, 4000);
     },
+    viewerShareFile: async (name, bytes) => {
+      if (!filesAllowed) throw new Error('The host has not turned on sharing files.');
+      addFile(name, bytes, 2, 'Mo');
+    },
+    viewerOpenFile: fileBytes,
+    viewerRemoveFile: async (file) => removeFile(file),
+    saveSharedFile: async () => true,
     sendLink: async (url, title, sessionOnly) => {
       const id = nextRequest++;
       viewerEvents?.({ type: 'request-sent', id });

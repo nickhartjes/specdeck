@@ -13,6 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::{ChildKiller, MasterPty, PtySize};
+use specdeck_protocol::control::SharedFileInfo;
 use specdeck_protocol::links::{self, LinkRefusal};
 use specdeck_protocol::timeline::{Entry, MAX_EVENT_JSON_BYTES, TimelineEvent, fit};
 use specdeck_protocol::{AgentId, AgentStatus};
@@ -32,6 +33,7 @@ use crate::output_log::{Batcher, OutputLog};
 use crate::plans::{self, ChangeRef, Plans};
 use crate::program_status::{self, Scanner, Signal};
 use crate::session_folder::SessionFolder;
+use crate::shared_files::{self, PutError, Refusal, SharedFile, Sharer, Store};
 use crate::shell_changes::{CommandChanges, ShellChanges};
 use crate::status::{self, StatusLineReader};
 use crate::timeline::{self, TimelineBuilder, stamp};
@@ -65,6 +67,11 @@ pub enum SessionEvent {
     Exited {
         code: u32,
     },
+    /// The shared files or the viewers' switch for them changed (`shared-files`).
+    SharedFiles {
+        files: Vec<SharedFileInfo>,
+        viewers_allowed: bool,
+    },
 }
 
 enum Command {
@@ -85,6 +92,10 @@ enum Command {
     RemoveLink(u32),
     /// The plan of an OpenSpec change the agent touched, read off the hook path.
     Plan(Entry),
+    /// An entry that needs nothing but adding, such as a shared file's.
+    Entry(Entry),
+    /// The shared files changed; the host's window hears of it.
+    SharedFiles,
     Exited {
         code: u32,
     },
@@ -105,6 +116,20 @@ pub struct SessionView {
     whole_files: Arc<AtomicBool>,
     /// Bumped whenever the timeline, the status, the size or the whole-files setting changes.
     changes: Arc<watch::Sender<u64>>,
+    /// Files shared with everyone (`shared-files`), held in memory for the session only.
+    files: Arc<Mutex<SharedFiles>>,
+    /// The session's pump, which adds timeline entries; `None` for a view without an agent.
+    pump: Option<mpsc::UnboundedSender<Command>>,
+}
+
+/// The session's shared files and the viewers' switch for them.
+#[derive(Debug, Default)]
+struct SharedFiles {
+    store: Store,
+    /// Whether viewers may share files; off when a session starts.
+    viewers_allowed: bool,
+    /// Bumped on every change, so the sharing side knows when to send the list again.
+    version: u64,
 }
 
 impl SessionView {
@@ -149,6 +174,134 @@ impl SessionView {
         self.changes.send_modify(|n| *n += 1);
     }
 
+    /// The files shared now, oldest first.
+    pub fn shared_files(&self) -> Vec<SharedFileInfo> {
+        self.files.lock().unwrap().store.list()
+    }
+
+    /// A shared file with its bytes; `None` when it was removed or never shared.
+    pub fn shared_file(&self, file: u32) -> Option<SharedFile> {
+        self.files.lock().unwrap().store.get(file).cloned()
+    }
+
+    /// Whether viewers may share files.
+    pub fn files_allowed(&self) -> bool {
+        self.files.lock().unwrap().viewers_allowed
+    }
+
+    /// Changes whenever the shared files or the switch change.
+    pub fn files_version(&self) -> u64 {
+        self.files.lock().unwrap().version
+    }
+
+    /// Shares `bytes` with everyone as `sharer`, under the rules of [`shared_files::check`] and
+    /// the store's limits, and adds the timeline step.
+    pub fn share_file(
+        &self,
+        sharer: Sharer,
+        by_label: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<SharedFileInfo, Refusal> {
+        let info = {
+            let mut files = self.files.lock().unwrap();
+            let info = files.store.add(sharer, by_label, name, bytes, now_ms())?;
+            files.version += 1;
+            info
+        };
+        self.add_entry(Entry::FileShared {
+            file: info.file,
+            name: info.name.clone(),
+            file_kind: info.kind,
+            media_type: info.media_type.clone(),
+            size: info.size,
+            sha256: info.sha256.iter().map(|b| format!("{b:02x}")).collect(),
+            by: info.by,
+            by_label: info.by_label.clone(),
+        });
+        self.files_changed();
+        Ok(info)
+    }
+
+    /// Removes a shared file: any file for the host (`asker` `None`), only their own for a
+    /// viewer. Its timeline step stays.
+    pub fn remove_shared_file(
+        &self,
+        file: u32,
+        asker: Option<u32>,
+    ) -> Result<SharedFileInfo, Refusal> {
+        let removed = {
+            let mut files = self.files.lock().unwrap();
+            let removed = files.store.remove(file, asker)?;
+            files.version += 1;
+            removed
+        };
+        self.files_changed();
+        Ok(removed)
+    }
+
+    /// Holds room for a viewer's file that is on its way, while viewers may share files.
+    pub fn reserve_upload(
+        &self,
+        viewer: u32,
+        name: String,
+        size: u64,
+        sha256: [u8; 32],
+    ) -> Result<u32, Refusal> {
+        let mut files = self.files.lock().unwrap();
+        if !files.viewers_allowed {
+            return Err(Refusal::Off);
+        }
+        files.store.reserve(viewer, name, size, sha256)
+    }
+
+    /// Frees an upload's room, when it failed or its viewer left.
+    pub fn release_upload(&self, upload: u32) {
+        self.files.lock().unwrap().store.release(upload);
+    }
+
+    /// Shares a viewer's upload once all of it arrived and matched its hash. The switch is
+    /// checked again: a file still on its way when the host turned it off is not shared.
+    pub fn complete_upload(
+        &self,
+        upload: u32,
+        by_label: &str,
+        bytes: Vec<u8>,
+    ) -> Result<SharedFileInfo, Refusal> {
+        let reservation = {
+            let mut files = self.files.lock().unwrap();
+            let reservation = files.store.release(upload).ok_or(Refusal::Gone)?;
+            if !files.viewers_allowed {
+                return Err(Refusal::Off);
+            }
+            reservation
+        };
+        let sharer = Sharer::Viewer(reservation.viewer);
+        self.share_file(sharer, by_label, &reservation.name, bytes)
+    }
+
+    fn files_changed(&self) {
+        self.changed();
+        if let Some(pump) = &self.pump {
+            let _ = pump.send(Command::SharedFiles);
+        }
+    }
+
+    /// Adds `entry` to the timeline through the pump, so it is ordered with the agent's entries
+    /// and reaches the host's window; directly for a view without an agent.
+    fn add_entry(&self, entry: Entry) {
+        match &self.pump {
+            Some(pump) => {
+                let _ = pump.send(Command::Entry(entry));
+            }
+            None => {
+                let event = fit(stamp(entry, self.log.latest(), now_ms()), MAX_EVENT_JSON_BYTES);
+                self.timeline.write().unwrap().push(event);
+                self.changed();
+            }
+        }
+    }
+
     /// A view of a log without a running agent, for replaying a recording and for tests.
     pub fn from_log(agent: AgentId, log: Arc<OutputLog>) -> Self {
         Self {
@@ -159,8 +312,14 @@ impl SessionView {
             size: Arc::new(Mutex::new((80, 24))),
             whole_files: Arc::default(),
             changes: Arc::new(watch::channel(0).0),
+            files: Arc::default(),
+            pump: None,
         }
     }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 pub struct HostSession {
@@ -176,6 +335,8 @@ pub struct HostSession {
     /// The id of the next shared link.
     next_link: AtomicU32,
     /// The endpoint, the settings file and the status-line relay script.
+    /// Where shared files are put for the agent.
+    folder: PathBuf,
     /// The endpoint, the hook settings, the status-line relay and, with a browser, the MCP config.
     _hooks: Option<(HookEndpoint, NamedTempFile, NamedTempFile, Option<NamedTempFile>)>,
 }
@@ -285,6 +446,8 @@ impl HostSession {
             size: Arc::new(Mutex::new((config.cols, config.rows))),
             whole_files: whole_files.clone(),
             changes: Arc::new(watch::channel(0).0),
+            files: Arc::default(),
+            pump: Some(commands.clone()),
         };
         let session = Self {
             agent: config.agent,
@@ -296,6 +459,7 @@ impl HostSession {
             commands: commands.clone(),
             killer: Mutex::new(killer),
             host_entered: Arc::default(),
+            folder: config.folder.clone(),
             next_link: AtomicU32::new(1),
             _hooks: hooks,
         };
@@ -364,6 +528,49 @@ impl HostSession {
         if self.view.whole_files.swap(on, Ordering::SeqCst) != on {
             self.view.changed();
         }
+    }
+
+    /// Lets viewers share files, or stops them; files already shared stay (`shared-files`).
+    pub fn allow_viewer_files(&self, on: bool) {
+        let changed = {
+            let mut files = self.view.files.lock().unwrap();
+            let changed = files.viewers_allowed != on;
+            files.viewers_allowed = on;
+            files.version += u64::from(changed);
+            changed
+        };
+        if changed {
+            self.view.files_changed();
+        }
+    }
+
+    /// Shares a file the host chose in their window. The only bytes of the host's computer that
+    /// are ever shared are ones the host handed over like this.
+    pub fn share_file(
+        &self,
+        by_label: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<SharedFileInfo, Refusal> {
+        self.view.share_file(Sharer::Host, by_label, name, bytes)
+    }
+
+    /// Removes any shared file.
+    pub fn remove_shared_file(&self, file: u32) -> Result<SharedFileInfo, Refusal> {
+        self.view.remove_shared_file(file, None)
+    }
+
+    /// A shared file's bytes, for the host's window.
+    pub fn shared_file(&self, file: u32) -> Option<SharedFile> {
+        self.view.shared_file(file)
+    }
+
+    /// Puts a shared file into `shared/` in the session folder, for the agent to read. Returns
+    /// the path relative to the folder. Nothing is typed into the agent.
+    pub fn put_shared_file(&self, file: u32) -> Result<String, PutError> {
+        let shared = self.view.shared_file(file).ok_or(PutError::Gone)?;
+        let folder = SessionFolder::new(&self.folder, None);
+        shared_files::put_in_folder(&folder, &self.folder, &shared.info.name, &shared.bytes)
     }
 
     /// Shares a link with everyone in the session as a timeline entry, in any session, and
@@ -559,6 +766,17 @@ impl Pump {
                         self.emit_entry(entry);
                     }
                 }
+                Some(Command::Entry(entry)) => {
+                    self.flush();
+                    self.emit_entry(entry);
+                }
+                Some(Command::SharedFiles) => {
+                    let (files, viewers_allowed) = {
+                        let files = self.view.files.lock().unwrap();
+                        (files.store.list(), files.viewers_allowed)
+                    };
+                    let _ = self.events.send(SessionEvent::SharedFiles { files, viewers_allowed });
+                }
                 Some(Command::Git(entry)) => {
                     if self.git.as_ref() != Some(&entry) {
                         self.git = Some(entry.clone());
@@ -723,7 +941,7 @@ impl Pump {
     }
 
     fn emit_entry(&self, entry: Entry) {
-        let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let at = now_ms();
         // Cut to fit in one message, so every viewer can receive it (web-viewer decision 8).
         let event = fit(stamp(entry, self.log.latest(), at), MAX_EVENT_JSON_BYTES);
         self.timeline.write().unwrap().push(event.clone());

@@ -12,6 +12,7 @@ Open **Settings** with **SpecDeck › Settings…** or **⌘,** on macOS, or **F
 | Your name | The name others see in sessions you start or join from now on |
 | Appearance | **System** follows your computer's light or dark appearance; **Light** and **Dark** keep SpecDeck that way. Also under **View › Appearance**. See [The window](#the-window) |
 | Show notifications | Turns all of SpecDeck's notifications on or off |
+| While you watch a session | Which [notifications](#notifications) you get about a session you watch: a plan is ready for review, a document changed, the agent finished |
 | Screen reader support | Lets screen readers (VoiceOver, Narrator, Orca) read the terminal. Off unless you turn it on: while it is on, typing in the terminal of a session you host can repeat text |
 | Give Claude a browser | Claude Code sessions you start from now on get [a browser of their own](/specdeck/guide/browser/). On by default; only on macOS |
 | Show screenshots in the timeline | Pictures that Claude's browser and other MCP tools return, such as [screenshots](/specdeck/guide/browser/#screenshots-in-the-timeline), show in the timeline, for viewers too. Applies to sessions you start from now on. On by default |
@@ -34,8 +35,23 @@ While SpecDeck is not the window in front, or its window is closed, it tells you
 | Host | Someone joins or leaves |
 | Host | Claude Code finishes a prompt, or asks your permission |
 | Viewer | The host ends the session, or removes you |
+| Viewer | A plan is ready for review, a document changed, or the agent finished, as you chose under **While you watch a session** |
 
 Click a notification to bring the session to the front. Nothing is shown while you are looking at SpecDeck. To turn notifications off, use **Show notifications** in Settings.
+
+### While you watch a session
+
+Choose what calls you back to a session you watch:
+
+| Switch | You hear when | On at first |
+|---|---|---|
+| A plan is ready for review | Claude presents a plan to the host, or writes or revises an [OpenSpec plan](/specdeck/guide/documents/) | Yes |
+| A document changed | The agent creates or changes a Markdown document | Yes |
+| The agent finished | The agent finished a prompt and waits for the host's next one | No |
+
+You get at most one notification each time the agent finishes a prompt, naming everything in it: *Plan add-login is ready for review*, with *README.md changed too* below it. Claude's plan in plan mode is the exception: you hear about it at once, since Claude stops for it. Ticking off tasks while the agent works through a plan does not notify you. What happened before you joined, and a prompt the agent was already working on when you joined, never notifies you.
+
+In a browser, turn notifications on under the layout button instead. See [Notifications in the browser](/specdeck/guide/follow/#notifications-in-the-browser).
 
 ## The window
 

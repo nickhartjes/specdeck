@@ -131,6 +131,14 @@ describe('viewer screen', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('UDP');
   });
 
+  it('explains a busy sharing service and offers to try again', () => {
+    setup();
+    act(() => emit({ type: 'ended', reason: 'service-busy' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('The sharing service is busy');
+    expect(screen.getByRole('alert')).toHaveTextContent('Try again in a few minutes');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+
   it('leaves', async () => {
     const { bridge, onLeave } = setup();
     join();
@@ -241,6 +249,62 @@ describe('suggesting a prompt as a viewer', () => {
     join();
     expect(screen.queryByRole('tab', { name: /Prompts/ })).toBeNull();
     expect(screen.getByText(/Read-only/)).toBeInTheDocument();
+  });
+});
+
+describe('notifications for the viewer', () => {
+  const plan = (at: number) => ({
+    outputSeq: at,
+    at,
+    kind: 'plan' as const,
+    change: 'add-login',
+    documents: [{ id: 'proposal', name: 'proposal', paths: ['openspec/changes/add-login/proposal.md'], exists: true }],
+    tasks: { done: 0, total: 3 },
+  });
+  const proposal = (at: number) => ({
+    outputSeq: at,
+    at,
+    kind: 'document' as const,
+    promptId: 'p',
+    toolUseId: `t${at}`,
+    path: 'openspec/changes/add-login/proposal.md',
+    text: '# Add login',
+  });
+
+  it('calls the viewer in once when a turn proposes a plan', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { bridge } = setup();
+      join();
+      act(() => {
+        emit({ type: 'status', status: 'working' });
+        emit({ type: 'timeline', event: proposal(1) });
+        emit({ type: 'timeline', event: plan(2) });
+        emit({ type: 'status', status: 'waiting' });
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(2000));
+      expect(bridge.viewerNotify).toHaveBeenCalledTimes(1);
+      expect(bridge.viewerNotify).toHaveBeenCalledWith('plans', 'Plan add-login is ready for review', 'Claude Code wrote proposal.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays quiet about what happened before the viewer came in', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { bridge } = setup();
+      act(() => {
+        emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 100, rows: 30 });
+        emit({ type: 'timeline', event: proposal(1) });
+        emit({ type: 'timeline', event: plan(2) });
+        emit({ type: 'status', status: 'waiting' });
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(5000));
+      expect(bridge.viewerNotify).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
