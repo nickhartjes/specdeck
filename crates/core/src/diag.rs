@@ -182,6 +182,7 @@ fn channel_str(channel: Channel) -> &'static str {
     match channel {
         Channel::Control => "control",
         Channel::Stream => "stream",
+        Channel::Files => "files",
     }
 }
 
@@ -350,6 +351,32 @@ pub fn host_code_sharing(whole_files: bool) {
     info!(whole_files, "host.code_sharing");
 }
 
+/// Someone shared a file, or it was refused: who (0 for the host), what kind, how large and the
+/// outcome. Never the file's name or content (`shared-files` design decision 10).
+pub fn host_file_shared(by: u32, kind: &'static str, bytes: u64, outcome: &'static str) {
+    info!(by, kind, bytes, outcome, "host.file_shared");
+}
+
+/// A shared file was removed, by the host (0) or the viewer who shared it.
+pub fn host_file_removed(by: u32) {
+    info!(by, "host.file_removed");
+}
+
+/// The host put a shared file into the session folder, or could not.
+pub fn host_file_put(bytes: u64, outcome: &'static str) {
+    info!(bytes, outcome, "host.file_put");
+}
+
+/// A shared file was sent to a viewer, or the transfer stopped.
+pub fn host_file_sent(viewer: u32, bytes: u64, outcome: &'static str) {
+    info!(viewer, bytes, outcome, "host.file_sent");
+}
+
+/// The host changed whether viewers may share files.
+pub fn host_files_allowed(files: bool) {
+    info!(files, "host.files_allowed");
+}
+
 /// Stream traffic of the last second, summed over all viewers. Verbose only.
 fn host_traffic(messages: u64, bytes: u64, max_queued: u64) {
     debug!(messages, bytes, max_queued, "host.traffic");
@@ -486,6 +513,16 @@ pub fn viewer_request_sent(kind: &'static str, bytes: usize) {
 /// The host answered one of this viewer's requests.
 pub fn viewer_request_reply(outcome: &'static str) {
     info!(outcome, "viewer.request_reply");
+}
+
+/// A shared file arrived from the host, or could not be received.
+pub fn viewer_file_fetched(bytes: u64, outcome: &'static str) {
+    info!(bytes, outcome, "viewer.file_fetched");
+}
+
+/// This viewer's file reached the host, or did not.
+pub fn viewer_file_uploaded(bytes: u64, outcome: &'static str) {
+    info!(bytes, outcome, "viewer.file_uploaded");
 }
 
 /// The signalling service closed after the peer connection was up; the session goes on.

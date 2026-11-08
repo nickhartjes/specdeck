@@ -160,3 +160,37 @@ describe('screenshots', () => {
     expect(onOpenScreenshot).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'shot' }), true);
   });
 });
+
+describe('shared files in the timeline', () => {
+  const props = { timelineSupported: true, agentName: 'Claude Code', matches: new Set<string>(), current: null, onJump: () => {} };
+  const at = (n: number) => 1_700_000_000_000 + n;
+  const events: TimelineEvent[] = [
+    { outputSeq: 0, at: at(10), kind: 'prompt', promptId: 'p1', text: 'First prompt' },
+    { outputSeq: 0, at: at(20), kind: 'prompt', promptId: 'p2', text: 'Second prompt' },
+  ];
+  const shares = [
+    { file: 1, name: 'wireframe.png', by: 3, byLabel: 'Sanne', at: at(15) },
+    { file: 2, name: 'ci-failure.log', by: 2, byLabel: 'Mo', at: at(30) },
+  ];
+
+  it('shows each share where it happened, and opens the file', async () => {
+    const onOpenShared = vi.fn();
+    const { container } = render(
+      <TimelinePanel model={buildTimeline(events)} {...props} shares={shares} sharedNow={new Set([1, 2])} onOpenShared={onOpenShared} />,
+    );
+    // The timeline itself, not the list of prompts to jump to.
+    const text = container.querySelector('.timeline')?.textContent ?? '';
+    expect(text.indexOf('First prompt')).toBeLessThan(text.indexOf('Sanne shared wireframe.png'));
+    expect(text.indexOf('Sanne shared wireframe.png')).toBeLessThan(text.indexOf('Second prompt'));
+    expect(text.indexOf('Second prompt')).toBeLessThan(text.indexOf('Mo shared ci-failure.log'));
+    await userEvent.click(screen.getByRole('button', { name: 'Sanne shared wireframe.png' }));
+    expect(onOpenShared).toHaveBeenCalledWith(1, 'wireframe.png');
+  });
+
+  it('keeps the step of a removed file, marked removed', () => {
+    render(<TimelinePanel model={buildTimeline([])} {...props} shares={shares.slice(0, 1)} sharedNow={new Set()} />);
+    expect(screen.queryByRole('button', { name: /wireframe/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Sanne shared wireframe.png/)).toHaveTextContent('(removed)');
+    expect(screen.queryByText('No prompts yet')).not.toBeInTheDocument();
+  });
+});

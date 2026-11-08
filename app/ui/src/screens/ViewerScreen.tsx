@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Eye, LogOut, WifiOff } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, SharedFileInfo, Suggestion, TerminalSnapshot, TimelineEvent, ViewEvent } from '../api/types';
+import { shareEach, type SharedFiles } from '../components/SharedFiles';
+import { Toast, useToast } from '../components/Toast';
+import { useSharedBytes } from './useSharedBytes';
 import { SuggestPanel } from '../components/SuggestPanel';
 import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
@@ -71,11 +74,19 @@ interface State {
   sent: { id: number; outcome: RequestOutcome | null } | null;
   /** Whether the host shares whole code files; a host of the previous release never does. */
   wholeFiles: boolean;
+  /** Whether the host lets viewers share files; null while the host has not said, as older hosts never do. */
+  filesAllowed: boolean | null;
+  sharedFiles: SharedFileInfo[];
+  /** Bytes received of files being fetched, by file. */
+  fileProgress: ReadonlyMap<number, number>;
 }
 
 const initial: State = {
   suggestionsAllowed: null,
   wholeFiles: false,
+  filesAllowed: null,
+  sharedFiles: [],
+  fileProgress: new Map(),
   mine: [],
   sent: null,
   phase: 'joining',
@@ -113,6 +124,12 @@ export function viewerReducer(state: State, event: ViewEvent): State {
       return { ...state, mine: event.mine };
     case 'shared':
       return { ...state, wholeFiles: event.wholeFiles };
+    case 'files-allowed':
+      return { ...state, filesAllowed: event.files };
+    case 'shared-files':
+      return { ...state, sharedFiles: event.files };
+    case 'file-progress':
+      return { ...state, fileProgress: new Map(state.fileProgress).set(event.file, event.received) };
     case 'ended':
       return { ...state, phase: 'ended', ended: event.reason };
   }
@@ -172,6 +189,30 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   const terminal = state.agent === 'terminal';
   const ending = state.ended ? END_MESSAGES[state.ended] : null;
   const statusBar = useMemo(() => statusBarInfo(state.timeline, state.timelineSupported), [state.timeline, state.timelineSupported]);
+  const [toast, showToast] = useToast();
+  const open = useSharedBytes(state.sharedFiles, bridge.viewerOpenFile);
+  const hostName = host?.label ?? 'The host';
+  const live = state.phase !== 'ended';
+  const shared = useMemo<SharedFiles | undefined>(
+    () =>
+      // Hosts that take no shared files never say whether viewers may share them.
+      state.filesAllowed !== null
+        ? {
+            files: state.sharedFiles,
+            me: state.viewerId,
+            host: false,
+            canShare: state.filesAllowed && live,
+            hostName,
+            agentName: terminal ? 'The shell' : agentName,
+            share: (files) => void shareEach(files, bridge.viewerShareFile, showToast),
+            open,
+            remove: (file) => void bridge.viewerRemoveFile(file).catch((e) => showToast(errorMessage(e))),
+            save: bridge.saveSharedFile,
+            say: showToast,
+          }
+        : undefined,
+    [state.filesAllowed, state.sharedFiles, state.viewerId, live, hostName, terminal, agentName, bridge, showToast, open],
+  );
 
   // Ended before ever joining: explain, and offer to try again.
   if (ending && !ending.keepReading && state.viewerId === undefined) {
@@ -248,6 +289,8 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
           timelineSupported={state.timelineSupported}
           timeline={state.timeline}
           wholeFiles={state.wholeFiles}
+          shared={shared}
+          sharedProgress={state.fileProgress}
           prompts={
             // Hosts that take no suggestions never say whether they allow them.
             state.suggestionsAllowed !== null && !terminal && state.phase !== 'ended'
@@ -277,6 +320,7 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
         )}
       </div>
       <StatusBar info={statusBar} />
+      <Toast message={toast} />
       {asking && (
         <FirstJoinDialog
           onChoose={(preset) => {

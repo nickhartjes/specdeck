@@ -1,0 +1,20 @@
+/* Shared files (`shared-files`): the Shared tab, a shared file's tab and its step in the timeline.
+   Kept apart from styles.css, as highlight.css is, so parallel changes to it merge cleanly. */
+
+.shared-tab { display: grid; grid-template-rows: 1fr auto; min-height: 100%; }
+.shared-tab.drop-over { outline: 2px dashed var(--accent); outline-offset: -6px; background: var(--accent-soft); }
+.shared-tab .group-title { margin: 12px 14px 2px; font-size: 12px; font-weight: 700; color: var(--text); }
+.shared-tab .group-help { margin: 0 14px 8px; }
+/* Who, when and how large: read left to right, unlike a folder path. */
+.shared-tab .files .folder { direction: ltr; }
+.shared-foot { position: sticky; bottom: 0; padding: 8px 14px; border-top: 1px solid var(--border); background: var(--surface-sunken); }
+
+.shared-file-tab { display: grid; grid-template-rows: auto 1fr; min-height: 100%; }
+.shared-file-tab .filebar .muted { color: var(--text-faint); }
+.shared-image { padding: 16px; display: grid; place-items: start center; overflow: auto; }
+.shared-image img { max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+
+.share-step { display: flex; align-items: center; gap: 8px; margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--border-strong); color: var(--text-muted); font-size: 12.5px; }
+.share-step svg { width: 14px; height: 14px; flex: none; }
+.share-step .time { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.share-step .muted { color: var(--text-faint); }

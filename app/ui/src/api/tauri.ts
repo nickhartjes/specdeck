@@ -7,7 +7,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exportFileName } from '../model/diagnostics';
 import type { Bridge } from './bridge';
 import type { MenuCommand } from '../menu/menu';
-import type { AgentVersion, Appearance, DiagnosticsStatus, HostEvent, JoinLink, Profile, RunningSession, ServiceCheck, UpdateState, ViewEvent } from './types';
+import type { AgentVersion, Appearance, DiagnosticsStatus, HostEvent, JoinLink, Profile, RunningSession, ServiceCheck, SharedFileInfo, UpdateState, ViewEvent } from './types';
 
 function channel<T>(handler: (message: T) => void): Channel<T> {
   const ch = new Channel<T>();
@@ -27,6 +27,11 @@ export function asArrayBuffer(message: ArrayBuffer | ArrayBufferView | number[])
 
 function bytesChannel(handler: (data: ArrayBuffer) => void): Channel<ArrayBuffer | ArrayBufferView | number[]> {
   return channel((message) => handler(asArrayBuffer(message)));
+}
+
+/** A file's name for a command that takes its bytes raw; headers carry only ASCII. */
+function fileHeaders(name: string): Record<string, string> {
+  return { 'x-file-name': encodeURIComponent(name) };
 }
 
 export const tauriBridge: Bridge = {
@@ -80,11 +85,20 @@ export const tauriBridge: Bridge = {
   hostAllowSuggestions: (on) => invoke('host_allow_suggestions', { on }),
   hostShareCode: (wholeFiles) => invoke('host_share_code', { wholeFiles }),
   hostAnswerSuggestion: (viewerId, id, text) => invoke('host_answer_suggestion', { viewerId, id, text }),
+  hostAllowFiles: (on) => invoke('host_allow_files', { on }),
+  hostShareFile: (name, bytes) => invoke<SharedFileInfo>('host_share_file', bytes, { headers: fileHeaders(name) }),
+  hostRemoveSharedFile: (file) => invoke('host_remove_shared_file', { file }),
+  hostReadSharedFile: async (file) => asArrayBuffer(await invoke<ArrayBuffer>('host_read_shared_file', { file })),
+  hostPutSharedFile: (file) => invoke<string>('host_put_shared_file', { file }),
   hostClose: () => invoke('host_close'),
   joinSession: (code, server, terminal, events) =>
     invoke('join_session', { code, server, terminal: bytesChannel(terminal), events: channel<ViewEvent>(events) }),
   leaveSession: () => invoke('leave_session'),
   suggestPrompt: (text) => invoke('suggest_prompt', { text }),
+  viewerShareFile: (name, bytes) => invoke('viewer_share_file', bytes, { headers: fileHeaders(name) }),
+  viewerOpenFile: async (file) => asArrayBuffer(await invoke<ArrayBuffer>('viewer_open_file', { file })),
+  viewerRemoveFile: (file) => invoke('viewer_remove_file', { file }),
+  saveSharedFile: (name, bytes) => invoke<boolean>('save_shared_file', bytes, { headers: fileHeaders(name) }),
   takeJoinLink: () => invoke<JoinLink | null>('take_join_link'),
   takeStartCommand: () => invoke<MenuCommand | null>('take_start_command'),
   setSessionTitle: (name) => invoke('set_session_title', { name }),

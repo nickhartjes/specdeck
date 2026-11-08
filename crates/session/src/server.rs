@@ -295,6 +295,21 @@ fn start_grace(shared: Arc<Shared>, number: u64) {
     });
 }
 
+/// Answers the command `id` with what it gave.
+fn answer(
+    outgoing: &mpsc::UnboundedSender<Frame>,
+    id: u64,
+    result: Result<serde_json::Value, String>,
+) {
+    let (value, error) = match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    };
+    if let Ok(frame) = Frame::control(&Event::Answer { id, value, error }) {
+        let _ = outgoing.send(frame);
+    }
+}
+
 fn reply_failed(outgoing: &mpsc::UnboundedSender<Frame>, message: &str) {
     if let Ok(frame) = Frame::control(&Event::Failed { message: message.into() }) {
         let _ = outgoing.send(frame);
@@ -378,6 +393,29 @@ async fn run(
         }
         Command::ShareCode { whole_files } => {
             runtime.share_whole_files(whole_files);
+            Ok(())
+        }
+        Command::AllowFiles { files } => {
+            runtime.allow_viewer_files(files);
+            Ok(())
+        }
+        Command::RemoveSharedFile { file } => {
+            runtime.remove_shared_file(file);
+            Ok(())
+        }
+        Command::ShareFile { id, name, data } => {
+            let result = runtime
+                .share_file(&name, &data)
+                .map(|info| serde_json::to_value(info).unwrap_or_default());
+            answer(outgoing, id, result);
+            Ok(())
+        }
+        Command::ReadSharedFile { id, file } => {
+            answer(outgoing, id, runtime.read_shared_file(file).map(serde_json::Value::String));
+            Ok(())
+        }
+        Command::PutSharedFile { id, file } => {
+            answer(outgoing, id, runtime.put_shared_file(file).map(serde_json::Value::String));
             Ok(())
         }
         Command::AnswerSuggestion { viewer_id, id, answer } => {

@@ -9,14 +9,16 @@
 //! What messages mean is decided by [`ViewerState`], which the web viewer shares; this module is
 //! the connection around it.
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use datachannel::ConnectionState;
 use serde::Serialize;
 use specdeck_protocol::control::{
-    self, Outcome as ReplyOutcome, Participant, RefusalReason, Suggestion, ViewerMessage,
-    ViewerRequest,
+    self, Outcome as ReplyOutcome, Participant, RefusalReason, SharedFileInfo, Suggestion,
+    ViewerMessage, ViewerRequest,
 };
+use specdeck_protocol::files::{self, FetchStep, Fetching, FilesReply, Uploading};
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
@@ -25,7 +27,7 @@ use specdeck_protocol::timeline::TimelineEvent;
 use specdeck_protocol::viewer_state::{ControlUpdate, StreamUpdate, ViewerState};
 use specdeck_protocol::{AgentId, AgentStatus};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 
 use crate::diag::{self, AttemptEnd};
@@ -73,7 +75,7 @@ pub enum ViewerEvent {
     Allowed {
         suggestions: bool,
     },
-    /// A request was numbered and will be sent, now or once connected.
+    /// A suggestion was numbered and will be sent, now or once connected.
     RequestSent {
         id: u32,
     },
@@ -87,6 +89,18 @@ pub enum ViewerEvent {
     /// Whether the host shares whole code files.
     Shared {
         whole_files: bool,
+    },
+    /// Whether the host lets viewers share files.
+    FilesAllowed {
+        files: bool,
+    },
+    /// The files shared in the session now.
+    Files(Vec<SharedFileInfo>),
+    /// Bytes of a shared file this viewer is fetching.
+    FileProgress {
+        file: u32,
+        received: u64,
+        size: u64,
     },
     /// The connection dropped; the viewer is reconnecting.
     Reconnecting,
@@ -173,6 +187,8 @@ pub struct ViewerSession {
 enum Control {
     Leave,
     Request(ViewerRequest),
+    Fetch(u32, Fetched),
+    Share(Share),
     /// Drop the connection and wait this long before reconnecting.
     Interrupt(Duration),
 }
@@ -193,8 +209,12 @@ impl ViewerSession {
             status: status_tx,
             traffic: diag::Traffic::default(),
             admitted: false,
+            files_open: false,
+            transfers: Transfers::default(),
         };
-        diag::spawn(viewer.run(control_rx));
+        // Boxed where it is made: unboxed, the future is moved across the caller's stack, and
+        // in debug builds it is large enough to overflow a 2 MB thread.
+        diag::spawn(Box::pin(viewer.run(control_rx)));
         (Self { control, status }, event_rx)
     }
 
@@ -213,6 +233,27 @@ impl ViewerSession {
         let _ = self.control.send(Control::Request(ViewerRequest::Suggest { text }));
     }
 
+    /// Fetches a shared file from the host, checked against its announced size and hash. Files
+    /// are fetched one at a time, in the order asked for.
+    pub fn fetch_file(&self, file: u32) -> oneshot::Receiver<Result<Vec<u8>, FileError>> {
+        let (done, receiver) = oneshot::channel();
+        let _ = self.control.send(Control::Fetch(file, done));
+        receiver
+    }
+
+    /// Shares a file with everyone, if the host allows it; resolves to `Received` once it is
+    /// shared, or to why not. Files are sent one at a time, and again after a reconnect.
+    pub fn share_file(&self, name: String, bytes: Vec<u8>) -> oneshot::Receiver<ReplyOutcome> {
+        let (done, receiver) = oneshot::channel();
+        let _ = self.control.send(Control::Share(Share { name, bytes, done }));
+        receiver
+    }
+
+    /// Removes a file this viewer shared.
+    pub fn remove_file(&self, file: u32) {
+        let _ = self.control.send(Control::Request(ViewerRequest::RemoveFile { file }));
+    }
+
     /// Drops the connection as a network outage of `outage` would, then reconnects, keeping the
     /// viewer's place. With a zero outage this is Reconnect, which does nothing while the viewer
     /// is not connected.
@@ -224,6 +265,55 @@ impl ViewerSession {
 impl Drop for ViewerSession {
     fn drop(&mut self) {
         self.leave();
+    }
+}
+
+/// Why a shared file could not be fetched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum FileError {
+    #[error("the file is no longer shared")]
+    Gone,
+    #[error("the file did not arrive intact")]
+    Damaged,
+    #[error("the session ended")]
+    Ended,
+}
+
+/// Where a fetched file, or why it could not be fetched, goes.
+type Fetched = oneshot::Sender<Result<Vec<u8>, FileError>>;
+
+/// A file this viewer wants to share.
+struct Share {
+    name: String,
+    bytes: Vec<u8>,
+    done: oneshot::Sender<ReplyOutcome>,
+}
+
+/// Fetching and sharing files, one of each at a time (`shared-files` design decision 2).
+#[derive(Default)]
+struct Transfers {
+    /// The latest list from the host, for each file's size and hash.
+    files: Vec<SharedFileInfo>,
+    fetches: VecDeque<(u32, Fetched)>,
+    fetching: Option<(Fetching, Fetched)>,
+    shares: VecDeque<Share>,
+    /// The share the host has been asked about, by request id.
+    asked: Option<(u32, Share)>,
+    uploading: Option<(Uploading, Share)>,
+    /// After the host said to wait, the next share is asked about then.
+    wait_until: Option<Instant>,
+}
+
+impl Transfers {
+    /// A dropped connection loses the host's side of an upload; the file is shared again.
+    fn reconnected(&mut self) {
+        if let Some((uploading, share)) = self.uploading.take() {
+            diag::viewer_file_uploaded(uploading.size(), "retried");
+            self.shares.push_front(share);
+        }
+        if let Some((_, share)) = self.asked.take() {
+            self.shares.push_front(share);
+        }
     }
 }
 
@@ -240,6 +330,9 @@ struct Viewer {
     traffic: diag::Traffic,
     /// Whether the current connection has been welcomed; requests wait until then.
     admitted: bool,
+    /// Whether the current connection's files channel is open.
+    files_open: bool,
+    transfers: Transfers,
 }
 
 /// How one connection attempt ended.
@@ -340,6 +433,8 @@ impl Viewer {
                     command = control.recv() => match command {
                         Some(Control::Interrupt(_)) => {}
                         Some(Control::Request(request)) => { self.queue_request(request); }
+                        Some(Control::Fetch(file, done)) => self.transfers.fetches.push_back((file, done)),
+                        Some(Control::Share(share)) => self.transfers.shares.push_back(share),
                         Some(Control::Leave) | None => return,
                     },
                 }
@@ -374,6 +469,8 @@ impl Viewer {
         let mut signalling_closed = false;
         let mut traffic = diag::traffic_interval();
         self.admitted = false;
+        self.files_open = false;
+        self.transfers.reconnected();
         // Joining has one deadline across attempts; each reconnection attempt has its own.
         let deadline = if self.state.admitted_once() {
             Instant::now() + self.config.connect_timeout
@@ -382,8 +479,17 @@ impl Viewer {
         };
 
         loop {
+            if let (true, true, Some(current)) = (self.admitted, self.files_open, &mut peer) {
+                self.drive_files(current);
+            }
+            let wait_until = self.transfers.wait_until;
             tokio::select! {
+                _ = tokio::time::sleep_until(wait_until.unwrap_or_else(Instant::now)), if wait_until.is_some() => {
+                    self.transfers.wait_until = None;
+                }
                 command = control.recv() => match command {
+                    Some(Control::Fetch(file, done)) => self.transfers.fetches.push_back((file, done)),
+                    Some(Control::Share(share)) => self.transfers.shares.push_back(share),
                     // Reconnecting by hand while not connected yet would only start over.
                     Some(Control::Interrupt(outage)) if outage.is_zero() && !connected => {}
                     Some(Control::Interrupt(outage)) => return Outcome::Interrupted(outage),
@@ -526,6 +632,18 @@ impl Viewer {
                                 let _ = current.send(Channel::Control, &control::encode(&request));
                             }
                         }
+                        PeerEvent::Open(Channel::Files) => {
+                            self.files_open = true;
+                            // A fetch the dropped connection cut off goes on where it was.
+                            if let Some((fetching, _)) = &self.transfers.fetching {
+                                let _ = current.send(Channel::Files, &files::encode_request(&fetching.resume()));
+                            }
+                        }
+                        PeerEvent::Message(Channel::Files, bytes) => {
+                            if let Ok(reply) = files::decode_reply(&bytes) {
+                                self.handle_files(current, &reply);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -559,7 +677,13 @@ impl Viewer {
             ControlUpdate::Allowed { suggestions } => ViewerEvent::Allowed { suggestions },
             ControlUpdate::Reply { id, outcome } => {
                 diag::viewer_request_reply(outcome.as_str());
+                self.share_replied(id, outcome);
                 ViewerEvent::Reply { id, outcome }
+            }
+            ControlUpdate::FilesAllowed { files } => ViewerEvent::FilesAllowed { files },
+            ControlUpdate::Files(files) => {
+                self.transfers.files = files.clone();
+                ViewerEvent::Files(files)
             }
             ControlUpdate::Suggestions(mine) => ViewerEvent::Suggestions(mine),
             ControlUpdate::Shared { whole_files } => ViewerEvent::Shared { whole_files },
@@ -576,11 +700,121 @@ impl Viewer {
     /// Numbers a request and keeps it until the host answers; returns the message to send.
     fn queue_request(&mut self, request: ViewerRequest) -> ViewerMessage {
         let kind = request.kind();
-        let ViewerRequest::Suggest { text } = &request;
-        diag::viewer_request_sent(kind, text.len());
+        let bytes = match &request {
+            ViewerRequest::Suggest { text } => text.len(),
+            ViewerRequest::ShareFile { size, .. } => *size as usize,
+            ViewerRequest::RemoveFile { .. } => 0,
+        };
+        diag::viewer_request_sent(kind, bytes);
+        let suggestion = matches!(request, ViewerRequest::Suggest { .. });
         let (id, message) = self.state.send_request(request);
-        let _ = self.events.send(ViewerEvent::RequestSent { id });
+        // The window follows its latest suggestion by this id; files report back on their own.
+        if suggestion {
+            let _ = self.events.send(ViewerEvent::RequestSent { id });
+        }
         message
+    }
+
+    /// Starts the next fetch and the next share when none is running, and sends what an upload
+    /// may send now.
+    fn drive_files(&mut self, peer: &mut Peer) {
+        let send = |peer: &mut Peer, request: &files::FilesRequest| {
+            let _ = peer.send(Channel::Files, &files::encode_request(request));
+        };
+        while self.transfers.fetching.is_none() {
+            let Some((file, done)) = self.transfers.fetches.pop_front() else { break };
+            let Some(info) = self.transfers.files.iter().find(|info| info.file == file) else {
+                let _ = done.send(Err(FileError::Gone));
+                continue;
+            };
+            let (fetching, request) = Fetching::start(file, info.size, info.sha256);
+            send(peer, &request);
+            self.transfers.fetching = Some((fetching, done));
+        }
+        if self.transfers.asked.is_none()
+            && self.transfers.uploading.is_none()
+            && self.transfers.wait_until.is_none()
+            && let Some(share) = self.transfers.shares.pop_front()
+        {
+            let request = ViewerRequest::ShareFile {
+                name: share.name.clone(),
+                size: share.bytes.len() as u64,
+                sha256: files::sha256(&share.bytes),
+            };
+            let message = self.queue_request(request);
+            if let ViewerMessage::Send { id, .. } = &message {
+                self.transfers.asked = Some((*id, share));
+            }
+            let _ = peer.send(Channel::Control, &control::encode(&message));
+        }
+        if let Some((uploading, _)) = &mut self.transfers.uploading {
+            for chunk in uploading.next_chunks() {
+                send(peer, &chunk);
+            }
+        }
+    }
+
+    /// The host's answer to a file this viewer asked to share.
+    fn share_replied(&mut self, id: u32, outcome: ReplyOutcome) {
+        let Some((asked, _)) = &self.transfers.asked else { return };
+        if *asked != id {
+            return;
+        }
+        let (_, share) = self.transfers.asked.take().expect("checked above");
+        match outcome {
+            ReplyOutcome::Ready { upload } => {
+                let bytes = share.bytes.clone();
+                self.transfers.uploading = Some((Uploading::new(upload, bytes), share));
+            }
+            // One upload at a time, and the rate limit: ask again in a moment.
+            ReplyOutcome::RateLimited => {
+                self.transfers.shares.push_front(share);
+                self.transfers.wait_until = Some(Instant::now() + Duration::from_secs(10));
+            }
+            outcome => {
+                diag::viewer_file_uploaded(share.bytes.len() as u64, outcome.as_str());
+                let _ = share.done.send(outcome);
+            }
+        }
+    }
+
+    /// A message on the files channel: a chunk of the file being fetched, or about the upload.
+    fn handle_files(&mut self, peer: &mut Peer, reply: &FilesReply) {
+        if let Some((fetching, _)) = &mut self.transfers.fetching
+            && let Some(step) = fetching.on_reply(reply)
+        {
+            let (file, size) = (fetching.file(), fetching.size());
+            let result = match step {
+                FetchStep::Partial { received } => {
+                    let _ = self.events.send(ViewerEvent::FileProgress { file, received, size });
+                    return;
+                }
+                FetchStep::Retry(request) => {
+                    diag::viewer_file_fetched(size, "retried");
+                    let _ = peer.send(Channel::Files, &files::encode_request(&request));
+                    return;
+                }
+                FetchStep::Done(bytes) => Ok(bytes),
+                FetchStep::Failed => Err(FileError::Damaged),
+            };
+            let gone = matches!(reply, FilesReply::Gone { .. });
+            let result = result.map_err(|error| if gone { FileError::Gone } else { error });
+            diag::viewer_file_fetched(size, if result.is_ok() { "fetched" } else { "failed" });
+            let (_, done) = self.transfers.fetching.take().expect("checked above");
+            let _ = done.send(result);
+            return;
+        }
+        let Some((uploading, _)) = &mut self.transfers.uploading else { return };
+        if uploading.on_ack(reply) {
+            return;
+        }
+        if let FilesReply::Finished { upload, outcome } = reply
+            && *upload == uploading.upload()
+        {
+            let (uploading, share) = self.transfers.uploading.take().expect("checked above");
+            diag::viewer_file_uploaded(uploading.size(), outcome.as_str());
+            let _ = share.done.send(*outcome);
+        }
     }
 
     /// Applies a stream frame; returns a `Resend` request when records are missing or a frame

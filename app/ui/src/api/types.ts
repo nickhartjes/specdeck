@@ -224,6 +224,18 @@ export type TimelineEvent = Stamp &
     | { kind: 'document'; promptId: string; toolUseId: string; path: string; text: string | null }
     /** A code file's whole text after its change, while the host shares whole code files; null when too large. */
     | { kind: 'file-text'; promptId: string; toolUseId: string; path: string; text: string | null }
+    /** Someone shared a file with everyone (`shared-files`); `by` is 0 for the host. */
+    | {
+        kind: 'file-shared';
+        file: number;
+        name: string;
+        fileKind: FileKind;
+        mediaType: string;
+        size: number;
+        sha256: string;
+        by: number;
+        byLabel: string;
+      }
     | { kind: 'plan'; change: string; documents: PlanDocument[]; tasks: { done: number; total: number } }
     | { kind: 'timeline-unavailable'; reason: string }
     | { kind: 'timeline-available' }
@@ -263,7 +275,29 @@ export interface HostSuggestion extends Suggestion {
 }
 
 /** Whether a request got through to the host; `Outcome` in crates/protocol. */
-export type RequestOutcome = 'Received' | 'Off' | 'RateLimited';
+export type RequestOutcome = 'Received' | 'Off' | 'RateLimited' | 'TooLarge' | 'Full' | 'NotAllowedType' | 'Gone' | { Ready: { upload: number } };
+
+/** What a shared file is, decided by the host from its content. */
+export type FileKind = 'image' | 'markdown' | 'text';
+
+/** A file shared with everyone in the session; `SharedFileInfo` in crates/protocol. */
+export interface SharedFileInfo {
+  file: number;
+  name: string;
+  kind: FileKind;
+  mediaType: string;
+  size: number;
+  sha256: number[];
+  /** Who shared it: 0 for the host, else the viewer's number. */
+  by: number;
+  /** Their name when they shared it. */
+  byLabel: string;
+  /** When, in milliseconds since the epoch. */
+  atMs: number;
+}
+
+/** Largest shared file, in bytes; `MAX_SHARED_FILE_BYTES` in crates/protocol. */
+export const MAX_SHARED_FILE_BYTES = 10 * 1024 * 1024;
 
 /** The longest suggestion, in bytes of UTF-8; `MAX_SUGGESTION_BYTES` in crates/protocol. */
 export const MAX_SUGGESTION_BYTES = 4096;
@@ -292,6 +326,10 @@ export type HostEvent =
       /** False for sessions without a timeline; absent from sessions of the previous release, which never share whole code files. */
       wholeFilesPossible?: boolean;
       wholeFiles?: boolean;
+      /** Absent from sessions of the previous release, which take no shared files. */
+      sharedFilesPossible?: boolean;
+      filesAllowed?: boolean;
+      sharedFiles?: SharedFileInfo[];
     }
   | { type: 'sharing'; state: SharingState; code: string | null }
   /** What viewers may send, after the host changed it. */
@@ -300,6 +338,8 @@ export type HostEvent =
   | { type: 'suggestions'; suggestions: HostSuggestion[] }
   /** Whether viewers can open whole code files, after the host changed it. */
   | { type: 'shared'; wholeFiles: boolean }
+  /** The shared files, or whether viewers may share them, changed. */
+  | { type: 'shared-files'; files: SharedFileInfo[]; filesAllowed: boolean }
   /** Whether the sharing service serves the web viewer, once checked. */
   | { type: 'web-viewer'; available: boolean }
   | { type: 'participants'; participants: Participant[] }
@@ -339,6 +379,12 @@ export type ViewEvent =
   | { type: 'suggestions'; mine: Suggestion[] }
   /** Whether the host shares whole code files; never sent by a host of the previous release. */
   | { type: 'shared'; wholeFiles: boolean }
+  /** Whether the host lets viewers share files; never sent by a host of the previous release. */
+  | { type: 'files-allowed'; files: boolean }
+  /** The files shared in the session now. */
+  | { type: 'shared-files'; files: SharedFileInfo[] }
+  /** Bytes of a shared file this viewer is opening. */
+  | { type: 'file-progress'; file: number; received: number; size: number }
   | { type: 'ended'; reason: EndReason };
 
 /** The terminal's state for diagnostics: enums and numbers only, never its content. */

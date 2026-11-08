@@ -10,11 +10,20 @@
 use specdeck_local::{Compat, Frame, Protocol, compat};
 use specdeck_session::messages::{Command, Event};
 
-/// Commands added in this release (`viewer-to-host-channel`, `files-documents-and-code`), which a
-/// session of the release before it does not know. Its snapshot has no `suggestionsPossible` or
-/// `wholeFilesPossible`, so the window offers none of them; this keeps a stray one from reaching
-/// it. Remove a release later.
-const NEW_COMMANDS: [&str; 3] = ["allow-requests", "answer-suggestion", "share-code"];
+/// Commands added in this release (`viewer-to-host-channel`, `files-documents-and-code`,
+/// `shared-files`), which a session of the release before it does not know. Its snapshot has no
+/// `suggestionsPossible`, `wholeFilesPossible` or `sharedFilesPossible`, so the window offers
+/// none of them; this keeps a stray one from reaching it. Remove a release later.
+const NEW_COMMANDS: [&str; 8] = [
+    "allow-requests",
+    "answer-suggestion",
+    "share-code",
+    "allow-files",
+    "share-file",
+    "remove-shared-file",
+    "read-shared-file",
+    "put-shared-file",
+];
 
 /// `command` as a session of release `peer` understands it, or None when it cannot take it.
 pub fn command(peer: Protocol, command: &Command) -> Option<Frame> {
@@ -180,13 +189,18 @@ mod tests {
             answer: specdeck_session::messages::SuggestionAnswer::Decline,
         };
         let share = Command::ShareCode { whole_files: true };
-        assert!(command(previous, &allow).is_none());
-        assert!(command(previous, &answer).is_none());
-        assert!(command(previous, &share).is_none());
+        let files = [
+            Command::AllowFiles { files: true },
+            Command::ShareFile { id: 1, name: "a.md".into(), data: "YQ==".into() },
+            Command::RemoveSharedFile { file: 1 },
+            Command::ReadSharedFile { id: 2, file: 1 },
+            Command::PutSharedFile { id: 3, file: 1 },
+        ];
+        for new in [&allow, &answer, &share].into_iter().chain(&files) {
+            assert!(command(previous, new).is_none(), "{new:?} reached the previous release");
+            assert!(command(Protocol::own(), new).is_some(), "{new:?} did not reach this one");
+        }
         assert!(command(previous, &Command::Status).is_some());
-        assert!(command(Protocol::own(), &allow).is_some());
-        assert!(command(Protocol::own(), &answer).is_some());
-        assert!(command(Protocol::own(), &share).is_some());
     }
 
     #[test]

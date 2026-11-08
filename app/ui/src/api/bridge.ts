@@ -15,6 +15,7 @@ import type {
   Profile,
   RunningSession,
   ServiceCheck,
+  SharedFileInfo,
   TerminalSnapshot,
   UpdateState,
   ViewEvent,
@@ -65,12 +66,28 @@ export interface Bridge {
   hostShareCode(wholeFiles: boolean): Promise<void>;
   /** Types `text` (the suggestion, maybe edited) into the agent's prompt and submits it, or declines the suggestion when `text` is null. */
   hostAnswerSuggestion(viewerId: number, id: number, text: string | null): Promise<void>;
+  /** Lets viewers share files, or stops them; files already shared stay. */
+  hostAllowFiles(on: boolean): Promise<void>;
+  /** Shares a file the host chose; fails with why it was refused. */
+  hostShareFile(name: string, bytes: ArrayBuffer): Promise<SharedFileInfo>;
+  hostRemoveSharedFile(file: number): Promise<void>;
+  hostReadSharedFile(file: number): Promise<ArrayBuffer>;
+  /** Puts a shared file into shared/ in the session folder; the path it was written to. */
+  hostPutSharedFile(file: number): Promise<string>;
   hostClose(): Promise<void>;
   /** Joins through `server`, from a link the user agreed to, or their own service when null. */
   joinSession(code: string, server: string | null, terminal: TerminalSink, events: (event: ViewEvent) => void): Promise<void>;
   leaveSession(): Promise<void>;
   /** Suggests a prompt to the host of the watched session; fails for text the host would refuse. */
   suggestPrompt(text: string): Promise<void>;
+  /** Shares a file with everyone in the watched session; fails with why the host refused it. */
+  viewerShareFile(name: string, bytes: ArrayBuffer): Promise<void>;
+  /** A shared file's bytes, fetched from the host and checked. */
+  viewerOpenFile(file: number): Promise<ArrayBuffer>;
+  /** Removes a file this viewer shared. */
+  viewerRemoveFile(file: number): Promise<void>;
+  /** Saves a copy of a shared file where the person chooses; false when they cancelled. */
+  saveSharedFile(name: string, bytes: ArrayBuffer): Promise<boolean>;
   /** The join link for this window that opened the app or came in since, once; null when there is none. */
   takeJoinLink(): Promise<JoinLink | null>;
   /** The host, join or recent-folder command a new window opened with, once; null when there is none. */

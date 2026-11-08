@@ -5,7 +5,7 @@
 import type { Profile, Steps, View } from '../api/types';
 
 export type Preset = 'overview' | 'developer' | 'present';
-export type FilesTab = 'documents' | 'code';
+export type FilesTab = 'documents' | 'code' | 'shared';
 export type SidePanel = 'files' | 'timeline';
 
 export interface PanelWidths {
@@ -98,7 +98,7 @@ export function parseLayout(value: unknown): Layout | null {
   const v = value as Record<string, unknown>;
   if (!PRESET_IDS.includes(v.preset as Preset)) return null;
   if (!isBool(v.files) || !isBool(v.timeline) || !isBool(v.terminalTab)) return null;
-  if (v.filesTab !== 'documents' && v.filesTab !== 'code') return null;
+  if (v.filesTab !== 'documents' && v.filesTab !== 'code' && v.filesTab !== 'shared') return null;
   if (v.steps !== 'summary' && v.steps !== 'details') return null;
   const stored = (v.widths && typeof v.widths === 'object' ? v.widths : {}) as Record<string, Partial<PanelWidths> | undefined>;
   const widths = usualWidths();

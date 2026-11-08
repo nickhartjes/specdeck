@@ -6,8 +6,8 @@
 use crate::AgentId;
 use crate::AgentStatus;
 use crate::control::{
-    self, HostMessage, Outcome, Participant, RefusalReason, Suggestion, ViewerMessage,
-    ViewerRequest,
+    self, HostMessage, Outcome, Participant, RefusalReason, SharedFileInfo, Suggestion,
+    ViewerMessage, ViewerRequest,
 };
 use crate::frames::{Frame, FrameVerifier, Record};
 use crate::invite::InviteCode;
@@ -64,6 +64,12 @@ pub enum ControlUpdate {
     Shared {
         whole_files: bool,
     },
+    /// Whether the host lets viewers share files.
+    FilesAllowed {
+        files: bool,
+    },
+    /// The files shared in the session now.
+    Files(Vec<SharedFileInfo>),
     /// The message could not be used; drop this connection and try again.
     Retry,
 }
@@ -166,14 +172,20 @@ impl ViewerState {
             }
             HostMessage::Suggestions { mine } => ControlUpdate::Suggestions(mine),
             HostMessage::Shared { whole_files } => ControlUpdate::Shared { whole_files },
+            HostMessage::FilesAllowed { files } => ControlUpdate::FilesAllowed { files },
+            HostMessage::Files { files } => ControlUpdate::Files(files),
         }
     }
 
-    /// A new request to the host, numbered; it is kept until the host answers it.
+    /// A new request to the host, numbered; it is kept until the host answers it. A file to
+    /// share is not kept: its upload belongs to the connection, so after a reconnect the viewer
+    /// shares it again instead.
     pub fn send_request(&mut self, request: ViewerRequest) -> (u32, ViewerMessage) {
         let id = self.next_request;
         self.next_request += 1;
-        self.unanswered.push((id, request.clone()));
+        if !matches!(request, ViewerRequest::ShareFile { .. }) {
+            self.unanswered.push((id, request.clone()));
+        }
         (id, ViewerMessage::Send { id, request })
     }
 
@@ -292,6 +304,42 @@ mod tests {
         assert_eq!(request, None);
         assert_eq!(seen, [0, 1, 2, 3]);
         assert_eq!(viewer.next_record, 4);
+    }
+
+    #[test]
+    fn shared_files_become_updates() {
+        let key = SessionKey::generate();
+        let mut viewer = viewer(&key);
+        let allowed = HostMessage::FilesAllowed { files: true };
+        assert_eq!(
+            viewer.on_control(&control::encode(&allowed)),
+            ControlUpdate::FilesAllowed { files: true }
+        );
+        let file = SharedFileInfo {
+            file: 1,
+            name: "a.md".into(),
+            kind: control::FileKind::Markdown,
+            media_type: "text/markdown".into(),
+            size: 3,
+            sha256: [0; 32],
+            by: 0,
+            by_label: "nick".into(),
+            at_ms: 5,
+        };
+        let files = HostMessage::Files { files: vec![file.clone()] };
+        assert_eq!(viewer.on_control(&control::encode(&files)), ControlUpdate::Files(vec![file]));
+    }
+
+    #[test]
+    fn a_file_to_share_is_not_sent_again_after_reconnecting() {
+        let mut viewer = ViewerState::new(InviteCode::generate());
+        viewer.send_request(ViewerRequest::ShareFile {
+            name: "a.md".into(),
+            size: 1,
+            sha256: [0; 32],
+        });
+        let (_, remove) = viewer.send_request(ViewerRequest::RemoveFile { file: 1 });
+        assert_eq!(viewer.unanswered_requests(), [remove]);
     }
 
     #[test]

@@ -1,6 +1,8 @@
 import { Eye, FilePen, FilePlus, FileText, FileX, Files, X } from 'lucide-react';
+import type { SharedFileInfo } from '../api/types';
 import type { FilesTab } from '../model/layout';
 import type { TouchedFile } from '../model/timeline';
+import { SharedTab, type SharedFiles } from './SharedFiles';
 
 interface Props {
   files: TouchedFile[];
@@ -15,6 +17,11 @@ interface Props {
   /** A click opens a preview; a double click keeps it open. */
   onOpen: (file: TouchedFile, keep: boolean) => void;
   onClose: () => void;
+  /** Files shared with everyone; absent where the session takes none, which then has no Shared tab. */
+  shared?: SharedFiles;
+  /** The shared file shown in the tab area, marked in the list. */
+  activeShared?: number | null;
+  onOpenShared?: (file: SharedFileInfo, keep: boolean) => void;
 }
 
 export const isDocument = (path: string) => /\.(md|markdown)$/i.test(path);
@@ -29,21 +36,27 @@ function status(file: TouchedFile): { tag: string; kind: Kind; Icon: typeof Eye 
   return { tag: file.changes.length === 1 ? kind : `${file.changes.length} changes`, kind, Icon: created ? FilePlus : FilePen };
 }
 
-/** The files the agent touched, as Documents and Code (`session-window` spec: Files the agent touched). */
-export function FilesPanel({ files, timelineSupported, agentName, terminal = false, tab, onTab, active, onOpen, onClose }: Props) {
+/**
+ * The files the agent touched, as Documents and Code (`session-window` spec: Files the agent
+ * touched), and the files people shared (Shared tab).
+ */
+export function FilesPanel({ files, timelineSupported, agentName, terminal = false, tab: chosen, onTab, active, onOpen, onClose, shared, activeShared = null, onOpenShared }: Props) {
   const documents = files.filter((f) => isDocument(f.path));
   const code = files.filter((f) => !isDocument(f.path));
+  // A session that takes no shared files shows Code where Shared was chosen.
+  const tab = chosen === 'shared' && !shared ? 'code' : chosen;
   const shown = tab === 'documents' ? documents : code;
+  const tabs = [
+    ['documents', 'Documents', timelineSupported ? documents.length : null],
+    ['code', 'Code', timelineSupported ? code.length : null],
+    ...(shared ? [['shared', 'Shared', shared.files.length] as const] : []),
+  ] as const;
+  const label = tabs.find(([id]) => id === tab)?.[1] ?? 'Code';
   return (
     <>
       <div className="pane-head">
         <div role="tablist" aria-label="Files" className="pane-tabs">
-          {(
-            [
-              ['documents', 'Documents', documents.length],
-              ['code', 'Code', code.length],
-            ] as const
-          ).map(([id, label, count]) => (
+          {tabs.map(([id, name, count], index) => (
             <button
               key={id}
               role="tab"
@@ -52,11 +65,13 @@ export function FilesPanel({ files, timelineSupported, agentName, terminal = fal
               className="pane-tab"
               onClick={() => onTab(id)}
               onKeyDown={(event) => {
-                if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') onTab(id === 'documents' ? 'code' : 'documents');
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                const next = tabs[(index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]!;
+                onTab(next[0]);
               }}
             >
-              {label}
-              {timelineSupported && <span className="count">{count}</span>}
+              {name}
+              {count !== null && <span className="count">{count}</span>}
             </button>
           ))}
         </div>
@@ -65,8 +80,10 @@ export function FilesPanel({ files, timelineSupported, agentName, terminal = fal
           <X aria-hidden />
         </button>
       </div>
-      <div className="pane-body" role="tabpanel" aria-label={tab === 'documents' ? 'Documents' : 'Code'}>
-        {!timelineSupported ? (
+      <div className="pane-body" role="tabpanel" aria-label={label}>
+        {tab === 'shared' && shared ? (
+          <SharedTab shared={shared} active={activeShared} onOpen={(file, keep) => onOpenShared?.(file, keep)} />
+        ) : !timelineSupported ? (
           <div className="empty">
             <Files aria-hidden />
             <strong>{terminal ? 'No file list for a terminal session' : `No file list for ${agentName}`}</strong>

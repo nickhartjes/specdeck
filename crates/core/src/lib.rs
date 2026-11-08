@@ -19,6 +19,7 @@ pub mod program_status;
 pub mod screenshots;
 pub mod session;
 pub mod session_folder;
+pub mod shared_files;
 pub mod sharing;
 pub mod shell_changes;
 pub mod signalling_client;

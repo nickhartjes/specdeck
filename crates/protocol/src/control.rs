@@ -10,7 +10,8 @@ use crate::{AgentId, AgentStatus};
 
 /// Bumped on every protocol change. Version 3 added requests from viewers (`Send`) and the host's
 /// answers to them (`Allowed`, `Reply`, `Suggestions`); version 4 the whole text of code files
-/// (the `FileText` timeline entry) and the host's setting for it (`Shared`).
+/// (the `FileText` timeline entry) and the host's setting for it (`Shared`), and shared files
+/// (the `files` channel, `FileShared`, `Files`, `FilesAllowed`, `ShareFile` and `RemoveFile`).
 pub const PROTOCOL_VERSION: u32 = 4;
 
 /// The oldest viewer protocol a host admits. Older viewers watch only: the host never sends them
@@ -22,6 +23,13 @@ pub const REQUESTS_PROTOCOL_VERSION: u32 = 3;
 
 /// The first protocol version that reads whole code files: `FileText` entries and `Shared`.
 pub const WHOLE_FILES_PROTOCOL_VERSION: u32 = 4;
+
+/// The first protocol version with shared files: the `files` channel, the `FileShared` entry,
+/// `Files`, `FilesAllowed`, and the `ShareFile` and `RemoveFile` requests.
+pub const SHARED_FILES_PROTOCOL_VERSION: u32 = 4;
+
+/// Longest name of a shared file, in bytes of UTF-8.
+pub const MAX_FILE_NAME_BYTES: usize = 255;
 
 /// Longest username accepted, in characters.
 pub const MAX_USERNAME_CHARS: usize = 64;
@@ -61,6 +69,11 @@ pub enum ViewerMessage {
 pub enum ViewerRequest {
     /// A prompt for the agent, which only the host can send.
     Suggest { text: String },
+    /// A file to share with everyone (version 4). When the host answers `Ready`, the viewer
+    /// sends its bytes on the `files` channel.
+    ShareFile { name: String, size: u64, sha256: [u8; 32] },
+    /// Removes a file the viewer shared (version 4).
+    RemoveFile { file: u32 },
 }
 
 impl ViewerRequest {
@@ -68,6 +81,8 @@ impl ViewerRequest {
     pub fn kind(&self) -> &'static str {
         match self {
             ViewerRequest::Suggest { .. } => "suggest",
+            ViewerRequest::ShareFile { .. } => "share_file",
+            ViewerRequest::RemoveFile { .. } => "remove_file",
         }
     }
 }
@@ -123,6 +138,54 @@ pub enum HostMessage {
     Shared {
         whole_files: bool,
     },
+    /// Whether viewers may share files (version 4): on admission and on every change.
+    FilesAllowed {
+        files: bool,
+    },
+    /// The files shared in the session now, oldest first (version 4): on admission and on every
+    /// change.
+    Files {
+        files: Vec<SharedFileInfo>,
+    },
+}
+
+/// A file shared in the session, as everyone sees it in the list. Its bytes travel on the
+/// `files` channel, checked against `size` and `sha256`. In JSON, for the windows, fields are
+/// camelCase; postcard does not use names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedFileInfo {
+    pub file: u32,
+    pub name: String,
+    pub kind: FileKind,
+    pub media_type: String,
+    pub size: u64,
+    pub sha256: [u8; 32],
+    /// Participant id of who shared it; 0 is the host.
+    pub by: u32,
+    /// Their label when they shared it, for files from people who have left.
+    pub by_label: String,
+    /// When it was shared, in milliseconds since the Unix epoch.
+    pub at_ms: u64,
+}
+
+/// What a shared file is, decided by the host from its content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FileKind {
+    Image,
+    Markdown,
+    Text,
+}
+
+impl FileKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FileKind::Image => "image",
+            FileKind::Markdown => "markdown",
+            FileKind::Text => "text",
+        }
+    }
 }
 
 /// What became of a request when it reached the host.
@@ -134,6 +197,16 @@ pub enum Outcome {
     Off,
     /// Too many requests; the viewer can send it again in a moment.
     RateLimited,
+    /// The host takes the file (version 4): send its bytes as upload `upload` on `files`.
+    Ready { upload: u32 },
+    /// The file is larger than a shared file may be.
+    TooLarge,
+    /// The session's shared files, or this viewer's, have no room for it.
+    Full,
+    /// Not a kind of file that can be shared.
+    NotAllowedType,
+    /// The file is gone, or is not the viewer's to remove.
+    Gone,
 }
 
 impl Outcome {
@@ -143,6 +216,11 @@ impl Outcome {
             Outcome::Received => "received",
             Outcome::Off => "off",
             Outcome::RateLimited => "rate_limited",
+            Outcome::Ready { .. } => "ready",
+            Outcome::TooLarge => "too_large",
+            Outcome::Full => "full",
+            Outcome::NotAllowedType => "type",
+            Outcome::Gone => "gone",
         }
     }
 }
@@ -231,6 +309,8 @@ pub enum DecodeError {
     InvalidUsername,
     #[error("suggestion must be 1 to {MAX_SUGGESTION_BYTES} bytes without control characters")]
     InvalidSuggestion,
+    #[error("file name must be 1 to {MAX_FILE_NAME_BYTES} bytes")]
+    InvalidFileName,
 }
 
 pub fn encode<T: Serialize>(message: &T) -> Vec<u8> {
@@ -256,6 +336,11 @@ pub fn decode_viewer(bytes: &[u8]) -> Result<ViewerMessage, DecodeError> {
         ViewerMessage::Send { request: ViewerRequest::Suggest { text }, .. } => {
             if !valid_suggestion(text) {
                 return Err(DecodeError::InvalidSuggestion);
+            }
+        }
+        ViewerMessage::Send { request: ViewerRequest::ShareFile { name, .. }, .. } => {
+            if name.is_empty() || name.len() > MAX_FILE_NAME_BYTES {
+                return Err(DecodeError::InvalidFileName);
             }
         }
         ViewerMessage::Hello { username, .. } => {
@@ -289,6 +374,13 @@ mod tests {
         ViewerMessage::Send { id, request: ViewerRequest::Suggest { text: text.into() } }
     }
 
+    fn share(id: u32, name: &str) -> ViewerMessage {
+        ViewerMessage::Send {
+            id,
+            request: ViewerRequest::ShareFile { name: name.into(), size: 1024, sha256: [3; 32] },
+        }
+    }
+
     fn hello(username: &str) -> ViewerMessage {
         ViewerMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -306,6 +398,8 @@ mod tests {
             ViewerMessage::Resend { from_output_seq: 9 },
             ViewerMessage::Leave,
             suggest(4, "Add a test for\n\tthe heartbeat"),
+            share(5, "wireframe.png"),
+            ViewerMessage::Send { id: 6, request: ViewerRequest::RemoveFile { file: 2 } },
         ] {
             assert_eq!(decode_viewer(&encode(&message)), Ok(message));
         }
@@ -350,6 +444,22 @@ mod tests {
                 ],
             },
             HostMessage::Shared { whole_files: true },
+            HostMessage::FilesAllowed { files: true },
+            HostMessage::Files {
+                files: vec![SharedFileInfo {
+                    file: 2,
+                    name: "wireframe.png".into(),
+                    kind: FileKind::Image,
+                    media_type: "image/png".into(),
+                    size: 2048,
+                    sha256: [9; 32],
+                    by: 3,
+                    by_label: "Sanne".into(),
+                    at_ms: 1_700_000_000_000,
+                }],
+            },
+            HostMessage::Reply { id: 5, outcome: Outcome::Ready { upload: 7 } },
+            HostMessage::Reply { id: 6, outcome: Outcome::NotAllowedType },
         ];
         for message in messages {
             assert_eq!(decode_host(&encode(&message)), Ok(message));
@@ -389,6 +499,20 @@ mod tests {
         assert_eq!(encode(&HostMessage::Reply { id: 4, outcome: Outcome::Off }), [6, 4, 1]);
         // `Shared` comes after every version 3 message.
         assert_eq!(encode(&HostMessage::Shared { whole_files: true }), [8, 1]);
+        // Suggestions keep their bytes now that requests and outcomes for files follow them.
+        assert_eq!(encode(&suggest(1, "a")), [3, 1, 0, 1, b'a']);
+        assert_eq!(encode(&HostMessage::Reply { id: 4, outcome: Outcome::RateLimited }), [6, 4, 2]);
+    }
+
+    #[test]
+    fn file_names_are_bounded() {
+        let longest = "x".repeat(MAX_FILE_NAME_BYTES);
+        let bytes = encode(&share(1, &longest));
+        assert!(bytes.len() <= MAX_REQUEST_BYTES);
+        assert!(decode_viewer(&bytes).is_ok());
+        let longer = "x".repeat(MAX_FILE_NAME_BYTES + 1);
+        assert_eq!(decode_viewer(&encode(&share(1, &longer))), Err(DecodeError::InvalidFileName));
+        assert_eq!(decode_viewer(&encode(&share(1, ""))), Err(DecodeError::InvalidFileName));
     }
 
     #[test]

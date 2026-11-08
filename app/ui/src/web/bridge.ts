@@ -3,7 +3,7 @@
 // folder, agent and update calls are not part of the web viewer and fail.
 
 import type { Bridge } from '../api/bridge';
-import type { Appearance, JoinLink, Profile, View } from '../api/types';
+import type { Appearance, JoinLink, Profile, RequestOutcome, View } from '../api/types';
 import { asAppearance } from '../appearance';
 import { Connection, type Platform, type ViewerCore } from './connection';
 
@@ -78,6 +78,24 @@ function readLayout(storage: Storage | null): unknown {
 }
 
 const notInTheWebViewer = () => Promise.reject(new Error('The web viewer can only watch sessions.'));
+
+/** Why the host did not take a file, as the app's viewer says it. */
+export function shareRefusal(outcome: RequestOutcome): string {
+  switch (outcome) {
+    case 'Off':
+      return 'The host has not turned on sharing files.';
+    case 'TooLarge':
+      return 'Files can be up to 10 MB.';
+    case 'Full':
+      return 'There is no room for more of your files in this session. Remove some first.';
+    case 'NotAllowedType':
+      return 'Only images (PNG, JPEG, GIF, WebP), Markdown and text files can be shared.';
+    case 'Gone':
+      return 'The file did not reach the host intact. Share it again.';
+    default:
+      return 'The host did not take the file. Share it again.';
+  }
+}
 
 export function webBridge(options: WebBridgeOptions): Bridge {
   const { storage, service } = options;
@@ -212,6 +230,34 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     suggestPrompt: async (text) => {
       if (!connection) throw new Error('You are not in a session.');
       connection.suggest(text);
+    },
+    hostAllowFiles: notInTheWebViewer,
+    hostShareFile: notInTheWebViewer,
+    hostRemoveSharedFile: notInTheWebViewer,
+    hostReadSharedFile: notInTheWebViewer,
+    hostPutSharedFile: notInTheWebViewer,
+    viewerShareFile: async (name, bytes) => {
+      if (!connection) throw new Error('You are not in a session.');
+      const outcome = await connection.shareFile(name, new Uint8Array(bytes));
+      if (outcome !== 'Received') throw new Error(shareRefusal(outcome));
+    },
+    viewerOpenFile: async (file) => {
+      if (!connection) throw new Error('You are not in a session.');
+      return connection.openFile(file);
+    },
+    viewerRemoveFile: async (file) => {
+      if (!connection) throw new Error('You are not in a session.');
+      connection.removeFile(file);
+    },
+    saveSharedFile: async (name, bytes) => {
+      // A download: the browser saves it where it saves downloads, or asks.
+      const url = URL.createObjectURL(new Blob([bytes]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return true;
     },
     takeJoinLink: () => Promise.resolve(null),
     // One page, one session: no other windows to start or title.

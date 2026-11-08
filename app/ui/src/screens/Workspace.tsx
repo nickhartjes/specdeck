@@ -9,7 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { ArrowDown, FileDiff, FileText, Image, SquareTerminal, X } from "lucide-react";
+import { ArrowDown, FileDiff, FileText, Image, Share2, SquareTerminal, X } from "lucide-react";
 import type { TimelineEvent, TerminalSnapshot } from "../api/types";
 import { Divider } from "../components/Divider";
 import { DiffTab, type CodeView } from "../components/DiffTab";
@@ -17,6 +17,8 @@ import { DocumentTab } from "../components/DocumentTab";
 import { ScreenshotTab, screenshotTitle } from "../components/Screenshot";
 import { FilesPanel, isDocument } from "../components/FilesPanel";
 import { SearchBar } from "../components/SearchBar";
+import { SharedFileTab, type SharedFiles } from "../components/SharedFiles";
+import { shareSteps } from "../model/sharedFiles";
 import { TimelinePanel } from "../components/TimelinePanel";
 import { buildDocuments, type Plan } from "../model/documents";
 import {
@@ -81,6 +83,10 @@ interface Props {
   prompts?: { badge?: number; content: ReactNode };
   /** Whether the host shares whole code files now. */
   wholeFiles?: boolean;
+  /** Files shared with everyone; absent where the session takes none. */
+  shared?: SharedFiles;
+  /** Bytes received so far of shared files being fetched, by file. */
+  sharedProgress?: ReadonlyMap<number, number>;
 }
 
 type Pane = "files" | "session" | "timeline";
@@ -153,6 +159,11 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
     const written = useMemo(
       () => buildDocuments(props.timeline),
       [props.timeline],
+    );
+    const shares = useMemo(() => shareSteps(props.timeline), [props.timeline]);
+    const sharedNow = useMemo(
+      () => new Set(props.shared?.files.map((file) => file.file)),
+      [props.shared?.files],
     );
     // Which version of each document this participant last read, for the whole session; changed in place.
     const [lastRead] = useState(() => new Map<string, number>());
@@ -264,6 +275,9 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
         return openDocument(file.path, keep);
       show(openTab(tabs, "diff", file.path, { keep }));
     };
+
+    const openShared = (file: number, name: string, keep = false) =>
+      show(openTab(tabs, "shared", String(file), { keep, title: name }));
 
     const readPlan = useCallback(
       (_plan: Plan, path: string) => openDocument(path),
@@ -447,7 +461,10 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
     const reset = (panel: SidePanel) => () =>
       onLayout(setWidth(layout, panel, usualWidth(layout.preset, panel)));
     const activeTab = tabs.list.find((tab) => tab.id === tabs.active);
-    const activePath = activeTab?.path ?? null;
+    const activeShared =
+      activeTab?.kind === "shared" ? Number(activeTab.path) : null;
+    const activePath =
+      activeTab?.kind === "shared" ? null : (activeTab?.path ?? null);
 
     return (
       <main className="workspace">
@@ -491,6 +508,9 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
               active={activePath}
               onOpen={openFile}
               onClose={() => closePanel("files")}
+              shared={props.shared}
+              activeShared={activeShared}
+              onOpenShared={(file, keep) => openShared(file.file, file.name, keep)}
             />
           </aside>
           {!narrow && layout.files && (
@@ -583,7 +603,18 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                       keep(tab.id)
                     }
                   >
-                    {tab.kind === "image" ? (
+                    {tab.kind === "shared" && props.shared ? (
+                      <SharedFileTab
+                        file={
+                          props.shared.files.find(
+                            (file) => String(file.file) === tab.path,
+                          ) ?? null
+                        }
+                        shared={props.shared}
+                        progress={props.sharedProgress?.get(Number(tab.path))}
+                        onKeep={() => keep(tab.id)}
+                      />
+                    ) : tab.kind === "image" ? (
                       <ScreenshotTab
                         screenshot={screenshotIn(model, tab.path!)}
                       />
@@ -745,6 +776,9 @@ export const Workspace = forwardRef<WorkspaceHandle, Props>(
                 onStep={showTerminal}
                 onOpenChange={openChange}
                 onOpenScreenshot={openScreenshot}
+                shares={shares}
+                sharedNow={sharedNow}
+                onOpenShared={(file, name) => openShared(file, name)}
               />
             </div>
           </aside>
@@ -773,6 +807,7 @@ const TAB_ICONS = {
   document: FileText,
   diff: FileDiff,
   image: Image,
+  shared: Share2,
 };
 
 /** The screenshot of tool call `toolUseId`, if the timeline has one. */

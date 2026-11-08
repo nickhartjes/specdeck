@@ -4,7 +4,7 @@
 // RTCPeerConnection. What each message means is decided by `ViewerCore`, the shared Rust code
 // compiled to WebAssembly (crates/web), so verification and ordering match the app.
 
-import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, Suggestion, TimelineEvent, ViewEvent } from '../api/types';
+import type { AgentId, AgentStatus, EndReason, Participant, RequestOutcome, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent } from '../api/types';
 
 /** How long joining may take, and one reconnection attempt; as `CONNECT_TIMEOUT` in the app. */
 export const CONNECT_TIMEOUT_MS = 20_000;
@@ -24,7 +24,31 @@ export type ControlUpdate =
   | { type: 'reply'; id: number; outcome: RequestOutcome }
   | { type: 'suggestions'; mine: Suggestion[] }
   | { type: 'shared'; wholeFiles: boolean }
+  | { type: 'files-allowed'; files: boolean }
+  | { type: 'files'; files: SharedFileInfo[] }
   | { type: 'retry' };
+
+/** What a message on the files channel did to a fetch; `FileFetch` in crates/web. */
+export interface FetchUpdate {
+  progress?: number;
+  done?: Uint8Array | number[];
+  /** A request to send on the files channel, fetching it again. */
+  retry?: Uint8Array | number[];
+  failed?: boolean;
+  gone?: boolean;
+}
+
+/** Fetching one shared file; `FileFetch` in crates/web. */
+export interface FileFetchCore {
+  request(): Uint8Array;
+  onReply(bytes: Uint8Array): FetchUpdate;
+}
+
+/** Sending one file the host accepted; `FileUpload` in crates/web. */
+export interface FileUploadCore {
+  nextChunks(): (Uint8Array | number[])[];
+  onReply(bytes: Uint8Array): { acked?: boolean; finished?: RequestOutcome };
+}
 
 /** A numbered request and the control message that carries it. */
 export interface Request {
@@ -54,7 +78,27 @@ export interface ViewerCore {
   suggest(text: string): Request;
   /** Requests the host has not answered, to send once admitted. */
   unansweredRequests(): Request[];
+  /** A file to share, announced with its size and hash. */
+  shareFile(name: string, bytes: Uint8Array): Request;
+  removeFile(file: number): Request;
+  fetchFile(file: number, size: number, sha256: Uint8Array): FileFetchCore;
+  uploadFile(upload: number, bytes: Uint8Array): FileUploadCore;
 }
+
+interface Fetch {
+  file: number;
+  resolve: (bytes: ArrayBuffer) => void;
+  reject: (error: Error) => void;
+}
+
+interface Share {
+  name: string;
+  bytes: Uint8Array;
+  resolve: (outcome: RequestOutcome) => void;
+}
+
+/** After the host says to wait, the next file is offered again this much later; as the app's viewer. */
+const RATE_LIMIT_WAIT_MS = 10_000;
 
 /** The browser APIs used, so tests can pass fakes. */
 export interface Platform {
@@ -128,6 +172,16 @@ export class Connection {
   private left = false;
   /** Sends on the control channel while this connection is admitted; null otherwise. */
   private sendControl: ((bytes: Uint8Array<ArrayBuffer>) => void) | null = null;
+  /** Sends on the files channel while it is open and this connection is admitted; null otherwise. */
+  private sendFiles: ((bytes: Uint8Array<ArrayBuffer>) => void) | null = null;
+  // Fetching and sharing files, one of each at a time (`shared-files` design decision 2).
+  private files: SharedFileInfo[] = [];
+  private fetches: Fetch[] = [];
+  private fetching: (Fetch & { core: FileFetchCore }) | null = null;
+  private shares: Share[] = [];
+  private asked: { id: number; share: Share } | null = null;
+  private uploading: { core: FileUploadCore; share: Share } | null = null;
+  private waiting = false;
 
   constructor(private readonly options: ConnectionOptions) {
     this.platform = options.platform ?? browserPlatform;
@@ -143,6 +197,117 @@ export class Connection {
     const request = this.options.core.suggest(text.replace(/\r\n/g, '\n'));
     this.options.onEvent({ type: 'request-sent', id: request.id });
     this.sendControl?.(new Uint8Array(request.message));
+  }
+
+  /** A shared file's bytes, fetched from the host and checked against what it announced. */
+  openFile(file: number): Promise<ArrayBuffer> {
+    return new Promise((resolve, reject) => {
+      this.fetches.push({ file, resolve, reject });
+      this.drive();
+    });
+  }
+
+  /** Shares a file with everyone; resolves to `Received` once shared, or to why not. */
+  shareFile(name: string, bytes: Uint8Array): Promise<RequestOutcome> {
+    return new Promise((resolve) => {
+      this.shares.push({ name, bytes, resolve });
+      this.drive();
+    });
+  }
+
+  /** Removes a file this viewer shared. */
+  removeFile(file: number) {
+    // Not announced as `request-sent`: the window follows its latest suggestion by that.
+    const request = this.options.core.removeFile(file);
+    this.sendControl?.(new Uint8Array(request.message));
+  }
+
+  /** Starts the next fetch and share when none runs, and sends what an upload may send now. */
+  private drive() {
+    const send = this.sendFiles;
+    const sendControl = this.sendControl;
+    if (!send || !sendControl) return;
+    while (!this.fetching && this.fetches.length > 0) {
+      const next = this.fetches.shift()!;
+      const info = this.files.find((file) => file.file === next.file);
+      if (!info) {
+        next.reject(new Error('That file is no longer shared.'));
+        continue;
+      }
+      const core = this.options.core.fetchFile(info.file, info.size, new Uint8Array(info.sha256));
+      this.fetching = { ...next, core };
+      send(new Uint8Array(core.request()));
+    }
+    if (!this.asked && !this.uploading && !this.waiting && this.shares.length > 0) {
+      const share = this.shares.shift()!;
+      const request = this.options.core.shareFile(share.name, share.bytes);
+      this.asked = { id: request.id, share };
+      sendControl(new Uint8Array(request.message));
+    }
+    if (this.uploading) for (const chunk of this.uploading.core.nextChunks()) send(new Uint8Array(chunk));
+  }
+
+  /** The host's answer to a file this viewer asked to share. */
+  private shareReplied(id: number, outcome: RequestOutcome) {
+    if (this.asked?.id !== id) return;
+    const { share } = this.asked;
+    this.asked = null;
+    if (typeof outcome === 'object' && 'Ready' in outcome) {
+      this.uploading = { core: this.options.core.uploadFile(outcome.Ready.upload, share.bytes), share };
+    } else if (outcome === 'RateLimited') {
+      // One upload at a time, and the rate limit: ask again in a moment.
+      this.shares.unshift(share);
+      this.waiting = true;
+      setTimeout(() => {
+        this.waiting = false;
+        this.drive();
+      }, RATE_LIMIT_WAIT_MS);
+    } else {
+      share.resolve(outcome);
+    }
+    this.drive();
+  }
+
+  /** A message on the files channel: a chunk of the file being fetched, or about the upload. */
+  private onFiles(bytes: Uint8Array) {
+    const fetching = this.fetching;
+    if (fetching) {
+      const update = fetching.core.onReply(bytes);
+      if (update.progress !== undefined) {
+        const size = this.files.find((file) => file.file === fetching.file)?.size ?? update.progress;
+        this.options.onEvent({ type: 'file-progress', file: fetching.file, received: update.progress, size });
+        return;
+      }
+      if (update.retry) {
+        this.sendFiles?.(new Uint8Array(update.retry));
+        return;
+      }
+      if (update.done || update.failed) {
+        this.fetching = null;
+        if (update.done) fetching.resolve(new Uint8Array(update.done).buffer);
+        else fetching.reject(new Error(update.gone ? 'That file is no longer shared.' : 'The file did not arrive intact.'));
+        this.drive();
+        return;
+      }
+    }
+    const uploading = this.uploading;
+    if (!uploading) return;
+    const update = uploading.core.onReply(bytes);
+    if (update.finished !== undefined) {
+      this.uploading = null;
+      uploading.share.resolve(update.finished);
+    }
+    this.drive();
+  }
+
+  /** The connection dropped: what the host had of an upload is gone, so it is shared again. */
+  private dropped() {
+    this.sendControl = null;
+    this.sendFiles = null;
+    if (this.uploading) this.shares.unshift(this.uploading.share);
+    if (this.asked) this.shares.unshift(this.asked.share);
+    this.uploading = null;
+    this.asked = null;
   }
 
   /** Leaves the session: tells the host if connected, and closes everything. */
@@ -218,7 +383,7 @@ export class Connection {
         done = true;
         clearTimeout(timer);
         this.stop = null;
-        this.sendControl = null;
+        this.dropped();
         socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
         try {
           socket.close();
@@ -261,7 +426,20 @@ export class Connection {
         };
         control = pc.createDataChannel('control');
         const stream = pc.createDataChannel('stream');
-        control.binaryType = stream.binaryType = 'arraybuffer';
+        const files = pc.createDataChannel('files');
+        control.binaryType = stream.binaryType = files.binaryType = 'arraybuffer';
+        let admittedHere = false;
+        const filesReady = () => {
+          if (!admittedHere || files.readyState !== 'open') return;
+          this.sendFiles = (bytes) => {
+            if (files.readyState === 'open') files.send(bytes);
+          };
+          // A fetch the dropped connection cut off goes on where it was.
+          if (this.fetching) this.sendFiles(new Uint8Array(this.fetching.core.request()));
+          this.drive();
+        };
+        files.onopen = filesReady;
+        files.onmessage = ({ data }) => this.onFiles(new Uint8Array(data as ArrayBuffer));
         control.onopen = () => {
           connected = true;
           clearTimeout(timer);
@@ -279,13 +457,23 @@ export class Connection {
               };
               // Requests made while away, and ones a dropped connection left unanswered.
               for (const request of core.unansweredRequests()) this.sendControl(new Uint8Array(request.message));
+              admittedHere = true;
+              filesReady();
               break;
             }
+            case 'files-allowed':
+              onEvent({ type: 'files-allowed', files: update.files });
+              break;
+            case 'files':
+              this.files = update.files;
+              onEvent({ type: 'shared-files', files: update.files });
+              break;
             case 'allowed':
               onEvent({ type: 'allowed', suggestions: update.suggestions });
               break;
             case 'reply':
               onEvent({ type: 'reply', id: update.id, outcome: update.outcome });
+              this.shareReplied(update.id, update.outcome);
               break;
             case 'suggestions':
               onEvent({ type: 'suggestions', mine: update.mine });
