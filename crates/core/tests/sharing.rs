@@ -1917,6 +1917,8 @@ async fn a_read_request_closes_when_its_time_is_up() {
     assert_eq!(sharing.ask(read()).await.unwrap(), Ok(()));
     tokio::time::sleep(Duration::from_secs(119)).await;
     assert!(entries(&view).is_empty(), "not before 120 seconds");
+    // The host hears that the time was up just before the asks without the request.
+    assert!(read_closed(&mut events).await);
     host_asks(&mut events, |asks| asks.read.is_none()).await;
     assert!(start.elapsed() >= Duration::from_secs(120));
     assert!(matches!(entries(&view)[..], [Entry::ReadDone { time_up: true, .. }]));
@@ -1926,6 +1928,20 @@ async fn a_read_request_closes_when_its_time_is_up() {
     tokio::time::sleep(Duration::from_secs(30)).await;
     assert_eq!(sharing.ask(AskCommand::EndRead).await.unwrap(), Ok(()));
     assert!(matches!(entries(&view)[1], Entry::ReadDone { time_up: false, .. }));
+    assert!(!read_closed(&mut events).await);
+}
+
+/// Waits for the host to hear that the read request closed; whether its time was up.
+async fn read_closed(events: &mut UnboundedReceiver<SharingEvent>) -> bool {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(SharingEvent::ReadClosed { time_up }) = events.recv().await {
+                return time_up;
+            }
+        }
+    })
+    .await
+    .expect("the read request did not close")
 }
 
 /// What a viewer's request to the host came to.

@@ -78,8 +78,16 @@ export type ViewerNotificationKind = 'plans' | 'documents' | 'finished' | 'reads
 
 export type ViewerNotifications = Record<ViewerNotificationKind, boolean>;
 
+/** A kind of notification the host can switch on or off about the answers to their asks (`host-ask-notifications`). */
+export type HostNotificationKind = 'questions' | 'read' | 'voted';
+
+export type HostNotifications = Record<HostNotificationKind, boolean>;
+
 /** What a click on a viewer's notification opens: a document, a plan the agent presented in plan mode, or a shared file or braindump item. */
 export type NoticeOpen = { kind: 'document'; path: string } | { kind: 'plan-mode'; toolUseId: string } | { kind: 'shared'; file: number };
+
+/** What a click on the host's notification about a question opens: the question texts of read request `ask` (`host-ask-notifications`). */
+export type HostNoticeOpen = { kind: 'questions'; ask: number };
 
 export interface Profile {
   username: string | null;
@@ -95,6 +103,8 @@ export interface Profile {
   notifications: boolean;
   /** Which kinds of notification a viewer gets about a session they watch (`viewer-notifications`). */
   viewerNotifications: ViewerNotifications;
+  /** Which kinds of notification the host gets about the answers to their read requests and votes. */
+  hostNotifications: HostNotifications;
   /** How the user followed sessions before layouts, to make their first layout from. */
   view: View | null;
   /** How the user arranges the session window, as stored (`model/layout.ts` reads it); null until they answered the first-join question. */

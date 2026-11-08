@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { demoProfile } from '../api/demo';
 import { fakeBridge, renderWith } from '../test/helpers';
+import { DEFAULT_HOST_NOTIFICATIONS } from '../model/hostNotifications';
 import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 import { SettingsScreen } from './SettingsScreen';
 
@@ -58,6 +59,20 @@ describe('settings window', () => {
     await waitFor(() => expect(finished).toBeChecked());
   });
 
+  it('switches each kind the host is notified about', async () => {
+    const bridge = fakeBridge();
+    renderWith(bridge, <SettingsScreen />);
+    const group = await screen.findByRole('group', { name: 'While you host a session' });
+    const question = within(group).getByRole('checkbox', { name: 'A viewer has a question' });
+    const read = within(group).getByRole('checkbox', { name: 'Everyone has read, or the time is up' });
+    const voted = within(group).getByRole('checkbox', { name: 'Everyone has voted' });
+    expect([question, read, voted].map((box) => (box as HTMLInputElement).checked)).toEqual([true, true, true]);
+    expect(within(group).getAllByRole('checkbox')).toHaveLength(3);
+    await userEvent.click(question);
+    expect(bridge.setHostNotifications).toHaveBeenCalledWith({ ...DEFAULT_HOST_NOTIFICATIONS, questions: false });
+    await waitFor(() => expect(question).not.toBeChecked());
+  });
+
   it('leaves the kinds alone, unavailable, while notifications are off', async () => {
     const bridge = fakeBridge();
     renderWith(bridge, <SettingsScreen />);
@@ -65,6 +80,9 @@ describe('settings window', () => {
     const plans = await screen.findByRole('checkbox', { name: 'A plan is ready for review' });
     await waitFor(() => expect(plans).toBeDisabled());
     expect(plans).toBeChecked();
+    const question = screen.getByRole('checkbox', { name: 'A viewer has a question' });
+    expect(question).toBeDisabled();
+    expect(question).toBeChecked();
   });
 });
 

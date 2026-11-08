@@ -147,6 +147,7 @@ struct Profile {
     watched_sessions: usize,
     notifications: bool,
     viewer_notifications: settings::ViewerNotifications,
+    host_notifications: settings::HostNotifications,
     /// How the user followed sessions before layouts, to make their first layout from.
     view: Option<View>,
     /// How the user arranges the session window; `None` until they answered the first-join question.
@@ -223,6 +224,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
         watched_sessions,
         notifications: settings.notifications,
         viewer_notifications: settings.viewer_notifications,
+        host_notifications: settings.host_notifications,
         view: settings.view,
         layout: settings.layout,
         translucent: state.translucent.load(Ordering::Relaxed),
@@ -691,6 +693,22 @@ async fn set_viewer_notifications(
     Ok(profile(&state, window.label()))
 }
 
+#[tauri::command]
+async fn set_host_notifications(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    kinds: settings::HostNotifications,
+) -> Result<Profile, String> {
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.host_notifications = kinds;
+        state.save(&settings);
+    }
+    settings_changed(&app);
+    Ok(profile(&state, window.label()))
+}
+
 /// Notifies a viewer about the session its window watches (`viewer-notifications` design
 /// decision 4), unless they turned that kind off; the rest is up to `notify`. A click opens
 /// `open` in the window (`notification-open` design decision 2).
@@ -975,7 +993,28 @@ fn host_observer(app: &AppHandle, id: SessionId, agent: AgentId) -> client::Obse
                 message.unwrap_or_else(|| "It finished and waits for your next prompt.".into());
             notify(&observed, id, &format!("{} is waiting for you", agent.display_name()), &body);
         }
+        notice => {
+            if let Some(text) = notify::ask_text(&notice) {
+                host_ask_notify(&observed, id, text);
+            }
+        }
     })
+}
+
+/// Notifies the host about the answers to their asks, unless they turned that kind off
+/// (`host-ask-notifications` design decision 1).
+fn host_ask_notify(app: &AppHandle, id: SessionId, text: notify::AskText) {
+    let allowed =
+        app.state::<AppState>().settings.lock().unwrap().host_notifications.allows(text.kind);
+    // Only the kind and what became of it are recorded, never the text.
+    let outcome = if !allowed {
+        "kind-off"
+    } else if try_notify(app, id, &text.title, &text.body, text.open) {
+        "shown"
+    } else {
+        "held"
+    };
+    tracing::info!(kind = text.kind.name(), outcome, "host.notified");
 }
 
 fn tray_entry(
@@ -2554,6 +2593,7 @@ pub fn run() {
             set_username,
             set_notifications,
             set_viewer_notifications,
+            set_host_notifications,
             viewer_notify,
             set_check_updates,
             set_screen_reader,

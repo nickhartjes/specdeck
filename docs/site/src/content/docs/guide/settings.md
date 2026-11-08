@@ -12,6 +12,7 @@ Open **Settings** with **SpecDeck › Settings…** or **⌘,** on macOS, or **F
 | Your name | The name others see in sessions you start or join from now on |
 | Appearance | **System** follows your computer's light or dark appearance; **Light** and **Dark** keep SpecDeck that way. Also under **View › Appearance**. See [The window](#the-window) |
 | Show notifications | Turns all of SpecDeck's notifications on or off |
+| While you host a session | Which [notifications](#while-you-host-a-session) you get about the answers when you asked everyone to read or to estimate: a viewer has a question, everyone has read or the time is up, everyone has voted |
 | While you watch a session | Which [notifications](#notifications) you get about a session you watch: a plan is ready for review, a document changed, the agent finished, the host asks you to read, the host asks for an estimate, someone shares a file, the host shares a link, someone adds to the braindump. The bell in a session's toolbar has the same switches |
 | Screen reader support | Lets screen readers (VoiceOver, Narrator, Orca) read the terminal. Off unless you turn it on: while it is on, typing in the terminal of a session you host can repeat text |
 | Give Claude a browser | Claude Code sessions you start from now on get [a browser of their own](/specdeck/guide/browser/). On by default; only on macOS |
@@ -34,10 +35,23 @@ While SpecDeck is not the window in front, or its window is closed, it tells you
 |---|---|
 | Host | Someone joins or leaves |
 | Host | Claude Code finishes a prompt, or asks your permission |
+| Host | A viewer has a question, everyone has read, or everyone has voted, as you chose under **While you host a session** |
 | Viewer | The host ends the session, or removes you |
 | Viewer | A plan is ready for review, a document changed, the agent finished, the host asks you to read or to estimate, or something is shared, as you chose under **While you watch a session** |
 
 Click a notification to bring the session to the front. Nothing is shown while you are looking at SpecDeck. To turn notifications off, use **Show notifications** in Settings.
+
+### While you host a session
+
+Choose what calls you back while you wait for the people watching, after you [asked everyone to read or to estimate](/specdeck/guide/read-and-estimate/):
+
+| Switch | You hear when | On at first |
+|---|---|---|
+| A viewer has a question | A viewer answers *I have a question*. The notification names them and shows their question, or what they read when they wrote none. Once per viewer for each request | Yes |
+| Everyone has read, or the time is up | Nobody is still reading: everyone is ready or has a question. Or the time ran out while someone was still reading | Yes |
+| Everyone has voted | Every viewer has voted in this round. It says when your own vote is still missing, and never shows a vote | Yes |
+
+Only viewers who are there and can answer count: viewers who left, and viewers on an older SpecDeck, don't hold anything up. When someone joins and answers later, you hear again. Clicking a question's notification shows the questions in the read request, while it is still open.
 
 ### While you watch a session
 

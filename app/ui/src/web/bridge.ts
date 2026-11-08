@@ -4,6 +4,7 @@
 
 import type { Bridge } from '../api/bridge';
 import type { Appearance, JoinLink, NoticeOpen, Profile, RequestOutcome, View, ViewEvent, ViewerNotifications } from '../api/types';
+import { DEFAULT_HOST_NOTIFICATIONS } from '../model/hostNotifications';
 import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 import { asAppearance } from '../appearance';
 import { Connection, type Platform, type ViewerCore } from './connection';
@@ -212,6 +213,8 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     watchedSessions: connection !== null ? 1 : 0,
     notifications: allowed(),
     viewerNotifications,
+    // A browser never hosts.
+    hostNotifications: DEFAULT_HOST_NOTIFICATIONS,
     view,
     layout,
     translucent: false,
@@ -263,6 +266,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       write(storage, STORAGE_KEYS.viewerNotifications, JSON.stringify(kinds));
       return Promise.resolve(profile());
     },
+    setHostNotifications: () => Promise.resolve(profile()),
     viewerNotify: (kind, title, body, target) => {
       if (allowed() && viewerNotifications[kind] && notifier?.away()) {
         notifier.show(title, body, () => {
