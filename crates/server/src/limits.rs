@@ -1,4 +1,5 @@
-//! Sliding-window counters for rate limiting join attempts.
+//! Sliding-window counters for rate limiting join attempts, and token buckets for relayed
+//! messages.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
@@ -39,6 +40,32 @@ impl<K: Eq + Hash + Clone> RateLimiter<K> {
     }
 }
 
+/// Allows `burst` events at once, then `per_second`.
+pub struct TokenBucket {
+    burst: f64,
+    per_second: f64,
+    tokens: f64,
+    at: Instant,
+}
+
+impl TokenBucket {
+    pub fn new(burst: f64, per_second: f64, now: Instant) -> Self {
+        Self { burst, per_second, tokens: burst, at: now }
+    }
+
+    /// Takes one token; false when there is none left.
+    pub fn take(&mut self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.at).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * self.per_second).min(self.burst);
+        self.at = now;
+        if self.tokens < 1.0 {
+            return false;
+        }
+        self.tokens -= 1.0;
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +82,20 @@ mod tests {
         assert!(!limiter.exceeded(&"other", start + Duration::from_secs(10)));
         // The first attempt leaves the window after 60 s.
         assert!(!limiter.exceeded(&"ip", start + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn a_bucket_allows_its_burst_then_its_rate() {
+        let start = Instant::now();
+        let mut bucket = TokenBucket::new(3.0, 2.0, start);
+        assert!((0..3).all(|_| bucket.take(start)));
+        assert!(!bucket.take(start));
+        // Two tokens per second: one back after half a second.
+        assert!(bucket.take(start + Duration::from_millis(500)));
+        assert!(!bucket.take(start + Duration::from_millis(500)));
+        // Never more than the burst, however long it waited.
+        let later = start + Duration::from_secs(60);
+        assert!((0..3).all(|_| bucket.take(later)));
+        assert!(!bucket.take(later));
     }
 }

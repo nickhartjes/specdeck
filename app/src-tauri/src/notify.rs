@@ -48,8 +48,25 @@ pub fn title(title: &str, name: Option<&str>, sessions: usize) -> String {
     }
 }
 
+/// Most characters of a viewer notification's title and body; the window builds them from names
+/// of changes and files.
+const VIEWER_TITLE_CHARS: usize = 120;
+const VIEWER_BODY_CHARS: usize = 300;
+
+/// A viewer notification's title and body, cut to their limits.
+pub fn viewer_text(title: &str, body: &str) -> (String, String) {
+    (cut(title, VIEWER_TITLE_CHARS), cut(body, VIEWER_BODY_CHARS))
+}
+
+fn cut(text: &str, chars: usize) -> String {
+    match text.char_indices().nth(chars) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
+    }
+}
+
 /// Shows a notification about `session` unless notifications are off or `window`, the window
-/// that shows the session, has focus.
+/// that shows the session, has focus. Returns whether it was shown.
 pub fn notify<R: Runtime>(
     app: &AppHandle<R>,
     notices: &std::sync::Mutex<Notices>,
@@ -58,12 +75,12 @@ pub fn notify<R: Runtime>(
     enabled: bool,
     title: &str,
     body: &str,
-) {
+) -> bool {
     if !enabled || window.is_some_and(|label| window_focused(app, label)) {
-        return;
+        return false;
     }
     let id = notices.lock().unwrap().record(session);
-    let _ = app.notification().builder().id(id).title(title).body(body).show();
+    app.notification().builder().id(id).title(title).body(body).show().is_ok()
 }
 
 /// Whether the window exists and has focus; a closed window has none.
@@ -86,6 +103,16 @@ mod tests {
         assert_eq!(notices.clicked(None), Some(2));
         assert_eq!(notices.clicked(Some(999)), Some(2));
         assert_eq!(Notices::default().clicked(None), None);
+    }
+
+    #[test]
+    fn viewer_text_is_cut_to_its_limits() {
+        let (title, body) = viewer_text("README.md changed", "Claude changed it.");
+        assert_eq!((title.as_str(), body.as_str()), ("README.md changed", "Claude changed it."));
+        let (title, body) = viewer_text(&"é".repeat(200), &"x".repeat(400));
+        assert_eq!(title.chars().count(), 121);
+        assert!(title.ends_with('…'));
+        assert_eq!(body.chars().count(), 301);
     }
 
     #[test]

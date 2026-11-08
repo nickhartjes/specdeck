@@ -70,6 +70,14 @@ Next to the session's name, a label shows whether the agent is working or waitin
 
 Agents report their state through the terminal (the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)), so a program shows up here only if it supports it. The host is notified when an agent or program waits for them while the SpecDeck window is in the background.
 
+## Get called back
+
+You don't have to keep watching. While the session's window is in the background, SpecDeck tells you when a plan is ready for review or a document changed, and, if you want, every time the agent finishes. You get at most one notification each time the agent finishes a prompt. Choose which ones under **While you watch a session** in [Settings](/specdeck/guide/settings/#while-you-watch-a-session).
+
+### Notifications in the browser
+
+In the web viewer, notifications are off until you turn them on: open the layout button and tick **While this tab is in the background** under **Notifications**. Your browser asks whether the page may show notifications. Once you allow it, choose the same kinds as in the app. The browser remembers your choice, so you are not asked again. They show only while the tab is hidden or the browser is not in front. If the browser does not allow notifications, the menu says so; allow them for the page in your browser's site settings and try again.
+
 ## Read the session
 
 | To | Do this |

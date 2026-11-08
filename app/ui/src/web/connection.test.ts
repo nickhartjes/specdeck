@@ -173,8 +173,8 @@ const welcome: ControlUpdate = { type: 'welcome', viewerId: 2, agent: 'claude-co
 async function reachHost(sockets: FakeSocket[], peers: FakePeer[]) {
   const socket = sockets.at(-1)!;
   socket.open();
-  socket.receive({ type: 'turn-credentials', urls: ['turn:turn.example.com:3478?transport=udp'], username: 'u', credential: 'c', ttlSeconds: 60 });
   socket.receive({ type: 'joined', connection: 'c1' });
+  socket.receive({ type: 'turn-credentials', urls: ['turn:turn.example.com:3478?transport=udp'], username: 'u', credential: 'c', ttlSeconds: 60 });
   await vi.advanceTimersByTimeAsync(0);
   socket.receive({ type: 'signal', connection: 'c1', payload: { type: 'description', kind: 'answer', sdp: 'answer-sdp', mac: 'm' } });
   await vi.advanceTimersByTimeAsync(0);
@@ -193,8 +193,9 @@ describe('web viewer connection', () => {
   it('joins the code’s room with TURN, signs its offer and applies a valid answer', async () => {
     const { sockets, peers } = setup();
     const { socket, peer } = await reachHost(sockets, peers);
-    expect(socket.sent[0]).toEqual({ type: 'turn-credentials' });
-    expect(socket.sent[1]).toEqual({ type: 'join', room: 'code-room' });
+    // Credentials only after joining: the service gives them only to members.
+    expect(socket.sent[0]).toEqual({ type: 'join', room: 'code-room' });
+    expect(socket.sent[1]).toEqual({ type: 'turn-credentials' });
     expect(socket.sent[2]).toEqual({
       type: 'signal',
       connection: 'c1',
@@ -288,10 +289,31 @@ describe('web viewer connection', () => {
   it('says the code is invalid when its room does not exist', async () => {
     const { sockets, events } = setup();
     sockets[0]!.open();
-    sockets[0]!.receive({ type: 'error', code: 'turn-unavailable' });
     sockets[0]!.receive({ type: 'error', code: 'room-not-found' });
     await vi.advanceTimersByTimeAsync(0);
     expect(events).toEqual([{ type: 'ended', reason: 'invalid-code' }]);
+    expect(sockets[0]!.closed).toBe(true);
+  });
+
+  it('starts the peer only once the relay is known', async () => {
+    const { sockets, peers } = setup();
+    const socket = sockets[0]!;
+    socket.open();
+    socket.receive({ type: 'joined', connection: 'c1' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(peers).toEqual([]);
+    socket.receive({ type: 'error', code: 'turn-unavailable' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(peers).toHaveLength(1);
+    expect(peers[0]!.config.iceServers).toEqual([]);
+  });
+
+  it('says the sharing service is busy', async () => {
+    const { sockets, events } = setup();
+    sockets[0]!.open();
+    sockets[0]!.receive({ type: 'error', code: 'server-busy' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events).toEqual([{ type: 'ended', reason: 'service-busy' }]);
     expect(sockets[0]!.closed).toBe(true);
   });
 
@@ -329,7 +351,7 @@ describe('web viewer connection', () => {
     expect(peer.closed).toBe(true);
     await vi.advanceTimersByTimeAsync(250);
     const second = await reachHost(sockets, peers);
-    expect(second.socket.sent[1]).toEqual({ type: 'join', room: 'rejoin' });
+    expect(second.socket.sent[0]).toEqual({ type: 'join', room: 'rejoin' });
     second.peer.channel('control').open();
     second.peer.channel('control').receive([0]);
     expect(events.at(-1)).toEqual({ type: 'reconnected' });
@@ -364,8 +386,8 @@ describe('web viewer connection', () => {
     const { sockets, peers } = setup();
     const socket = sockets[0]!;
     socket.open();
-    socket.receive({ type: 'error', code: 'turn-unavailable' });
     socket.receive({ type: 'joined', connection: 'c1' });
+    socket.receive({ type: 'error', code: 'turn-unavailable' });
     await vi.advanceTimersByTimeAsync(0);
     socket.receive({ type: 'signal', connection: 'c1', payload: { type: 'candidate', candidate: 'candidate:1', mid: '0' } });
     await vi.advanceTimersByTimeAsync(0);

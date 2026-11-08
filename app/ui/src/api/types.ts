@@ -73,6 +73,11 @@ export interface RunningSession {
   controllable: boolean;
 }
 
+/** A kind of notification a viewer can switch on or off; read and vote requests will add theirs. */
+export type ViewerNotificationKind = 'plans' | 'documents' | 'finished';
+
+export type ViewerNotifications = Record<ViewerNotificationKind, boolean>;
+
 export interface Profile {
   username: string | null;
   recentFolders: RecentFolder[];
@@ -85,6 +90,8 @@ export interface Profile {
   watchedSessions: number;
   /** Whether to show OS notifications while the window is not in front. */
   notifications: boolean;
+  /** Which kinds of notification a viewer gets about a session they watch (`viewer-notifications`). */
+  viewerNotifications: ViewerNotifications;
   /** How the user followed sessions before layouts, to make their first layout from. */
   view: View | null;
   /** How the user arranges the session window, as stored (`model/layout.ts` reads it); null until they answered the first-join question. */
@@ -354,6 +361,8 @@ export type EndReason =
   | 'invalid-code'
   | 'too-many-attempts'
   | 'service-unavailable'
+  /** The sharing service is at a capacity limit. */
+  | 'service-busy'
   | 'network-blocked'
   | 'update-app'
   | 'host-update'

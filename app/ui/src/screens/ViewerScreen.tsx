@@ -19,6 +19,7 @@ import { formatCode } from '../model/code';
 import { AGENT_NAMES } from './HostScreen';
 import { Workspace, type WorkspaceHandle } from './Workspace';
 import { setTimelineEvents } from '../model/heartbeat';
+import { createViewerNotices, DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 
 /** What to tell the viewer when their session ends, and whether they can still read it. */
 export const END_MESSAGES: Record<EndReason, { title: string; text: string; keepReading?: boolean; retry?: boolean }> = {
@@ -34,6 +35,11 @@ export const END_MESSAGES: Record<EndReason, { title: string; text: string; keep
   'service-unavailable': {
     title: 'SpecDeck cannot reach its sharing service',
     text: 'Check your internet connection, then try again.',
+    retry: true,
+  },
+  'service-busy': {
+    title: 'The sharing service is busy',
+    text: 'It is serving as many sessions as it can. Try again in a few minutes.',
     retry: true,
   },
   'network-blocked': {
@@ -161,13 +167,37 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   const [state, dispatch] = useReducer(viewerReducer, initial);
   useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
 
+  // What the viewer is notified about; the switches are read again on every status change, so
+  // a change in Settings applies by the end of the turn.
+  const notices = useMemo(
+    () =>
+      createViewerNotices({
+        switches: DEFAULT_VIEWER_NOTIFICATIONS,
+        notify: ({ kind, title, body }) => void bridge.viewerNotify(kind, title, body).catch(() => {}),
+      }),
+    [bridge],
+  );
+  useEffect(() => () => notices.dispose(), [notices]);
+  const onEvent = (event: ViewEvent) => {
+    dispatch(event);
+    if (event.type === 'joined' || event.type === 'status') {
+      void bridge
+        .getProfile()
+        .then((profile) => notices.setSwitches(profile.viewerNotifications))
+        .catch(() => {});
+    }
+    if (event.type === 'joined') notices.joined(AGENT_NAMES[event.agent]);
+    else if (event.type === 'status') notices.status(event.status);
+    else if (event.type === 'timeline') notices.timeline(event.event);
+  };
+
   const joined = useRef(false);
   useEffect(() => {
     // Join once, also when React mounts the screen twice in development.
     if (joined.current) return;
     joined.current = true;
     bridge
-      .joinSession(code, server ?? null, (data) => workspace.current?.terminalData(data), dispatch)
+      .joinSession(code, server ?? null, (data) => workspace.current?.terminalData(data), onEvent)
       .catch((error) => onLeave({ code, server, message: errorMessage(error) }));
     // Joins once per screen; leaving is explicit or happens when the window closes.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -19,6 +19,7 @@ const ATTEMPT_ENDS: Record<string, string> = {
   send_failed: 'a message could not be sent',
   peer_create_failed: 'the connection could not be set up',
   host_asked_retry: 'the host asked to connect again',
+  service_busy: 'the sharing service was busy',
   interrupted: 'you chose Reconnect',
   left: 'you left',
   final: 'the session ended',

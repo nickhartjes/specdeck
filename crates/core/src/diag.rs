@@ -460,6 +460,8 @@ pub enum AttemptEnd {
     PeerCreateFailed,
     /// The host asked the viewer to connect again.
     HostAskedRetry,
+    /// The signalling service is at a capacity limit.
+    ServiceBusy,
     /// Dropped on purpose: Reconnect, or a test's outage.
     Interrupted,
     /// The viewer left.
@@ -481,6 +483,7 @@ impl AttemptEnd {
             AttemptEnd::SendFailed => "send_failed",
             AttemptEnd::PeerCreateFailed => "peer_create_failed",
             AttemptEnd::HostAskedRetry => "host_asked_retry",
+            AttemptEnd::ServiceBusy => "service_busy",
             AttemptEnd::Interrupted => "interrupted",
             AttemptEnd::Left => "left",
             AttemptEnd::Final => "final",

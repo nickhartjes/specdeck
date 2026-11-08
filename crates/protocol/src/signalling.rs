@@ -86,6 +86,8 @@ pub enum ErrorCode {
     BadMessage,
     /// The service has no TURN relay configured.
     TurnUnavailable,
+    /// The service is at one of its capacity limits; try again later.
+    ServerBusy,
 }
 
 #[cfg(test)]
@@ -116,6 +118,9 @@ mod tests {
         let error =
             serde_json::to_string(&ServerMessage::Error { code: ErrorCode::RoomNotFound }).unwrap();
         assert_eq!(error, r#"{"type":"error","code":"room-not-found"}"#);
+        let busy =
+            serde_json::to_string(&ServerMessage::Error { code: ErrorCode::ServerBusy }).unwrap();
+        assert_eq!(busy, r#"{"type":"error","code":"server-busy"}"#);
         let joined = serde_json::to_string(&ServerMessage::ViewerJoined {
             room: "r".into(),
             connection: "c".into(),

@@ -653,6 +653,57 @@ async fn sharing_becomes_available_when_the_service_comes_up() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_busy_service_makes_sharing_unavailable() {
+    // Room for the code's room, not for the rejoin room as well.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+    let config = specdeck_server::Config { max_rooms: 1, ..specdeck_server::Config::default() };
+    let service = Arc::new(specdeck_server::Service::new(config));
+    tokio::spawn(specdeck_server::serve(listener, service.clone()));
+
+    let mut hosted = host(&url, "nick").await;
+    let event = tokio::time::timeout(WAIT, async {
+        loop {
+            match hosted.events.recv().await.unwrap() {
+                SharingEvent::Unavailable => return SharingEvent::Unavailable,
+                SharingEvent::Ready { .. } => {}
+                other => panic!("{other:?}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(event, SharingEvent::Unavailable);
+    // The host left the busy service instead of holding a room there.
+    tokio::time::timeout(WAIT, async {
+        while service.connection_count() > 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_viewer_is_told_the_service_is_busy() {
+    // Room for the host's connection only.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+    let config =
+        specdeck_server::Config { max_connections: 1, ..specdeck_server::Config::default() };
+    tokio::spawn(specdeck_server::serve(listener, Arc::new(specdeck_server::Service::new(config))));
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+
+    let started = std::time::Instant::now();
+    let (_viewer, mut events) = join(&url, &code, "anna");
+    let event = until(&mut events, &mut Seen::default(), |_, e| e.is_final()).await;
+    assert_eq!(event, ViewerEvent::ServiceBusy);
+    // Told at once, not after the connect timeout as "cannot connect".
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn viewer_reconnects_after_an_outage_without_losing_output() {
     let url = signalling().await;
     let mut hosted = host(&url, "nick").await;

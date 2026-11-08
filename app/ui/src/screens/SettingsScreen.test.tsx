@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { demoProfile } from '../api/demo';
@@ -35,6 +35,30 @@ describe('settings window', () => {
     await userEvent.click(toggle);
     expect(bridge.setNotifications).toHaveBeenCalledWith(false);
     await waitFor(() => expect(toggle).not.toBeChecked());
+  });
+
+  it('switches each kind a viewer is notified about', async () => {
+    const bridge = fakeBridge();
+    renderWith(bridge, <SettingsScreen />);
+    const group = await screen.findByRole('group', { name: 'While you watch a session' });
+    const plans = within(group).getByRole('checkbox', { name: 'A plan is ready for review' });
+    const documents = within(group).getByRole('checkbox', { name: 'A document changed' });
+    const finished = within(group).getByRole('checkbox', { name: 'The agent finished' });
+    expect([plans, documents, finished].map((box) => (box as HTMLInputElement).checked)).toEqual([true, true, false]);
+    // Read and vote requests do not exist yet.
+    expect(within(group).getAllByRole('checkbox')).toHaveLength(3);
+    await userEvent.click(finished);
+    expect(bridge.setViewerNotifications).toHaveBeenCalledWith({ plans: true, documents: true, finished: true });
+    await waitFor(() => expect(finished).toBeChecked());
+  });
+
+  it('leaves the kinds alone, unavailable, while notifications are off', async () => {
+    const bridge = fakeBridge();
+    renderWith(bridge, <SettingsScreen />);
+    await userEvent.click(await screen.findByRole('checkbox', { name: 'Notifications' }));
+    const plans = await screen.findByRole('checkbox', { name: 'A plan is ready for review' });
+    await waitFor(() => expect(plans).toBeDisabled());
+    expect(plans).toBeChecked();
   });
 });
 
