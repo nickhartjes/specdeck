@@ -198,6 +198,17 @@ The web viewer SHALL show read requests and votes, let a viewer answer and vote,
 - **WHEN** a browser viewer answers a read request with a question
 - **THEN** the host sees the question as from any other viewer
 
+### Requirement: Catching up in the browser
+A browser viewer who joins late SHALL see earlier prompts folded and the overview of what happened before they joined, as in the app. Reloading the page SHALL count as joining again.
+
+#### Scenario: Late join in a browser
+- **WHEN** a viewer joins in a browser after five prompts finished
+- **THEN** they see the overview and the five prompts folded, as in the app
+
+#### Scenario: Page reloaded
+- **WHEN** a browser viewer who joined at the start reloads the page after three more prompts finished
+- **THEN** those three prompts are folded and the overview covers them
+
 ### Requirement: The braindump in the browser
 A viewer in the web viewer SHALL see, open and save braindump items as a viewer in the app does. Under the same rules and limits, they SHALL be able to add files by choosing or dropping them, write notes, edit their own notes and remove their own items.
 
