@@ -19,3 +19,5 @@ wasm-bindgen = "=0.2.130"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.80"
+# Signs test frames: the protocol's SessionKey is not built for WebAssembly.
+ed25519-dalek = "3"

@@ -29,7 +29,8 @@ import { LinksBar } from '../components/LinksBar';
 import { StatusPill } from '../components/StatusPill';
 import { StatusBar } from '../components/StatusBar';
 import { FirstJoinDialog } from '../components/FirstJoinDialog';
-import { LayoutControls } from '../components/LayoutMenu';
+import { LayoutControls, inWebViewer } from '../components/LayoutMenu';
+import { ExportDiagnosticsLink } from '../components/ExportDiagnostics';
 import { PeopleButton } from '../components/PeopleButton';
 import { choose, type Layout } from '../model/layout';
 import { useLayout } from './useLayout';
@@ -466,6 +467,12 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
               </button>
             )}
           </div>
+          {/* The app has Help › Export Diagnostics. */}
+          {inWebViewer() && (
+            <p className="field-hint">
+              Trouble joining? <ExportDiagnosticsLink />
+            </p>
+          )}
         </div>
       </div>
     );
@@ -508,6 +515,13 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
         {state.phase === 'ended' && ending && (
           <div className="banner info" role="status">
             {ending.title}. {ending.text}
+            {/* The app has Help › Export Diagnostics. */}
+            {inWebViewer() && (
+              <>
+                {' '}
+                <ExportDiagnosticsLink />
+              </>
+            )}
           </div>
         )}
       </div>

@@ -60,6 +60,8 @@ describe('appearance in the layout menu', () => {
     renderWith(fakeBridge('viewer'), <LayoutControls layout={choose('developer')} onLayout={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: /Developer/ }));
     expect(screen.queryByRole('group', { name: 'Appearance' })).not.toBeInTheDocument();
+    // The app exports diagnostics from its Help menu.
+    expect(screen.queryByRole('button', { name: 'Export diagnostics…' })).not.toBeInTheDocument();
   });
 
   it('switches the page at once and stays open', async () => {

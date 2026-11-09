@@ -4,12 +4,14 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { errorMessage, useBridge } from '../api/bridge';
 import type { Profile } from '../api/types';
+import { ExportDiagnosticsLink } from '../components/ExportDiagnostics';
 import { ShortcutsDialog } from '../components/ShortcutsDialog';
 import { PLAIN_TEXT } from '../components/fields';
 import { dispatchMenu } from '../menu/menu';
 import { profileLayout } from '../model/layout';
 import { ViewerScreen } from '../screens/ViewerScreen';
 import { serviceName } from './bridge';
+import type { DiagnosticLog } from './diagnostics';
 
 const PANELS: Record<string, string> = { Digit1: 'panel:files', Digit2: 'panel:terminal', Digit3: 'panel:timeline' };
 
@@ -67,9 +69,11 @@ interface Props {
   service: string;
   /** From the address, or empty. */
   initialCode: string;
+  /** The page's diagnostic log; the join page offers its export once it holds something. */
+  diagnostics?: DiagnosticLog;
 }
 
-export function WebApp({ service, initialCode }: Props) {
+export function WebApp({ service, initialCode, diagnostics }: Props) {
   const bridge = useBridge();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'join', code: initialCode });
@@ -100,7 +104,14 @@ export function WebApp({ service, initialCode }: Props) {
           onLeave={(retry) => setScreen({ kind: 'join', code: retry?.code ?? '', error: retry?.message })}
         />
       ) : (
-        <JoinPage service={service} profile={profile} screen={screen} onScreen={setScreen} onProfile={setProfile} />
+        <JoinPage
+          service={service}
+          profile={profile}
+          screen={screen}
+          onScreen={setScreen}
+          onProfile={setProfile}
+          canExport={(diagnostics?.entries().length ?? 0) > 0}
+        />
       )}
       {shortcuts && <ShortcutsDialog web onClose={hideShortcuts} />}
     </>
@@ -113,12 +124,15 @@ function JoinPage({
   screen,
   onScreen,
   onProfile,
+  canExport,
 }: {
   service: string;
   profile: Profile;
   screen: Extract<Screen, { kind: 'join' }>;
   onScreen: (screen: Screen) => void;
   onProfile: (profile: Profile) => void;
+  /** Whether there is anything to export: after a join, also a failed one. */
+  canExport: boolean;
 }) {
   const bridge = useBridge();
   const [code, setCode] = useState(screen.code);
@@ -202,6 +216,11 @@ function JoinPage({
           </a>
         )}
         {version && <p className="field-hint">SpecDeck {version}</p>}
+        {canExport && (
+          <p className="field-hint">
+            Trouble joining? <ExportDiagnosticsLink />
+          </p>
+        )}
       </form>
     </main>
   );

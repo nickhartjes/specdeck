@@ -25,6 +25,8 @@ COPY app/ui/package.json app/ui/
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
     pnpm install --frozen-lockfile --filter @specdeck/ui
 COPY app/ui app/ui
+# The page states the release it is built from: the workspace version.
+COPY Cargo.toml ./
 COPY --from=wasm /src/crates/web/pkg crates/web/pkg
 RUN pnpm --dir app/ui build:web
 

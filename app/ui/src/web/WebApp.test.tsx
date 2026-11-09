@@ -9,6 +9,7 @@ import type { ViewerCore } from './connection';
 import type { ViewEvent } from '../api/types';
 import { choose } from '../model/layout';
 import { appLink, takeHashCode, WebApp, webPage } from './WebApp';
+import { DiagnosticLog } from './diagnostics';
 
 vi.mock('../terminal/TerminalView', () => ({ TerminalView: TerminalViewStub }));
 // The connection the web bridge opens, by what it hands the connection; no other test opens one.
@@ -23,7 +24,7 @@ vi.mock('./connection', async (importOriginal) => ({
 
 const SERVICE = 'wss://specdeck.example.com/signal';
 
-function setup(initialCode = '') {
+function setup(initialCode = '', diagnostics?: DiagnosticLog) {
   const bridge = webBridge({
     service: SERVICE,
     core: () => ({}) as ViewerCore,
@@ -35,7 +36,7 @@ function setup(initialCode = '') {
     storage: null,
   });
   const joinSession = vi.spyOn(bridge, 'joinSession').mockResolvedValue();
-  renderWith(bridge, <WebApp service={SERVICE} initialCode={initialCode} />);
+  renderWith(bridge, <WebApp service={SERVICE} initialCode={initialCode} diagnostics={diagnostics} />);
   return { bridge, joinSession };
 }
 
@@ -268,5 +269,105 @@ describe('replaying the history in a browser', () => {
     act(() => frames.splice(0).forEach((flush) => flush()));
     const turns = [...document.querySelectorAll('.turn')].map((turn) => turn.getAttribute('aria-label'));
     expect(turns).toEqual(Array.from({ length: 50 }, (_, n) => `Prompt ${n + 1}`));
+  });
+});
+
+describe('exporting diagnostics in a browser', () => {
+  beforeEach(() => {
+    document.documentElement.dataset.platform = 'web';
+  });
+  afterEach(() => delete document.documentElement.dataset.platform);
+
+  async function watching(bridgeSetup = setup('7K2M-9QXH-4TPA')) {
+    const { bridge, joinSession } = bridgeSetup;
+    let emit: (event: ViewEvent) => void = () => {};
+    joinSession.mockImplementation(async (_code, _server, _terminal, events) => {
+      emit = events;
+    });
+    await userEvent.type(await screen.findByLabelText('Your name'), 'anna');
+    await userEvent.click(screen.getByRole('button', { name: 'Watch in this browser' }));
+    await waitFor(() => expect(joinSession).toHaveBeenCalled());
+    act(() => emit({ type: 'joined', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 80, rows: 24 }));
+    return { bridge, emit: (event: ViewEvent) => act(() => emit(event)) };
+  }
+
+  it('is in the layout menu, says what the file holds, and downloads only on Download', async () => {
+    const { bridge } = await watching();
+    const exportDiagnostics = vi.spyOn(bridge, 'exportDiagnostics').mockResolvedValue(true);
+    await userEvent.click(screen.getByRole('button', { name: /Overview|Developer|Present/, expanded: false }));
+    await userEvent.click(screen.getByRole('button', { name: 'Export diagnostics…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Export diagnostics' });
+    expect(dialog).toHaveAccessibleDescription(/never holds terminal output, the timeline, invite codes, names, file names or addresses/);
+    // Keyboard only: Download has the focus, Tab reaches Cancel, Escape closes.
+    expect(within(dialog).getByRole('button', { name: 'Download' })).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Export diagnostics' })).not.toBeInTheDocument();
+    expect(exportDiagnostics).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: /Overview|Developer|Present/, expanded: false }));
+    await userEvent.click(screen.getByRole('button', { name: 'Export diagnostics…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(exportDiagnostics).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: /Overview|Developer|Present/, expanded: false }));
+    await userEvent.click(screen.getByRole('button', { name: 'Export diagnostics…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+    expect(exportDiagnostics).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Export diagnostics' })).not.toBeInTheDocument());
+  });
+
+  it('says when the export failed, and the session goes on', async () => {
+    const { bridge } = await watching();
+    vi.spyOn(bridge, 'exportDiagnostics').mockRejectedValue(new Error('Downloads are blocked.'));
+    await userEvent.click(screen.getByRole('button', { name: /Overview|Developer|Present/, expanded: false }));
+    await userEvent.click(screen.getByRole('button', { name: 'Export diagnostics…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Export failed: Downloads are blocked.');
+    expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
+  });
+
+  it('is on the screen of a join that failed', async () => {
+    const { bridge, joinSession } = setup('7K2M-9QXH-4TPA');
+    const exportDiagnostics = vi.spyOn(bridge, 'exportDiagnostics').mockResolvedValue(true);
+    let emit: (event: ViewEvent) => void = () => {};
+    joinSession.mockImplementation(async (_code, _server, _terminal, events) => {
+      emit = events;
+    });
+    await userEvent.type(await screen.findByLabelText('Your name'), 'anna');
+    await userEvent.click(screen.getByRole('button', { name: 'Watch in this browser' }));
+    await waitFor(() => expect(joinSession).toHaveBeenCalled());
+    act(() => emit({ type: 'ended', reason: 'network-blocked' }));
+    const box = await screen.findByRole('alert');
+    await userEvent.click(within(box).getByRole('button', { name: 'Export diagnostics…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+    expect(exportDiagnostics).toHaveBeenCalledOnce();
+  });
+
+  it('is on the screen of an ended session', async () => {
+    const { bridge, emit } = await watching();
+    const exportDiagnostics = vi.spyOn(bridge, 'exportDiagnostics').mockResolvedValue(true);
+    emit({ type: 'ended', reason: 'closed' });
+    const banner = await screen.findByText(/The host ended the session/);
+    await userEvent.click(within(banner).getByRole('button', { name: 'Export diagnostics…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+    expect(exportDiagnostics).toHaveBeenCalledOnce();
+  });
+
+  it('is on the join page once the log holds something, as after a failed join', async () => {
+    setup('', new DiagnosticLog(null));
+    await screen.findByLabelText('Invite code');
+    expect(screen.queryByRole('button', { name: 'Export diagnostics…' })).not.toBeInTheDocument();
+    cleanup();
+
+    const log = new DiagnosticLog(null);
+    log.attemptStarted(1);
+    log.ended('network-blocked');
+    const { bridge } = setup('', log);
+    const exportDiagnostics = vi.spyOn(bridge, 'exportDiagnostics').mockResolvedValue(true);
+    await userEvent.click(await screen.findByRole('button', { name: 'Export diagnostics…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+    expect(exportDiagnostics).toHaveBeenCalledOnce();
   });
 });

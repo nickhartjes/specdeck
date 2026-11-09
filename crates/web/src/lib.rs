@@ -109,6 +109,12 @@ struct Stream {
     /// A control message to send back, asking for records again.
     #[serde(skip_serializing_if = "Option::is_none", with = "serde_bytes_opt")]
     resend: Option<Vec<u8>>,
+    /// The record that resend asks for from, for the diagnostic log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resend_from: Option<u64>,
+    /// The host has sent the history this viewer was admitted to.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    caught_up: bool,
 }
 
 /// Bytes that become a `Uint8Array`.
@@ -377,10 +383,18 @@ impl WebViewer {
     #[wasm_bindgen(js_name = onStream)]
     pub fn on_stream(&mut self, bytes: &[u8]) -> JsValue {
         let (update, request) = self.state.on_stream(bytes);
-        let mut stream =
-            Stream { resend: request.map(|r| control::encode(&r)), ..Stream::default() };
+        let resend_from = match &request {
+            Some(ViewerMessage::Resend { from_output_seq }) => Some(*from_output_seq),
+            _ => None,
+        };
+        let mut stream = Stream {
+            resend: request.map(|r| control::encode(&r)),
+            resend_from,
+            ..Stream::default()
+        };
         match update {
             StreamUpdate::None => {}
+            StreamUpdate::CaughtUp => stream.caught_up = true,
             StreamUpdate::Records(records) => stream.records = Some(encode_records(&records)),
             StreamUpdate::Timeline { event, .. } => stream.timeline = Some(event),
         }

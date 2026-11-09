@@ -604,6 +604,44 @@ fn viewer_traffic(messages: u64, bytes: u64) {
     debug!(messages, bytes, "viewer.traffic");
 }
 
+// Replay and catch-up (`viewer-diagnostics`): how long a viewer took to get the history the
+// session had when it was admitted, and what that took on the wire. Counts and sizes only.
+
+/// What the host sent a viewer of the history, and how often the stream channel was full.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplayCounts {
+    /// Stream frames: each history batch and each timeline event is one.
+    pub batches: u64,
+    pub records: u64,
+    pub events: u64,
+    pub bytes: u64,
+    /// Times sending stopped because the viewer's stream channel was full.
+    pub waits: u64,
+}
+
+/// Viewer `viewer` has been sent the history it was admitted to, or left first (`finished`
+/// false). `returning` for a viewer that reconnected and was sent only what it missed.
+pub fn host_replay(
+    viewer: u32,
+    returning: bool,
+    counts: &ReplayCounts,
+    took: Duration,
+    finished: bool,
+) {
+    let ReplayCounts { batches, records, events, bytes, waits } = *counts;
+    let took_ms = millis(took);
+    info!(
+        viewer,
+        returning, batches, records, events, bytes, waits, took_ms, finished, "host.replay"
+    );
+}
+
+/// The host said this viewer has the history it was admitted to; `batches` and `bytes` are the
+/// stream frames received since the welcome.
+pub fn viewer_caught_up(reconnected: bool, batches: u64, bytes: u64, took: Duration) {
+    info!(reconnected, batches, bytes, took_ms = millis(took), "viewer.caught_up");
+}
+
 // The agent and its environment (`app-diagnostics`).
 
 /// Where the environment for agents came from.

@@ -19,7 +19,7 @@ On Linux the same files are under `~/.config/`, `~/.local/share/` and `~/.cache/
 
 `settings.json` and the log files are written with your account's default permissions, not made private to you. On macOS your Library folder keeps other accounts out; on Linux and Windows that depends on your home folder. See [Known limits](/specdeck/security/known-limits/#settings-and-logs-use-default-permissions).
 
-In the **web viewer**, the browser keeps only your name and your choices for layout, appearance and notifications, in its local storage for that site.
+In the **web viewer**, the browser keeps only your name and your choices for layout, appearance and notifications, in its local storage for that site. While the tab is open, it also keeps that page's diagnostic log in the tab's own session storage; closing the tab removes it, and the page never uploads it.
 
 ## Logs and diagnostics
 

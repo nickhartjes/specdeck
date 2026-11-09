@@ -3,6 +3,7 @@ import type { ViewerCore } from './connection';
 import { NOTIFICATIONS_BLOCKED, STORAGE_KEYS, openSharedLink, recordLink, storedAppearance, webBridge, type BrowserNotifications, type WebBridgeOptions } from './bridge';
 import { choose } from '../model/layout';
 import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
+import { DiagnosticLog, PUBLIC_SERVICE } from './diagnostics';
 
 const SERVICE = 'wss://specdeck.example.com/signal';
 
@@ -302,5 +303,51 @@ describe('notifications in the browser', () => {
     await page.viewerNotify('plans', 'Plan add-login is ready for review', '');
     expect(browser.shown).toHaveLength(1);
     expect((await bridge({ storage: blockedStorage, notifications: browser.platform }).getProfile()).notifications).toBe(false);
+  });
+});
+
+describe('exporting diagnostics', () => {
+  const FIREFOX = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14.5; rv:132.0) Gecko/20100101 Firefox/132.0';
+
+  it('downloads the tab’s log under the app’s file name, saying the service is custom without its address', async () => {
+    const log = new DiagnosticLog(null);
+    log.attemptStarted(1);
+    log.ended('network-blocked');
+    const download = vi.fn<(name: string, text: string) => void>();
+    const page = bridge({ log, download, appVersion: '1.8.0', userAgent: FIREFOX });
+    expect(await page.exportDiagnostics()).toBe(true);
+    const [name, text] = download.mock.calls[0]!;
+    expect(name).toMatch(/^specdeck-diagnostics-\d{4}-\d{2}-\d{2}-\d{6}\.jsonl$/);
+    const lines = text.trimEnd().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines[0]).toMatchObject({
+      kind: 'specdeck-diagnostics',
+      client: 'web',
+      appVersion: '1.8.0',
+      browser: 'firefox',
+      sharingService: 'custom',
+      session: { phase: 'ended', ended: 'network-blocked' },
+    });
+    expect(lines.slice(1).map((line) => line.event)).toEqual(['viewer.attempt_started', 'viewer.ended']);
+    expect(text).not.toContain('specdeck.example.com');
+  });
+
+  it('says the public service is the default one', async () => {
+    const download = vi.fn<(name: string, text: string) => void>();
+    await bridge({ service: PUBLIC_SERVICE, download, userAgent: FIREFOX }).exportDiagnostics();
+    expect(JSON.parse(download.mock.calls[0]![1].split('\n')[0]!)).toMatchObject({ sharingService: 'default' });
+  });
+
+  it('keeps the log on leaving, which is often the page going away', async () => {
+    const log = new DiagnosticLog(null);
+    const flush = vi.spyOn(log, 'flush');
+    await bridge({ log }).leaveSession();
+    expect(flush).toHaveBeenCalledOnce();
+  });
+
+  it('fails when the browser does not allow the download', async () => {
+    const download = () => {
+      throw new Error('Downloads are blocked.');
+    };
+    await expect(bridge({ download, userAgent: FIREFOX }).exportDiagnostics()).rejects.toThrow('Downloads are blocked.');
   });
 });

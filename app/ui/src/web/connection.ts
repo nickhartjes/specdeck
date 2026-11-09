@@ -4,7 +4,8 @@
 // RTCPeerConnection. What each message means is decided by `ViewerCore`, the shared Rust code
 // compiled to WebAssembly (crates/web), so verification and ordering match the app.
 
-import type { AgentId, AgentStatus, BraindumpItemInfo, Card, EndReason, Participant, ReadAnswer, ReadView, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent, VoteView } from '../api/types';
+import type { AgentId, AgentStatus, BraindumpItemInfo, Card, EndReason, LinkState, Participant, ReadAnswer, ReadView, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent, VoteView } from '../api/types';
+import { DiagnosticLog, outcomeName, type AttemptEnd, type CandidateType, type Channel } from './diagnostics';
 
 /** How long joining may take, and one reconnection attempt; as `CONNECT_TIMEOUT` in the app. */
 export const CONNECT_TIMEOUT_MS = 20_000;
@@ -67,6 +68,10 @@ export interface StreamUpdate {
   timeline?: TimelineEvent;
   /** A control message to send, asking for records again. */
   resend?: Uint8Array | number[];
+  /** The record that resend asks for from. */
+  resendFrom?: number;
+  /** The host has sent the history this viewer was admitted to. */
+  caughtUp?: boolean;
 }
 
 /** `WebViewer` from crates/web, as this module uses it. */
@@ -165,7 +170,34 @@ type SignalPayload =
   | { type: 'candidate'; candidate: string; mid: string };
 
 /** How one attempt ended. */
-type Outcome = { final: EndReason } | { retry: true } | { left: true };
+type Outcome = { final: EndReason } | { retry: AttemptEnd } | { left: true };
+
+/** Numbers this page's peer connections in the diagnostic log, as `next_peer_number` in the app. */
+let nextPeer = 1;
+
+const CANDIDATE_TYPES: readonly string[] = ['host', 'srflx', 'prflx', 'relay'];
+const LINK_STATES: readonly string[] = ['new', 'connecting', 'connected', 'disconnected', 'failed', 'closed'];
+
+/**
+ * The candidate types of the pair the browser chose, from its statistics: the transport's
+ * `selectedCandidatePairId`, or a pair marked `selected` (older Firefox). Only the types are
+ * read, never the addresses.
+ */
+export function selectedPath(stats: RTCStatsReport): { local: CandidateType; remote: CandidateType } | null {
+  const reports = new Map<string, Record<string, unknown>>();
+  stats.forEach((report: Record<string, unknown>) => reports.set(String(report.id), report));
+  let pair: Record<string, unknown> | undefined;
+  for (const report of reports.values()) {
+    if (report.type === 'transport' && typeof report.selectedCandidatePairId === 'string') pair = reports.get(report.selectedCandidatePairId);
+  }
+  pair ??= [...reports.values()].find((report) => report.type === 'candidate-pair' && report.selected === true);
+  if (!pair) return null;
+  const typeOf = (id: unknown): CandidateType => {
+    const type = reports.get(String(id))?.candidateType;
+    return typeof type === 'string' && CANDIDATE_TYPES.includes(type) ? (type as CandidateType) : 'unknown';
+  };
+  return { local: typeOf(pair.localCandidateId), remote: typeOf(pair.remoteCandidateId) };
+}
 
 export interface ConnectionOptions {
   /** The sharing service, `wss://…/signal`. */
@@ -175,6 +207,8 @@ export interface ConnectionOptions {
   /** Terminal records, in order. */
   onRecords: (bytes: Uint8Array) => void;
   onEvent: (event: ViewEvent) => void;
+  /** The page's diagnostic log; one of its own when absent. */
+  log?: DiagnosticLog;
   platform?: Platform;
   timeoutMs?: number;
 }
@@ -183,7 +217,12 @@ export interface ConnectionOptions {
 export class Connection {
   private readonly platform: Platform;
   private readonly timeoutMs: number;
+  private readonly log: DiagnosticLog;
   private readonly joinedAt = Date.now();
+  /** Connection attempts so far, the current one included. */
+  private attempts = 0;
+  /** When the current attempt's control channel opened. */
+  private connectedAt: number | null = null;
   private stop: (() => void) | null = null;
   private wake: (() => void) | null = null;
   private left = false;
@@ -205,6 +244,7 @@ export class Connection {
   constructor(private readonly options: ConnectionOptions) {
     this.platform = options.platform ?? browserPlatform;
     this.timeoutMs = options.timeoutMs ?? CONNECT_TIMEOUT_MS;
+    this.log = options.log ?? new DiagnosticLog(null);
     void this.run();
   }
 
@@ -213,7 +253,9 @@ export class Connection {
    * text the host would refuse.
    */
   suggest(text: string) {
-    const request = this.options.core.suggest(text.replace(/\r\n/g, '\n'));
+    const plain = text.replace(/\r\n/g, '\n');
+    const request = this.options.core.suggest(plain);
+    this.log.requestSent('suggest', new TextEncoder().encode(plain).length);
     this.options.onEvent({ type: 'request-sent', id: request.id });
     this.sendControl?.(new Uint8Array(request.message));
   }
@@ -255,6 +297,7 @@ export class Connection {
   removeFile(file: number) {
     // Not announced as `request-sent`: the window follows its latest suggestion by that.
     const request = this.options.core.removeFile(file);
+    this.log.requestSent('remove_file', 0);
     this.sendControl?.(new Uint8Array(request.message));
   }
 
@@ -281,6 +324,8 @@ export class Connection {
         share.to === 'braindump' ? core.addToBraindump(share.name, share.bytes)
         : share.to === 'note' ? core.addNote(share.bytes, share.file)
         : core.shareFile(share.name, share.bytes);
+      const kind = share.to === 'braindump' ? 'add_to_braindump' : share.to === 'note' ? (share.file === undefined ? 'add_note' : 'replace_note') : 'share_file';
+      this.log.requestSent(kind, share.bytes.length);
       this.asked = { id: request.id, share };
       sendControl(new Uint8Array(request.message));
     }
@@ -303,6 +348,7 @@ export class Connection {
         this.drive();
       }, RATE_LIMIT_WAIT_MS);
     } else {
+      this.log.fileUploaded(share.bytes.length, outcomeName(outcome));
       share.resolve(outcome);
     }
     this.drive();
@@ -318,11 +364,14 @@ export class Connection {
         this.options.onEvent({ type: 'file-progress', file: fetching.file, received: update.progress, size });
         return;
       }
+      const size = () => [...this.files, ...this.braindump].find((file) => file.file === fetching.file)?.size ?? 0;
       if (update.retry) {
+        this.log.fileFetched(size(), 'retried');
         this.sendFiles?.(new Uint8Array(update.retry));
         return;
       }
       if (update.done || update.failed) {
+        this.log.fileFetched(size(), update.done ? 'fetched' : 'failed');
         this.fetching = null;
         if (update.done) fetching.resolve(new Uint8Array(update.done).buffer);
         else fetching.reject(new Error(update.gone ? 'That file is no longer shared.' : 'The file did not arrive intact.'));
@@ -335,6 +384,7 @@ export class Connection {
     const update = uploading.core.onReply(bytes);
     if (update.finished !== undefined) {
       this.uploading = null;
+      this.log.fileUploaded(uploading.share.bytes.length, outcomeName(update.finished));
       uploading.share.resolve(update.finished);
     }
     this.drive();
@@ -344,7 +394,10 @@ export class Connection {
   private dropped() {
     this.sendControl = null;
     this.sendFiles = null;
-    if (this.uploading) this.shares.unshift(this.uploading.share);
+    if (this.uploading) {
+      this.log.fileUploaded(this.uploading.share.bytes.length, 'retried');
+      this.shares.unshift(this.uploading.share);
+    }
     if (this.asked) this.shares.unshift(this.asked.share);
     this.uploading = null;
     this.asked = null;
@@ -353,6 +406,7 @@ export class Connection {
   /** Answers the host's read request; throws for a question the host would refuse. */
   answerRead(ask: number, answer: ReadAnswer) {
     const request = this.options.core.answerRead(ask, answer);
+    this.log.requestSent('answer', 0);
     this.options.onEvent({ type: 'answer-sent', id: request.id });
     this.sendControl?.(new Uint8Array(request.message));
   }
@@ -360,6 +414,7 @@ export class Connection {
   /** Votes in the host's vote; null takes the vote back. */
   castVote(ask: number, round: number, card: Card | null) {
     const request = this.options.core.castVote(ask, round, card);
+    this.log.requestSent('answer', 0);
     this.options.onEvent({ type: 'answer-sent', id: request.id });
     this.sendControl?.(new Uint8Array(request.message));
   }
@@ -367,37 +422,55 @@ export class Connection {
   /** Sends the host a link to share, as `suggest` does. Throws for a link the host would refuse. */
   sendLink(url: string, title: string | null, sessionOnly: boolean) {
     const request = this.options.core.sendLink(url, title, sessionOnly);
+    this.log.requestSent('share_link', new TextEncoder().encode(url).length);
     this.options.onEvent({ type: 'request-sent', id: request.id });
     this.sendControl?.(new Uint8Array(request.message));
   }
 
   /** Leaves the session: tells the host if connected, and closes everything. */
   leave() {
+    // Recorded now: the page may be going away, and would not get to it after the attempt ends.
+    if (this.stop && !this.left) {
+      const connectedMs = this.connectedAt === null ? 0 : Date.now() - this.connectedAt;
+      this.log.attemptEnded(this.attempts, 'left', connectedMs);
+    }
     this.left = true;
     this.stop?.();
     this.wake?.();
+  }
+
+  /** The session is over for this page: logged, then told to the window. */
+  private end(reason: EndReason) {
+    this.log.ended(reason);
+    this.options.onEvent({ type: 'ended', reason });
   }
 
   private async run() {
     // Without WebRTC nothing can connect: say so now, not after the join timeout.
     if (this.platform.webrtc && !this.platform.webrtc()) {
       await Promise.resolve();
-      this.options.onEvent({ type: 'ended', reason: 'webrtc-off' });
+      this.end('webrtc-off');
       return;
     }
     let retry = FIRST_RETRY_MS;
     for (;;) {
       const admittedBefore = this.options.core.admittedOnce();
+      this.attempts += 1;
+      this.log.attemptStarted(this.attempts);
       const outcome = await this.attempt();
+      const connectedMs = this.connectedAt === null ? 0 : Date.now() - this.connectedAt;
+      this.connectedAt = null;
+      // `leave` recorded its own end.
       if ('left' in outcome || this.left) return;
+      this.log.attemptEnded(this.attempts, 'final' in outcome ? 'final' : outcome.retry, connectedMs);
       if ('final' in outcome) {
-        this.options.onEvent({ type: 'ended', reason: outcome.final });
+        this.end(outcome.final);
         return;
       }
       const admitted = this.options.core.admittedOnce();
       // Joining keeps failing, for example because no relay address can be had.
       if (!admitted && Date.now() - this.joinedAt >= this.timeoutMs) {
-        this.options.onEvent({ type: 'ended', reason: 'network-blocked' });
+        this.end('network-blocked');
         return;
       }
       // Back off only while attempts keep failing.
@@ -427,9 +500,13 @@ export class Connection {
     const deadline = (admitted ? Date.now() : this.joinedAt) + this.timeoutMs;
 
     return new Promise<Outcome>((resolve) => {
+      const log = this.log;
       let done = false;
       let opened = false;
+      let socketOpen = false;
       let connected = false;
+      // From the welcome until the host says this connection has caught up.
+      let catchUp: { since: number; reconnected: boolean; batches: number; bytes: number } | null = null;
       // The connection id the service gave this viewer on joining; the peer starts once TURN
       // credentials, or the answer that there are none, have arrived.
       let joinedAs: string | undefined;
@@ -448,6 +525,7 @@ export class Connection {
         this.stop = null;
         this.dropped();
         socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
+        if (socketOpen) log.signallingClosed(true);
         try {
           socket.close();
         } catch {
@@ -460,7 +538,7 @@ export class Connection {
         resolve(outcome);
       };
       const timer = setTimeout(
-        () => finish(core.admittedOnce() ? { retry: true } : { final: 'network-blocked' }),
+        () => finish(core.admittedOnce() ? { retry: 'timeout' } : { final: 'network-blocked' }),
         Math.max(0, deadline - Date.now()),
       );
       this.stop = () => {
@@ -477,18 +555,35 @@ export class Connection {
         connection = id;
         const pc = this.platform.peer({ iceServers });
         peer = pc;
+        const number = nextPeer++;
+        log.peerCreated(number, iceServers.length > 0);
         pc.onicecandidate = ({ candidate }) => {
           if (candidate?.candidate) {
             send({ type: 'signal', connection: id, payload: { type: 'candidate', candidate: candidate.candidate, mid: candidate.sdpMid ?? '' } });
           }
         };
         pc.onconnectionstatechange = () => {
-          if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) finish({ retry: true });
+          const state = pc.connectionState;
+          if (LINK_STATES.includes(state)) log.peerState(number, state as LinkState);
+          if (state === 'connected' && typeof pc.getStats === 'function') {
+            void pc
+              .getStats()
+              .then((stats) => {
+                const path = selectedPath(stats);
+                log.peerPath(number, path?.local ?? 'unknown', path?.remote ?? 'unknown');
+              })
+              .catch(() => log.peerPath(number, 'unknown', 'unknown'));
+          }
+          if (['failed', 'disconnected', 'closed'].includes(state)) finish({ retry: 'peer_failed' });
         };
         control = pc.createDataChannel('control');
         const stream = pc.createDataChannel('stream');
         const files = pc.createDataChannel('files');
         control.binaryType = stream.binaryType = files.binaryType = 'arraybuffer';
+        for (const [channel, name] of [[control, 'control'], [stream, 'stream'], [files, 'files']] as [RTCDataChannel, Channel][]) {
+          channel.addEventListener?.('open', () => log.channelOpen(number, name));
+          channel.addEventListener?.('close', () => log.channelClosed(number, name));
+        }
         let admittedHere = false;
         const filesReady = () => {
           if (!admittedHere || files.readyState !== 'open') return;
@@ -503,6 +598,7 @@ export class Connection {
         files.onmessage = ({ data }) => this.onFiles(new Uint8Array(data as ArrayBuffer));
         control.onopen = () => {
           connected = true;
+          this.connectedAt = Date.now();
           clearTimeout(timer);
           control!.send(new Uint8Array(core.hello(username)));
         };
@@ -511,6 +607,7 @@ export class Connection {
           switch (update.type) {
             case 'welcome': {
               const { viewerId, agent, timelineSupported, cols, rows, reconnected } = update;
+              catchUp = { since: Date.now(), reconnected, batches: 0, bytes: 0 };
               onEvent(reconnected ? { type: 'reconnected' } : { type: 'joined', viewerId, agent, timelineSupported, cols, rows });
               const channel = control!;
               this.sendControl = (bytes) => {
@@ -533,6 +630,7 @@ export class Connection {
               onEvent({ type: 'allowed', suggestions: update.suggestions });
               break;
             case 'reply':
+              log.requestReply(update.outcome);
               onEvent({ type: 'reply', id: update.id, outcome: update.outcome });
               this.shareReplied(update.id, update.outcome);
               break;
@@ -571,12 +669,21 @@ export class Connection {
               finish({ final: 'closed' });
               break;
             case 'retry':
-              finish({ retry: true });
+              finish({ retry: 'host_asked_retry' });
               break;
           }
         };
         stream.onmessage = ({ data }) => {
-          const update = core.onStream(new Uint8Array(data as ArrayBuffer));
+          const bytes = new Uint8Array(data as ArrayBuffer);
+          const update = core.onStream(bytes);
+          if (update.caughtUp) {
+            if (catchUp) log.caughtUp(catchUp.reconnected, catchUp.batches, catchUp.bytes, Date.now() - catchUp.since);
+            catchUp = null;
+          } else if (catchUp) {
+            catchUp.batches += 1;
+            catchUp.bytes += bytes.length;
+          }
+          if (update.resendFrom !== undefined) log.resend(update.resendFrom);
           // Bytes from WebAssembly can arrive as plain arrays of numbers; copy them into ones of
           // our own either way.
           if (update.records) onRecords(new Uint8Array(update.records));
@@ -590,7 +697,7 @@ export class Connection {
             if (!sdp || done) return;
             send({ type: 'signal', connection: id, payload: { type: 'description', ...(core.signOffer(id, sdp) as object) } });
           } catch {
-            finish({ retry: true });
+            finish({ retry: 'peer_create_failed' });
           }
         })();
       };
@@ -601,13 +708,13 @@ export class Connection {
           // The answer must be made with this session's code, for this connection.
           const { kind, sdp, mac } = payload;
           const verified = core.verifyAnswer(connection, { kind, sdp, mac });
-          if (verified === undefined) return finish({ retry: true });
+          if (verified === undefined) return finish({ retry: 'bad_answer' });
           try {
             await peer.setRemoteDescription({ type: 'answer', sdp: verified });
             remoteSet = true;
             for (const candidate of pendingCandidates.splice(0)) await peer.addIceCandidate(candidate);
           } catch {
-            finish({ retry: true });
+            finish({ retry: 'bad_answer' });
           }
         } else {
           const candidate = { candidate: payload.candidate, sdpMid: payload.mid };
@@ -618,15 +725,24 @@ export class Connection {
 
       socket.onopen = () => {
         opened = true;
+        socketOpen = true;
+        log.signallingConnected();
         // TURN credentials come after joining: the service gives them only to members.
         send({ type: 'join', room });
       };
       socket.onerror = () => {};
       socket.onclose = () => {
+        if (opened) {
+          socketOpen = false;
+          log.signallingClosed(false);
+          if (connected) log.viewerSignallingClosed();
+        } else {
+          log.signallingConnectFailed();
+        }
         // Before the first admission the service being unreachable is final; later, keep trying.
-        if (!opened) finish(core.admittedOnce() ? { retry: true } : { final: 'service-unavailable' });
+        if (!opened) finish(core.admittedOnce() ? { retry: 'signalling_unavailable' } : { final: 'service-unavailable' });
         // Once connected, the signalling service is no longer needed.
-        else if (!connected) finish({ retry: true });
+        else if (!connected) finish({ retry: 'signalling_closed' });
       };
       socket.onmessage = ({ data }) => {
         let message: ServerMessage;
@@ -646,7 +762,7 @@ export class Connection {
             else if (message.code === 'room-not-found') finish({ final: core.admittedOnce() ? 'closed' : 'invalid-code' });
             else if (message.code === 'rate-limited') finish({ final: 'too-many-attempts' });
             // Before the first admission a full service is final; later, keep trying.
-            else if (message.code === 'server-busy') finish(core.admittedOnce() ? { retry: true } : { final: 'service-busy' });
+            else if (message.code === 'server-busy') finish(core.admittedOnce() ? { retry: 'service_busy' } : { final: 'service-busy' });
             break;
           case 'joined':
             joinedAs = message.connection;
@@ -656,7 +772,7 @@ export class Connection {
             if (message.connection === connection) void onSignal(message.payload);
             break;
           case 'peer-left':
-            if (!connected) finish({ retry: true });
+            if (!connected) finish({ retry: 'host_left' });
             break;
         }
       };
