@@ -21,6 +21,13 @@ pub enum Prerequisite {
 }
 
 impl Prerequisite {
+    /// A stable name for the log.
+    pub fn id(self) -> &'static str {
+        match self {
+            Prerequisite::GitBash => "git_bash",
+        }
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             Prerequisite::GitBash => "Git Bash (Git for Windows)",

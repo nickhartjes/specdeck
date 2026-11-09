@@ -13,6 +13,7 @@ use specdeck_protocol::timeline::{DiffHunk, FileChangeKind};
 use tempfile::TempDir;
 
 use crate::code_files;
+use crate::diag;
 use crate::documents::{self, DocumentText};
 use crate::environment::Environment;
 use crate::hooks::HookPayload;
@@ -63,7 +64,9 @@ impl ShellChanges {
     /// `None` when `folder` is not in a git repository or git is not installed. The private
     /// index and objects go in a folder under `data_dir`, removed with this value.
     pub fn new(folder: &Path, data_dir: &Path, env: &Environment) -> Option<Self> {
-        let snapshots = Snapshots::new(folder, data_dir, env)?;
+        let snapshots = Snapshots::new(folder, data_dir, env)
+            .inspect_err(|step| diag::shell_changes_unavailable(step.as_str(), step.expected()))
+            .ok()?;
         Some(Self {
             inner: Mutex::new(Inner {
                 snapshots,
@@ -86,7 +89,7 @@ impl ShellChanges {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match text("hook_event_name")? {
             "PreToolUse" => {
-                let tree = inner.snapshots.snapshot()?;
+                let tree = inner.snapshots.snapshot().or_else(failed(Step::Snapshot))?;
                 inner.taken += 1;
                 let taken = inner.taken;
                 inner.before.insert(tool_use_id.to_owned(), (taken, tree));
@@ -94,7 +97,7 @@ impl ShellChanges {
             }
             "PostToolUse" | "PostToolUseFailure" => {
                 let before = inner.before.remove(tool_use_id)?;
-                let after = inner.snapshots.snapshot()?;
+                let after = inner.snapshots.snapshot().or_else(failed(Step::Snapshot))?;
                 inner.taken += 1;
                 let taken = inner.taken;
                 // A command that overlapped this one may already have reported part of the change.
@@ -130,6 +133,49 @@ impl ShellChanges {
     }
 }
 
+/// The step at which snapshots could not be set up or taken, for the log; never a path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    NoGit,
+    NotARepository,
+    GitDir,
+    Prefix,
+    DataDir,
+    TempDir,
+    IndexCopy,
+    Snapshot,
+    Diff,
+}
+
+impl Step {
+    fn as_str(self) -> &'static str {
+        match self {
+            Step::NoGit => "no_git",
+            Step::NotARepository => "not_a_repository",
+            Step::GitDir => "git_dir",
+            Step::Prefix => "prefix",
+            Step::DataDir => "data_dir",
+            Step::TempDir => "temp_dir",
+            Step::IndexCopy => "index_copy",
+            Step::Snapshot => "snapshot",
+            Step::Diff => "diff",
+        }
+    }
+
+    /// A folder outside git, or no git at all, is a normal way to work.
+    fn expected(self) -> bool {
+        matches!(self, Step::NoGit | Step::NotARepository)
+    }
+}
+
+/// Records that `step` failed for one command, and gives nothing.
+fn failed<T>(step: Step) -> impl FnOnce() -> Option<T> {
+    move || {
+        diag::shell_changes_failed(step.as_str());
+        None
+    }
+}
+
 struct Snapshots {
     git: PathBuf,
     env: Environment,
@@ -146,8 +192,8 @@ struct Snapshots {
 }
 
 impl Snapshots {
-    fn new(folder: &Path, data_dir: &Path, env: &Environment) -> Option<Self> {
-        let git = env.find_executable("git")?;
+    fn new(folder: &Path, data_dir: &Path, env: &Environment) -> Result<Self, Step> {
+        let git = env.find_executable("git").ok_or(Step::NoGit)?;
         let run = |args: &[&str]| {
             let mut command = Command::new(&git);
             command.args(args).current_dir(folder).stdin(Stdio::null()).stderr(Stdio::null());
@@ -163,11 +209,13 @@ impl Snapshots {
             "index",
             "--git-path",
             "objects",
-        ])?;
+        ])
+        .ok_or(Step::NotARepository)?;
         let [top, index, objects] = dirs.lines().collect::<Vec<_>>()[..] else {
-            return None;
+            return Err(Step::GitDir);
         };
-        let prefix = run(&["rev-parse", "--show-prefix"])?.trim_end_matches('\n').to_owned();
+        let prefix = run(&["rev-parse", "--show-prefix"]).ok_or(Step::Prefix)?;
+        let prefix = prefix.trim_end_matches('\n').to_owned();
         let no_filters = run(&["config", "--name-only", "--get-regexp", r"^filter\..*\."])
             .unwrap_or_default()
             .lines()
@@ -180,14 +228,17 @@ impl Snapshots {
             })
             .collect();
 
-        std::fs::create_dir_all(data_dir).ok()?;
-        let private = tempfile::Builder::new().prefix("snapshots-").tempdir_in(data_dir).ok()?;
-        std::fs::create_dir(private.path().join("objects")).ok()?;
+        std::fs::create_dir_all(data_dir).map_err(|_| Step::DataDir)?;
+        let private = tempfile::Builder::new()
+            .prefix("snapshots-")
+            .tempdir_in(data_dir)
+            .map_err(|_| Step::TempDir)?;
+        std::fs::create_dir(private.path().join("objects")).map_err(|_| Step::TempDir)?;
         // The repository's index holds git's file-status cache: unchanged files are not read again.
         if Path::new(index).exists() {
-            std::fs::copy(index, private.path().join("index")).ok()?;
+            std::fs::copy(index, private.path().join("index")).map_err(|_| Step::IndexCopy)?;
         }
-        Some(Self {
+        Ok(Self {
             git,
             env: env.clone(),
             top: top.into(),
@@ -234,7 +285,7 @@ impl Snapshots {
         }
         let pathspec = self.pathspec();
         let args = ["diff", "--name-status", "--no-renames", "-z", before, after, "--", &pathspec];
-        let Some(names) = self.git(&args) else {
+        let Some(names) = self.git(&args).or_else(failed(Step::Diff)) else {
             return Vec::new();
         };
         let fields: Vec<String> = names
@@ -623,7 +674,30 @@ mod tests {
     #[test]
     fn nothing_outside_a_repository() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(ShellChanges::new(dir.path(), dir.path(), &Environment::from_process()).is_none());
+        let folder = dir.path().join("Marker-Folder");
+        std::fs::create_dir(&folder).unwrap();
+        let (capture, _guard) = crate::capture::Capture::start();
+        assert!(ShellChanges::new(&folder, dir.path(), &Environment::from_process()).is_none());
+        let unavailable = capture.named("shell_changes.unavailable");
+        assert_eq!(unavailable.len(), 1);
+        assert_eq!(unavailable[0].field("step"), Some("not_a_repository"));
+        assert_eq!(unavailable[0].level.as_str(), "INFO");
+        assert!(!format!("{:?}", capture.events()).contains("Marker"));
+    }
+
+    #[test]
+    fn a_data_folder_that_cannot_be_made_is_recorded() {
+        let repo = Repo::new();
+        let blocker = repo.data.path().join("Marker-File");
+        std::fs::write(&blocker, "").unwrap();
+        let (capture, _guard) = crate::capture::Capture::start();
+        let data = blocker.join("data");
+        assert!(ShellChanges::new(repo.dir.path(), &data, &Environment::from_process()).is_none());
+        let unavailable = capture.named("shell_changes.unavailable");
+        assert_eq!(unavailable.len(), 1);
+        assert_eq!(unavailable[0].field("step"), Some("data_dir"));
+        assert_eq!(unavailable[0].level.as_str(), "WARN");
+        assert!(!format!("{:?}", capture.events()).contains("Marker"));
     }
 
     #[test]
