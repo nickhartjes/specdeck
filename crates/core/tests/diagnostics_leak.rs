@@ -5,8 +5,9 @@
 
 #[path = "support/capture.rs"]
 mod capture;
+#[path = "support/executable.rs"]
+mod executable;
 
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -113,8 +114,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     let bin = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let program = bin.path().join("claude");
-    std::fs::write(&program, AGENT).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(&program, AGENT);
     let env: Environment =
         [("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))].into_iter().collect();
     let config = HostConfig {

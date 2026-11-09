@@ -1,7 +1,9 @@
 //! Drives a hosted session end to end with fake agents in a real pty.
 #![cfg(unix)]
 
-use std::os::unix::fs::PermissionsExt;
+#[path = "support/executable.rs"]
+mod executable;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -18,9 +20,7 @@ use specdeck_protocol::{AgentId, AgentStatus};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 fn fake_agent(dir: &Path, name: &str, body: &str) {
-    let path = dir.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(&dir.join(name), &format!("#!/bin/sh\n{body}\n"));
 }
 
 fn env(bin: &Path) -> Environment {
