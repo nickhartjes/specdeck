@@ -1,9 +1,13 @@
 name: CI
 
+# Changes to specs, design docs and the root Markdown files build nothing, so they run no CI. A
+# push or pull request that also touches anything else still runs it all.
 on:
   push:
     branches: [main]
+    paths-ignore: ['openspec/**', 'docs/**', '*.md', LICENSE]
   pull_request:
+    paths-ignore: ['openspec/**', 'docs/**', '*.md', LICENSE]
   # Started by renovate-nix-hash.yml for the commit it pushes, which starts no workflow itself.
   workflow_dispatch:
 
