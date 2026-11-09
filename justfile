@@ -45,9 +45,10 @@ check-web: web-wasm web-test
     pnpm --dir app/ui build:web
     cargo clippy -p specdeck-server --all-targets --features web-viewer -- -D warnings
 
+# --workspace, not -p specdeck-core: a single package resolves other features and rebuilds it.
 # Measure 20 viewers' effect on the host's terminal, alone so other work does not skew it
 capacity:
-    cargo test -p specdeck-core --test sharing twenty_viewers_under_continuous_output -- --ignored --nocapture
+    cargo test --workspace -- --ignored --nocapture --exact twenty_viewers_under_continuous_output
 
 # Record what this release's session process and the app say to each other
 # (crates/session/transcripts/<protocol>.jsonl), once per release after the version bump. The app
