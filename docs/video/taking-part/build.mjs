@@ -53,6 +53,8 @@ ring(w('actions', 'Send', { offset: -0.2 }), box('inbox.send', 6));
 point(w('actions', 'Send', { offset: -0.3 }), box('inbox.send', 0));
 ring(w('actions', 'Edit', { offset: -0.2 }), box('inbox.edit', 6));
 point(w('actions', 'Edit', { offset: -0.3 }), box('inbox.edit', 0));
+ring(w('actions', 'Keep', { offset: -0.2 }), box('inbox.keep', 6));
+point(w('actions', 'Keep', { offset: -0.3 }), box('inbox.keep', 0));
 ring(w('actions', 'Decline', { offset: -0.2 }), box('inbox.decline', 6));
 point(w('actions', 'Decline', { offset: -0.3 }), box('inbox.decline', 0));
 

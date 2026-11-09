@@ -214,8 +214,12 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     })
     .await
     .expect("no suggestion");
+    // Kept first, then sent from the kept list.
+    let kept = sharing.answer_suggestion(suggestion.viewer, suggestion.id, Answer::Kept);
+    assert!(kept.await.unwrap().is_some());
     let edited = Answer::Sent { text: format!("{SUGGESTION_MARKER}, edited") };
-    assert!(sharing.answer_suggestion(suggestion.viewer, suggestion.id, edited).await.unwrap());
+    let sent = sharing.answer_suggestion(suggestion.viewer, suggestion.id, edited);
+    assert!(sent.await.unwrap().is_some());
     sharing.allow_suggestions(false);
     until(&mut events, &mut text, |_, e| *e == ViewerEvent::Allowed { suggestions: false }).await;
     // A file the host shares and one the viewer shares, each fetched, then both removed.
@@ -467,6 +471,13 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     assert_eq!(closed[0].field("of"), Some("1"));
     let kept = capture.named("host.ask_vote_closed");
     assert_eq!((kept[0].field("kept"), kept[0].field("votes")), (Some("true"), Some("1")));
+    // The suggestion is recorded as kept, then sent, without its text.
+    let answers: Vec<_> = capture
+        .named("host.suggestion_answered")
+        .iter()
+        .map(|e| e.field("answer").map(str::to_owned))
+        .collect();
+    assert_eq!(answers, [Some("kept".to_owned()), Some("sent".to_owned())]);
 
     // The payloads the timeline could not place, by name only.
     let unplaced = capture.named("timeline.unplaced");

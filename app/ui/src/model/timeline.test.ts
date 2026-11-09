@@ -140,6 +140,32 @@ describe('entries the host cut to fit in one message', () => {
   });
 });
 
+describe('prompts sent from a suggestion', () => {
+  const mark = (by: string, edited = false): TimelineEvent => ({ ...stamp(), kind: 'suggested', by, edited });
+  const prompt = (n: number): TimelineEvent => ({ ...stamp(), kind: 'prompt', promptId: `p${n}`, text: `Prompt ${n}` });
+
+  it('marks only the next prompt', () => {
+    const model = buildTimeline([prompt(1), mark('Sanne', true), prompt(2), prompt(3)]);
+    expect(model.turns.map((turn) => turn.suggested)).toEqual([undefined, { by: 'Sanne', edited: true }, undefined]);
+    expect(model.suggested.map((item) => item.by)).toEqual(['Sanne']);
+  });
+
+  it('takes the last of two marks before a prompt, which was the one submitted', () => {
+    const model = buildTimeline([mark('Sanne'), mark('Mo'), prompt(1)]);
+    expect(model.turns[0]!.suggested).toEqual({ by: 'Mo', edited: false });
+  });
+
+  it('marks a prompt in a late joiner’s history', () => {
+    // The history starts in the middle of a turn, whose prompt came before it.
+    const model = buildTimeline([
+      { ...stamp(), kind: 'message', promptId: 'p0', messageId: 'm0', text: 'Earlier', final: true },
+      mark('Sanne'),
+      prompt(1),
+    ]);
+    expect(model.turns.map((turn) => turn.suggested?.by)).toEqual([undefined, 'Sanne']);
+  });
+});
+
 describe('shared links', () => {
   const link = (id: number, url: string | null, title?: string): TimelineEvent => ({ ...stamp(), kind: 'link', id, url, title, by: 'Nick', sessionOnly: false });
 

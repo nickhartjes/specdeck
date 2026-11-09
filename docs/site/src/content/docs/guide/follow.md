@@ -125,8 +125,8 @@ Losing the connection and coming back does not count as joining again. In the we
 
 Think of something the agent should do next? Suggest it to the host. Open the **Prompts** tab next to **Timeline**, write the prompt and select **Suggest to** *host*. It works the same in the web viewer.
 
-- **Only the host and you see it.** It goes to the host, not to the agent, and nothing reaches the agent until the host sends it, edited or not (see [Prompt suggestions](/specdeck/guide/host/#prompt-suggestions)). Other viewers never see your suggestions.
-- **Under Your suggestions** you see each one and what became of it: *Waiting for* the host, the host *sent it*, *edited and sent it*, or *declined it*. This stays up to date when you reconnect, and lasts until the session ends.
+- **Only the host and you see it.** It goes to the host, not to the agent, and nothing reaches the agent until the host sends it, edited or not (see [Prompt suggestions](/specdeck/guide/host/#prompt-suggestions)). Other viewers don't see it while it waits or the host keeps it; once the host sends it, everyone's timeline shows the prompt as *suggested by* you.
+- **Under Your suggestions** you see each one and what became of it: *Waiting for* the host, *Kept for later by* the host, the host *sent it*, *edited and sent it*, or *declined it*. A kept suggestion the host removes shows as declined. This stays up to date when you reconnect, and lasts until the session ends.
 - **A suggestion is up to 4096 bytes** of text; the counter below it says how much you used, and a longer one can't be sent. Line breaks stay: the host sends several lines as one prompt.
 - **Three at once, then one every 10 seconds.** Send faster and SpecDeck asks you to wait a moment; your text stays, so you can send it again.
 - **The host can turn suggestions off**, and on again, at any time. While they are off, the tab says so. A suggestion you sent just as the host turned them off is not sent, and SpecDeck tells you.

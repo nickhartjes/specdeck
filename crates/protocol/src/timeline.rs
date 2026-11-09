@@ -295,6 +295,13 @@ pub enum Entry {
         paths: Vec<String>,
         from: Vec<String>,
     },
+    /// The host sent a viewer's suggestion as the next prompt (`viewer-requests`); `by` is the
+    /// label the viewer had when suggesting it, `edited` whether the host changed the text first.
+    /// Protocol version 6: never sent to older viewers, which cannot decode it.
+    Suggested {
+        by: String,
+        edited: bool,
+    },
     /// An OpenSpec change the agent works on; each one replaces the previous for that change.
     Plan {
         change: String,
@@ -691,6 +698,16 @@ mod tests {
                 TimelineEvent { output_seq: 1, at: 2, entry: entry.clone(), truncated: false };
             assert_eq!(fit(event, MAX_EVENT_JSON_BYTES).entry, entry);
         }
+    }
+
+    #[test]
+    fn suggested_entry_round_trips_and_is_never_cut() {
+        let entry = Entry::Suggested { by: "Sanne".into(), edited: true };
+        let json = serde_json::json!({ "kind": "suggested", "by": "Sanne", "edited": true });
+        assert_eq!(serde_json::to_value(&entry).unwrap(), json);
+        assert_eq!(serde_json::from_value::<Entry>(json).unwrap(), entry);
+        let event = TimelineEvent { output_seq: 1, at: 2, entry: entry.clone(), truncated: false };
+        assert_eq!(fit(event, MAX_EVENT_JSON_BYTES).entry, entry);
     }
 
     #[test]

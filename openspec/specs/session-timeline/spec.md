@@ -25,7 +25,7 @@ Claude's response text SHALL appear in the timeline under the prompt it answers,
 - **THEN** the timeline shows them formatted as a code block and a list
 
 ### Requirement: Capture tool calls
-Each tool Claude Code uses SHALL appear as a timeline entry showing the tool, its input, and whether it succeeded, failed, or did not run. The input SHALL NOT carry file contents: the new text of a written file, the old and new text of an edit, and a notebook cell's new source are left out, since the diff shows the change. Nor SHALL it carry text Claude types into a sensitive or unknown field of its browser (`agent-browser`, *Sensitive fields stay hidden*). File paths in the input SHALL be shown as other paths in the timeline are: relative inside the session folder, starting with `~` elsewhere in the home folder, otherwise unchanged. Shell commands SHALL be shown as typed.
+Each tool Claude Code uses SHALL appear as a timeline entry showing the tool, its input, and whether it succeeded, failed, or did not run. The input SHALL NOT carry file contents: the new text of a written file, the old and new text of an edit, and a notebook cell's new source are left out, since the diff shows the change. Nor SHALL it carry text Claude types into a sensitive or unknown field of its browser (`agent-browser`, *Sensitive fields stay hidden*), or text typed through another browser that is not known to go into an ordinary field (`agent-browser`, *Text typed in other browsers*). File paths in the input SHALL be shown as other paths in the timeline are: relative inside the session folder, starting with `~` elsewhere in the home folder, otherwise unchanged. Shell commands SHALL be shown as typed.
 
 #### Scenario: Claude runs a command
 - **WHEN** Claude Code runs a shell command
@@ -46,6 +46,10 @@ Each tool Claude Code uses SHALL appear as a timeline entry showing the tool, it
 #### Scenario: Claude types a password in its browser
 - **WHEN** Claude types into the password field of a page in its browser
 - **THEN** the tool entry names the field and says the text is hidden, and does not carry the text
+
+#### Scenario: Claude types through Playwright MCP
+- **WHEN** Claude types into any field through Playwright MCP
+- **THEN** the tool entry says the text is hidden, and does not carry the text
 
 ### Requirement: File change diffs
 Each file change made by Claude Code's file-editing tools inside the session folder SHALL appear in the timeline with a diff showing exactly what changed in that file. When the session folder is in a git repository, files inside the session folder that Claude Code's shell commands create, change or delete SHALL also appear, with their diffs, under the command that changed them. Outside a git repository, changes made by shell commands are not shown. Snapshots for this SHALL NOT change the repository and SHALL NOT read files outside the session folder. A file outside the session folder SHALL appear as changed, by its path, without a diff. A path is inside the session folder when it is after symlinks are resolved.
@@ -294,7 +298,7 @@ A tool call of Claude Code itself that has no result when the host's next prompt
 - **THEN** the helper's command stays open until it gets its own result
 
 ### Requirement: Older viewers keep working
-The answers, plan decisions, permission decisions, helper reports, screenshots and the elements of browser steps SHALL be sent in a form that viewers on an earlier app version of the same protocol version ignore, so that those viewers still show the timeline as before.
+The answers, plan decisions, permission decisions, helper reports, screenshots and the elements of browser steps, those of other browsers included, SHALL be sent in a form that viewers on an earlier app version of the same protocol version ignore, so that those viewers still show the timeline as before.
 
 #### Scenario: Viewer on an earlier version
 - **WHEN** a viewer on an app version without this change joins a session in which Claude asked a question
@@ -311,6 +315,10 @@ The answers, plan decisions, permission decisions, helper reports, screenshots a
 #### Scenario: Password for an earlier version
 - **WHEN** a viewer on an app version without element names watches Claude type a password in its browser
 - **THEN** their timeline does not carry the password
+
+#### Scenario: Other browser for an earlier version
+- **WHEN** a viewer on an app version without steps for other browsers watches Claude fill a form through Playwright MCP
+- **THEN** their timeline shows the tool call as before, without the filled-in values, and the viewer stays connected
 
 ### Requirement: Entries too large to send whole
 The host SHALL send every timeline entry in a form small enough for every viewer's connection to accept. An entry too large for that, such as the diff of a very large created file, SHALL be cut to fit and marked, and participants SHALL see a note that it is shown in part. Sending a large entry SHALL NOT disconnect any viewer.
@@ -450,3 +458,37 @@ Each time the host gives the braindump, the timeline SHALL show one step at that
 #### Scenario: Session without a timeline
 - **WHEN** the host gives the braindump in a terminal session
 - **THEN** no step is shown, because there is no timeline to show it in, and the items show as given in the *Shared* tab
+
+### Requirement: Prompts sent from a suggestion
+A prompt the host sends from a viewer's suggestion SHALL show in every participant's timeline as suggested by that viewer, by the name they had when they suggested it, and SHALL say when the host edited it first. The mark SHALL be part of the session's history, so late joiners see it. A prompt the host types themselves, including the braindump's prompt, SHALL NOT carry the mark.
+
+#### Scenario: Sent as written
+- **WHEN** the host sends Sanne's suggestion as written
+- **THEN** every participant's timeline shows the prompt as asked by the host and suggested by Sanne
+
+#### Scenario: Edited first
+- **WHEN** the host edits Mo's suggestion and sends it
+- **THEN** the prompt shows as suggested by Mo and edited by the host
+
+#### Scenario: Late joiner
+- **WHEN** a viewer joins after the host sent Sanne's suggestion
+- **THEN** that prompt shows as suggested by Sanne in the viewer's timeline
+
+#### Scenario: Author has left
+- **WHEN** Sanne leaves the session after her suggestion was sent
+- **THEN** the prompt still shows as suggested by Sanne
+
+#### Scenario: Host's own prompt
+- **WHEN** the host types a prompt in the terminal, or gives the braindump with a prompt
+- **THEN** the prompt carries no *suggested by* mark
+
+#### Scenario: Viewer on the previous protocol
+- **WHEN** a viewer whose app speaks the previous protocol watches as the host sends a suggestion
+- **THEN** that viewer sees the prompt without the mark, and keeps watching
+
+### Requirement: Sent suggestions in sessions without a timeline
+In a session without a timeline (OpenCode or omp), each suggestion the host sends SHALL be listed in the timeline panel below its note that the session has no timeline, as shared links are, saying whose suggestion the host sent and whether the host edited it, without its text.
+
+#### Scenario: OpenCode session
+- **WHEN** the host sends Sanne's suggestion in an OpenCode session
+- **THEN** every participant sees below the note that the host sent a prompt suggested by Sanne

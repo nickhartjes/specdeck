@@ -219,14 +219,14 @@ describe('host screen', () => {
     expect(waiting.map((item) => item.getAttribute('aria-label'))).toEqual(['Bram’s suggestion', 'Anna de Vries’s suggestion']);
 
     await userEvent.click(within(waiting[0]!).getByRole('button', { name: 'Send' }));
-    expect(bridge.hostAnswerSuggestion).toHaveBeenCalledWith(2, 1, 'Add a test for the 503 when the database is down.');
+    expect(bridge.hostAnswerSuggestion).toHaveBeenCalledWith(2, 1, { type: 'send', text: 'Add a test for the 503 when the database is down.' });
 
     await userEvent.click(within(waiting[1]!).getByRole('button', { name: 'Edit' }));
     const field = screen.getByLabelText('Edit Anna de Vries’s suggestion');
     await userEvent.clear(field);
     await userEvent.type(field, 'Explain the retry policy');
     await userEvent.click(within(waiting[1]!).getByRole('button', { name: 'Send' }));
-    expect(bridge.hostAnswerSuggestion).toHaveBeenLastCalledWith(1, 2, 'Explain the retry policy');
+    expect(bridge.hostAnswerSuggestion).toHaveBeenLastCalledWith(1, 2, { type: 'send', text: 'Explain the retry policy' });
   });
 
   it('declines a suggestion without sending anything', async () => {
@@ -234,8 +234,22 @@ describe('host screen', () => {
     await userEvent.click(screen.getByRole('tab', { name: /Prompts/ }));
     const waiting = within(screen.getByRole('list', { name: 'Suggestions waiting' })).getAllByRole('listitem');
     await userEvent.click(within(waiting[0]!).getByRole('button', { name: 'Decline' }));
-    expect(bridge.hostAnswerSuggestion).toHaveBeenCalledWith(2, 1, null);
+    expect(bridge.hostAnswerSuggestion).toHaveBeenCalledWith(2, 1, { type: 'decline' });
     expect(bridge.hostInput).not.toHaveBeenCalled();
+  });
+
+  it('keeps a suggestion for later, then sends or removes it from the kept list', async () => {
+    const { bridge } = await setup();
+    await userEvent.click(screen.getByRole('tab', { name: /Prompts/ }));
+    const waiting = within(screen.getByRole('list', { name: 'Suggestions waiting' })).getAllByRole('listitem');
+    await userEvent.click(within(waiting[0]!).getByRole('button', { name: 'Keep for later' }));
+    expect(bridge.hostAnswerSuggestion).toHaveBeenCalledWith(2, 1, { type: 'keep' });
+    expect(bridge.hostInput).not.toHaveBeenCalled();
+
+    const kept = within(screen.getByRole('list', { name: 'Kept for later' })).getAllByRole('listitem');
+    expect(within(kept[0]!).queryByRole('button', { name: 'Keep for later' })).toBeNull();
+    await userEvent.click(within(kept[0]!).getByRole('button', { name: 'Remove' }));
+    expect(bridge.hostAnswerSuggestion).toHaveBeenLastCalledWith(2, 2, { type: 'decline' });
   });
 
   it('turns suggestions on and off from the sharing settings, not the people list', async () => {

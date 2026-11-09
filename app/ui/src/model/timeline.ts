@@ -88,9 +88,23 @@ export interface AskItem {
   outputSeq: number;
 }
 
+/** The host sent a viewer's suggestion as a prompt (`viewer-requests`). */
+export interface SuggestedItem {
+  kind: 'suggested';
+  id: string;
+  /** The viewer who suggested it, by name. */
+  by: string;
+  /** Whether the host edited it first. */
+  edited: boolean;
+  at: number;
+  outputSeq: number;
+}
+
 export interface Turn {
   promptId: string;
   prompt: string;
+  /** Who suggested the prompt, when the host sent it from a viewer's suggestion. */
+  suggested?: { by: string; edited: boolean };
   at: number;
   outputSeq: number;
   items: (TextItem | ToolItem | NoticeItem | LinkItem | AskItem)[];
@@ -124,6 +138,8 @@ export interface TimelineModel {
   asks: AskItem[];
   /** Those before the first prompt. */
   earlyAsks: AskItem[];
+  /** Every suggestion the host sent, in order, for sessions without a timeline; with one, they mark their turns. */
+  suggested: SuggestedItem[];
   files: TouchedFile[];
   /** Why the timeline is unavailable right now, or null. */
   unavailable: string | null;
@@ -145,6 +161,9 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
   const linkTurns = new Map<number, Turn>();
   const asks: AskItem[] = [];
   const earlyAsks: AskItem[] = [];
+  const suggested: SuggestedItem[] = [];
+  // The mark for the next prompt, which comes right after it.
+  let pendingMark: { by: string; edited: boolean } | null = null;
   let unavailable: string | null = null;
   // The session total when each turn started; a turn's tokens are what was added since.
   let sessionTotal = 0;
@@ -178,6 +197,14 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
         turn.prompt = withNote(event.text, event.truncated);
         turn.at = event.at;
         turn.outputSeq = event.outputSeq;
+        if (pendingMark) turn.suggested = pendingMark;
+        pendingMark = null;
+        break;
+      }
+      case 'suggested': {
+        // Only the last one before a prompt was submitted with it.
+        pendingMark = { by: event.by, edited: event.edited };
+        suggested.push({ kind: 'suggested', id: `suggested-${suggested.length}`, by: event.by, edited: event.edited, at: event.at, outputSeq: event.outputSeq });
         break;
       }
       case 'message': {
@@ -339,7 +366,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
   const sorted = [...files.values()].sort(
     (a, b) => Number(a.readOnly) - Number(b.readOnly) || a.path.localeCompare(b.path),
   );
-  return { turns, links, earlyLinks, asks, earlyAsks, files: sorted, unavailable };
+  return { turns, links, earlyLinks, asks, earlyAsks, suggested, files: sorted, unavailable };
 }
 
 /** A short line describing what a tool call does, for its timeline entry. */

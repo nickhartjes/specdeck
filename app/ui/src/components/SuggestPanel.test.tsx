@@ -72,4 +72,9 @@ describe('suggesting a prompt', () => {
     expect(suggestionBytes('名')).toBe(3);
     expect(suggestionStateText({ Sent: { edited: false } }, 'Nick')).toBe('Nick sent it');
   });
+
+  it('says when the host kept a suggestion for later', () => {
+    panel({ mine: [{ id: 1, text: 'Write docs', state: 'Kept' }] });
+    expect(screen.getByRole('listitem')).toHaveTextContent('Write docsKept for later by Nick');
+  });
 });

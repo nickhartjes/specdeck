@@ -2,8 +2,9 @@
 
 The wire protocol between a host and its viewers. Both sides use this crate; it does no I/O. Design background: decisions 7 and 8 in [`design.md`](../../openspec/changes/archive/2026-10-31-native-shared-session-mvp/design.md).
 
-Current version: `PROTOCOL_VERSION = 6` ([`src/control.rs`](src/control.rs)). Hosts admit viewers from `MIN_VIEWER_PROTOCOL_VERSION = 5` up to their own version: one version back.
+Current version: `PROTOCOL_VERSION = 7` ([`src/control.rs`](src/control.rs)). Hosts admit viewers from `MIN_VIEWER_PROTOCOL_VERSION = 5` up to their own version.
 
+- Version 7 added the caught-up frame (`Frame::CaughtUp`), sent once a viewer has the history the session had when it was admitted, and kept suggestions: the `Kept` state in `Suggestions` and the `suggested` timeline entry. Older viewers never get the frame or a `suggested` entry, and get a kept suggestion as `Waiting`.
 - Version 6 added the host's asks: a request to read something and a vote on a task's size ([`src/asks.rs`](src/asks.rs)). It added the `read-done` and `estimated` timeline entries, the `Answer` request, and the host's `ReadRequest` and `Vote`. Version 5 viewers are admitted and watch as before, suggestions and links included: the host never sends them those entries, `ReadRequest` or `Vote`, and lists them as on an older app, which can't answer.
   Version 6 also added the braindump: the `braindump-item` and `braindump-given` timeline entries, the `AddToBraindump`, `AddNote` and `ReplaceNote` requests, the `AlreadyGiven` outcome and the host's `Braindump`. A braindump item is a shared file kept apart from `Files`: its bytes travel on `files` and are checked as a shared file's are. Version 5 viewers never get these entries or `Braindump`, and the host answers their `Fetch` for a braindump item with `Gone`.
 - Version 5 added shared links: the `link` and `link-removed` timeline entries, the `ShareLink` request, and the host's `LinksAllowed` and `Links`. Which links are accepted is decided by `check_link` ([`src/links.rs`](src/links.rs)), used by the sharer, the host and every participant before opening one. Version 4 viewers are admitted and watch as before, suggestions included: the host never sends them a link entry, `LinksAllowed` or `Links`, and they can't share links.
@@ -58,7 +59,7 @@ Viewer messages come from untrusted peers. `decode_viewer` rejects messages over
 | `SessionEnded` | | The host closed the session |
 | `Allowed` (v3) | `suggestions` | What viewers may send; on admission and on every change |
 | `Reply` (v3) | `id`, `outcome` | To the sender only: `Received`, `Off` (the host has turned that kind off) or `RateLimited` (3 at once, then 1 every 10 seconds per viewer, not reset by reconnecting). For files (v4) also `Ready { upload }` (send the bytes as that upload on `files`), `TooLarge`, `Full`, `NotAllowedType` and `Gone`. Answers (v6) get `Received`, `RateLimited` (a limit of their own: 5 at once, then 1 every second) or `Gone` (the ask closed, the round is over, the votes are revealed, or the card is not of the vote's set). (v6) `AlreadyGiven` for a note that can no longer be edited |
-| `Suggestions` (v3) | `mine[]` (`id`, `text`, `state`) | To one viewer: their own suggestions in this session, `Waiting`, `Sent { edited }` or `Declined`; on admission and on every change |
+| `Suggestions` (v3) | `mine[]` (`id`, `text`, `state`) | To one viewer: their own suggestions in this session, `Waiting`, `Sent { edited }`, `Declined` or (v6) `Kept`; on admission and on every change |
 | `Shared` (v4) | `whole_files` | Whether the host shares whole code files; on admission and on every change |
 | `FilesAllowed` (v4) | `files` | Whether viewers may share files; on admission and on every change |
 | `Files` (v4) | `files[]` (`file`, `name`, `kind`, `media_type`, `size`, `sha256`, `by`, `by_label`, `at_ms`) | The files shared now, oldest first; on admission and on every change |
@@ -161,6 +162,7 @@ Chunks are not signed: the signed `file-shared` event announces `size` and `sha2
 | `estimated` (v6) | The host kept an estimate: `id`, `task`, `cards`, `kept`, the `low` and `high` value cards voted (null when every vote was ? or ☕) and the number of `votes`. No names or single votes. Never sent to version 5 viewers |
 | `braindump-item` (v6) | Someone added to the braindump: the fields of `file-shared`, plus `note`, and `replaces` when it is a new version of that note. Windows don't draw it as a step. Never sent to version 5 viewers |
 | `braindump-given` (v6) | The host gave the braindump to the agent: `round`, the item ids `files`, the `paths` written in the session folder, and the labels of the people they came from (`from`). Never sent to version 5 viewers |
+| `suggested` (v6) | The host sent a viewer's suggestion as the next prompt: `by`, the viewer's label when suggesting it, and `edited`, whether the host changed the text first. It comes before the agent's `prompt` entry for it. Never sent to version 5 viewers |
 | `timeline-unavailable` | Structured events cannot be captured; the terminal mirror still works |
 | `timeline-available` | Events arrive again |
 

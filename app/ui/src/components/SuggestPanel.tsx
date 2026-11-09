@@ -25,6 +25,7 @@ export function suggestionBytes(text: string): number {
 export function suggestionStateText(state: SuggestionState, host: string): string {
   if (state === 'Waiting') return `Waiting for ${host}`;
   if (state === 'Declined') return `${host} declined it`;
+  if (state === 'Kept') return `Kept for later by ${host}`;
   return state.Sent.edited ? `${host} edited and sent it` : `${host} sent it`;
 }
 

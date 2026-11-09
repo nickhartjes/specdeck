@@ -52,6 +52,7 @@ SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a com
 | Limit the number of viewers | Select the avatars and set **Max viewers** (1 to 20). Lowering it never disconnects anyone already watching |
 | Let viewers open whole code files | Select the **sharing settings** button (sliders) and set **Code viewers can open**. It applies to changes Claude makes from then on |
 | Let viewers suggest prompts, or stop them | Select the **sharing settings** button and switch **Viewers can suggest prompts**. Nothing a viewer suggests reaches the agent until you send it. See [Prompt suggestions](#prompt-suggestions) |
+| Answer a suggested prompt | Open **Prompts**. Under **Waiting for you**, select **Send**, **Edit** to change it first, **Keep for later**, or **Decline**. A kept suggestion moves to **Kept for later**, where you can send it, edit it first, or **Remove** it; its author sees that you kept it, and sees a removed one as declined. Kept suggestions stay when you turn suggestions off, and are gone when the session ends. A prompt you send from a suggestion shows in everyone's timeline as *suggested by* its author, with *edited* when you changed it |
 | Share a file with everyone | Open **Files › Shared** and select **Add files or a note**, or drop files there, and choose **Share with everyone**. See [Share files](#share-files) |
 | Collect notes and files for the agent | Open **Files › Shared**, select **Add files or a note**, and keep **To the braindump**. Select **Give** when it is complete. See [The braindump](#the-braindump) |
 | Let viewers add files and notes, or stop them | Select the **sharing settings** button and switch **Viewers can add files and notes**. It covers sharing files and the braindump, and is off when a session starts |
@@ -67,15 +68,16 @@ If you set up your own Claude Code status line, it keeps showing in the terminal
 
 Viewers can [suggest a prompt](/specdeck/guide/follow/#suggest-a-prompt) for the agent. Suggestions are on when an agent session starts; a terminal session has none, because every line typed into a shell runs. Nothing a viewer suggests reaches the agent until you send it.
 
-When a suggestion arrives, SpecDeck tells you who suggests a prompt, without taking the focus from your terminal, and the **Prompts** tab next to **Timeline** shows how many are waiting. Open it to see them, oldest first, each with who suggested it:
+When a suggestion arrives, SpecDeck tells you who suggests a prompt, without taking the focus from your terminal, and the **Prompts** tab next to **Timeline** shows how many are waiting. Open it to see them under **Waiting for you**, oldest first, each with who suggested it:
 
 - **Send** types the text into the agent's prompt, after anything you already typed there, and submits it, as if you typed it yourself. A suggestion of several lines is one prompt.
 - **Edit** lets you change the text first; then **Send** it, or **Cancel**.
+- **Keep for later** sends nothing yet and moves it to **Kept for later**. From there you can send it, edit it first, or **Remove** it. A kept suggestion stays kept; it does not go back to waiting.
 - **Decline** sends nothing.
 
-The viewer who suggested it sees what you did: sent, edited and sent, or declined. Other viewers never see a suggestion. Answered suggestions stay under **Answered**.
+The viewer who suggested it sees what you did: sent, edited and sent, kept for later, or declined; a suggestion you remove shows as declined. Other viewers never see a suggestion while it waits or is kept. Once you send it, everyone's timeline shows the prompt as *suggested by* its author, with *edited* when you changed it. Answered suggestions stay under **Handled**.
 
-Suggestions wait for you while the session's window is closed, and they last until the session ends. When you turn suggestions off, or remove a viewer, the suggestions already waiting stay, and you can still send or decline them. Each viewer can send three at once and then one every 10 seconds; SpecDeck asks them to wait beyond that.
+Waiting and kept suggestions stay while the session's window is closed, and are gone when the session ends; they are never written to disk. When you turn suggestions off, or remove a viewer, the suggestions waiting or kept stay, and you can still answer them. Each viewer can send three at once and then one every 10 seconds; SpecDeck asks them to wait beyond that.
 
 :::caution[Read a suggestion before you send it]
 A suggestion can contain anything, including instructions you would not give the agent yourself. Sending it is the same as typing it.

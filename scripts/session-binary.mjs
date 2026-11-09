@@ -13,7 +13,22 @@ const target = process.env.TAURI_ENV_TARGET_TRIPLE || host;
 const debug = process.env.TAURI_ENV_DEBUG === 'true';
 const profile = debug ? 'debug' : 'release';
 
-const args = ['build', '-p', 'specdeck-session', '--locked'];
+// With the app selected too and Tauri's feature, so Cargo resolves the features `tauri build` does
+// next: built for specdeck-session alone, tokio, rustls and with them the vendored libdatachannel
+// and OpenSSL came out different and were compiled twice per installer build (8 to 12 minutes on
+// Windows). --bin still builds only the session binary.
+const args = [
+  'build',
+  '-p',
+  'specdeck-app',
+  '-p',
+  'specdeck-session',
+  '--bin',
+  'specdeck-session',
+  '--features',
+  'tauri/custom-protocol',
+  '--locked',
+];
 if (!debug) args.push('--release');
 // Built where the app is, so the dependencies compile once: like `tauri build`, with --target only
 // for another platform, unless the app is built with --target anyway (SESSION_BINARY_TARGET=1, as

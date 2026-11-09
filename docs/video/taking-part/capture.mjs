@@ -36,6 +36,7 @@ await box('inbox.list', waiting);
 await box('inbox.actions', waiting.locator('.suggest-actions').first());
 await box('inbox.send', waiting.getByRole('button', { name: 'Send' }).first());
 await box('inbox.edit', waiting.getByRole('button', { name: 'Edit' }).first());
+await box('inbox.keep', waiting.getByRole('button', { name: 'Keep for later' }).first());
 await box('inbox.decline', waiting.getByRole('button', { name: 'Decline' }).first());
 await shot('inbox');
 
