@@ -5,3 +5,7 @@ packages:
 minimumReleaseAge: 1440
 allowBuilds:
   esbuild: true
+# eslint 10 and typescript-eslint 8 still ask for minimatch 10, which has a denial of service through
+# glob patterns (GHSA-g3hv-75wg-m249, fixed in 11.0.1). Its API is the same in 11; drop this once they move.
+overrides:
+  minimatch: ^11.0.1
