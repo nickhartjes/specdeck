@@ -57,6 +57,21 @@ A sharing service that serves the web viewer SHALL state, in its description of 
 - **WHEN** a host's app reads `/web-viewer.json` from a service of a newer or older release, with or without a version
 - **THEN** the app finds the web viewer and its protocol as before
 
+### Requirement: The join page shows the service's release
+The web viewer's join page SHALL show the release of the sharing service that serves it, as the service states it, as small secondary text below the join form. When the service states no release, the page SHALL show no release text, and joining SHALL NOT wait for the version.
+
+#### Scenario: Service states its release
+- **WHEN** a browser opens the join page of a service that runs release 1.7.0
+- **THEN** the page shows "SpecDeck 1.7.0" below the join form
+
+#### Scenario: Service without a version
+- **WHEN** a browser opens the join page of a service that states no release, or the request for it fails
+- **THEN** the page shows no release text, and the form works as before
+
+#### Scenario: Joining right away
+- **WHEN** a viewer submits the form before the version has arrived
+- **THEN** they join without waiting for it
+
 ### Requirement: Only the page's own service
 The web viewer SHALL join only sessions on the sharing service that served it, and SHALL refuse a join link that names another service, pointing the viewer to that service's own page instead.
 
