@@ -30,7 +30,7 @@ They do see:
 - the messages that set up each connection, which list the addresses each app can be reached at, including local network addresses from the app;
 - that a session exists, and how many people join it.
 
-The relay also logs each connection it relays, with both ends' addresses.
+The server logs when rooms open and close, viewers joining, leaving or being turned away, and its limits, without room ids, codes or addresses (see [Logs](/specdeck/self-host/configuration/#logs)). The relay logs each connection it relays, with both ends' addresses.
 
 That is why SpecDeck asks before it joins through a service other than your own (see [Through another sharing service](/specdeck/guide/join/#through-another-sharing-service)).
 

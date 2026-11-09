@@ -8,6 +8,7 @@
 //! The log never stops a session: when the folder cannot be written, events stay in memory only
 //! and the panel says so.
 
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::Write;
@@ -29,6 +30,12 @@ use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Registry, reload};
+
+use crate::limit::Limit;
+pub use crate::panic::install_panic_hook;
+
+mod limit;
+mod panic;
 
 /// The app's log files are `specdeck.log.<yyyy-mm-dd>`, one per day (UTC).
 pub const APP_LOG: &str = "specdeck.log";
@@ -60,7 +67,7 @@ pub const SWEEP_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// The log: its in-memory events, its folder, and the Verbose switch.
 pub struct Diagnostics {
     filter: reload::Handle<Targets, Registry>,
-    recent: Arc<Mutex<VecDeque<Value>>>,
+    sink: Arc<Sink>,
     dir: PathBuf,
     /// Why the log file cannot be written, if it cannot.
     file_error: Option<String>,
@@ -109,13 +116,20 @@ impl Diagnostics {
             }
             Err(error) => (None, None, Some(error)),
         };
-        let recent = Arc::new(Mutex::new(VecDeque::with_capacity(RECENT)));
+        let file = writer.is_some().then(|| (dir.clone(), prefix.to_owned()));
+        let sink = Arc::new(Sink {
+            recent: Mutex::new(VecDeque::with_capacity(RECENT)),
+            writer,
+            file,
+            process,
+            limit: Mutex::default(),
+        });
         let (filter, handle) = reload::Layer::new(targets(false));
-        let lines = JsonLines { recent: recent.clone(), writer, process };
+        let lines = JsonLines(sink.clone());
         let subscriber = tracing_subscriber::registry().with(filter).with(lines);
         let diagnostics = Self {
             filter: handle,
-            recent,
+            sink,
             dir,
             file_error,
             verbose: AtomicBool::new(false),
@@ -207,6 +221,7 @@ impl Diagnostics {
     /// Saves `header` as the first line of `path`, then the log lines of the last
     /// [`KEEP_DAYS`] days, oldest first. Errors say what failed without the path.
     pub fn export(&self, path: &Path, header: &ExportHeader) -> Result<(), String> {
+        self.tick();
         let failed = |_| "The diagnostics could not be saved there.".to_owned();
         let file = std::fs::File::create(path).map_err(failed)?;
         let mut out = std::io::BufWriter::new(file);
@@ -226,7 +241,13 @@ impl Diagnostics {
 
     /// The latest events, newest first.
     pub fn recent(&self) -> Vec<Value> {
-        self.recent.lock().unwrap().iter().rev().cloned().collect()
+        lock(&self.sink.recent).iter().rev().cloned().collect()
+    }
+
+    /// Records how many events the flood limit left out in each minute that is over; called
+    /// once a second.
+    pub fn tick(&self) {
+        self.sink.suppressed(Instant::now());
     }
 }
 
@@ -247,41 +268,145 @@ fn open_folder(dir: &Path, prefix: &str) -> Result<RollingFileAppender, String> 
         .map_err(|_| "CannotOpenFile".to_owned())
 }
 
-/// Writes each event as one JSON line, `{"ts":…,"level":…,"event":…, fields…}`, to the file
-/// and to the in-memory list.
-struct JsonLines {
-    recent: Arc<Mutex<VecDeque<Value>>>,
+/// Where the lines go: the file and the in-memory list, past the flood limit.
+struct Sink {
+    recent: Mutex<VecDeque<Value>>,
     writer: Option<NonBlocking>,
+    /// The folder and file prefix, to write a crash's line straight to today's file.
+    file: Option<(PathBuf, String)>,
     /// Which session process writes, if not the app.
     process: Option<String>,
+    limit: Mutex<Limit>,
 }
 
-impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for JsonLines {
-    fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
-        let mut fields = Fields(Map::new());
-        event.record(&mut fields);
+impl Sink {
+    /// A new line for `event` at `level`, with its time and process.
+    fn line(&self, level: &Level, event: Value) -> Map<String, Value> {
         let mut line = Map::new();
         let now = OffsetDateTime::now_utc();
         line.insert("ts".into(), now.format(&Rfc3339).unwrap_or_default().into());
-        line.insert("level".into(), event.metadata().level().as_str().into());
-        line.insert("event".into(), fields.0.remove("message").unwrap_or_default());
+        line.insert("level".into(), level.as_str().into());
+        line.insert("event".into(), event);
         if let Some(process) = &self.process {
             line.insert("process".into(), process.clone().into());
         }
-        line.extend(fields.0);
+        line
+    }
+
+    /// Writes `line` to the file and keeps it for the panel.
+    fn write(&self, line: Map<String, Value>, how: Delivery) {
         let line = Value::Object(line);
-        if let Some(writer) = &self.writer {
-            let mut text = line.to_string();
-            text.push('\n');
-            // Never blocks: the writer drops lines when its queue is full.
-            let _ = writer.clone().write_all(text.as_bytes());
+        let mut text = line.to_string();
+        text.push('\n');
+        if how == Delivery::Queued {
+            if let Some(writer) = &self.writer {
+                // Never blocks: the writer drops lines when its queue is full.
+                let _ = writer.clone().write_all(text.as_bytes());
+            }
+        } else {
+            self.append(text.as_bytes());
         }
-        let mut recent = self.recent.lock().unwrap();
+        let mut recent = lock(&self.recent);
         if recent.len() == RECENT {
             recent.pop_front();
         }
         recent.push_back(line);
     }
+
+    /// Appends to today's file at once, past the writer's queue, so that the line is there even
+    /// when the process ends right after. The file is the one the queue writes to; one short
+    /// append does not interleave with its writes.
+    fn append(&self, text: &[u8]) {
+        let Some((dir, prefix)) = &self.file else { return };
+        let today = OffsetDateTime::now_utc().date();
+        let path = dir.join(format!("{prefix}.{today}"));
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = file.write_all(text);
+        }
+    }
+
+    /// Records each minute that is over with events left out.
+    fn suppressed(&self, now: Instant) {
+        let ended = lock(&self.limit).ended(now);
+        for (name, count) in ended {
+            self.write(suppressed(self, &name, count), Delivery::Now);
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    /// Through the writer's queue, which never blocks.
+    Queued,
+    /// Straight to today's file, for lines that are rare and must be there at once: a crash,
+    /// as the process may end next, and a count an export that follows must hold.
+    Now,
+}
+
+/// `log.suppressed`: how many of event `name` the flood limit left out in a minute.
+fn suppressed(sink: &Sink, name: &str, count: u64) -> Map<String, Value> {
+    let mut line = sink.line(&Level::WARN, "log.suppressed".into());
+    line.insert("name".into(), name.into());
+    line.insert("count".into(), count.into());
+    line
+}
+
+/// Writes each event as one JSON line, `{"ts":…,"level":…,"event":…, fields…}`, to the file
+/// and to the in-memory list. A crash's line (`*.panicked`) goes straight to the file; the
+/// flood limit applies to it too, so a task that panics in a loop is cut off as well.
+struct JsonLines(Arc<Sink>);
+
+thread_local! {
+    /// Whether this thread is inside [`JsonLines::on_event`], holding its locks.
+    static WRITING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Marks this thread as writing until dropped, also when a panic unwinds past it.
+struct Writing;
+
+impl Drop for Writing {
+    fn drop(&mut self) {
+        WRITING.set(false);
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for JsonLines {
+    fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+        let sink = &self.0;
+        let mut fields = Fields(Map::new());
+        event.record(&mut fields);
+        let name = fields.0.remove("message").unwrap_or_default();
+        let level = event.metadata().level();
+        // A panic in here comes back through the panic hook while this thread holds a lock:
+        // its line goes straight to the file and takes none.
+        if WRITING.replace(true) {
+            let mut line = sink.line(level, name);
+            line.extend(fields.0);
+            sink.append(format!("{}\n", Value::Object(line)).as_bytes());
+            return;
+        }
+        let _writing = Writing;
+        let panicked = name.as_str().is_some_and(|name| name.ends_with(".panicked"));
+        // Verbose traffic is already summed once a second.
+        if *level != Level::DEBUG {
+            let name = name.as_str().unwrap_or_default();
+            let (admitted, left_out) = lock(&sink.limit).admit(name, Instant::now());
+            if let Some(count) = left_out {
+                sink.write(suppressed(sink, name, count), Delivery::Now);
+            }
+            if !admitted {
+                return;
+            }
+        }
+        let mut line = sink.line(level, name);
+        line.extend(fields.0);
+        sink.write(line, if panicked { Delivery::Now } else { Delivery::Queued });
+    }
+}
+
+/// The lock, also after a panic while it was held: the log goes on.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 struct Fields(Map<String, Value>);
@@ -724,13 +849,152 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
         tracing::subscriber::with_default(subscriber, || {
+            // Debug events, which the flood limit lets through.
+            diagnostics.set_verbose(true);
             for i in 0..(RECENT as u64 + 10) {
-                tracing::info!(target: "specdeck_core::diag", i, "viewer.resend");
+                tracing::debug!(target: "specdeck_core::diag", i, "host.traffic");
             }
         });
         let recent = diagnostics.recent();
         assert_eq!(recent.len(), RECENT);
         assert_eq!(recent[0]["i"], RECENT as u64 + 9);
+    }
+
+    #[test]
+    fn a_failure_loop_is_cut_off_and_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
+        tracing::subscriber::with_default(subscriber, || {
+            for _ in 0..500 {
+                tracing::warn!(target: "specdeck_core::diag", "peer.send_failed");
+            }
+            tracing::info!(target: "specdeck_core::diag", "signalling.connected");
+        });
+        let count =
+            |name: &str| diagnostics.recent().iter().filter(|event| event["event"] == name).count();
+        assert_eq!(count("peer.send_failed"), limit::PER_MINUTE as usize);
+        assert_eq!(count("signalling.connected"), 1, "other events are recorded as usual");
+
+        diagnostics.tick();
+        assert_eq!(count("log.suppressed"), 0, "the minute is not over yet");
+        diagnostics.sink.suppressed(Instant::now() + Duration::from_secs(60));
+        let recent = diagnostics.recent();
+        assert_eq!(recent[0]["event"], "log.suppressed");
+        assert_eq!(recent[0]["name"], "peer.send_failed");
+        assert_eq!(recent[0]["count"], 500 - limit::PER_MINUTE);
+
+        drop(diagnostics); // flushes the file
+        let text = std::fs::read_to_string(&log_files(dir.path())[0].path).unwrap();
+        assert_eq!(text.lines().count(), limit::PER_MINUTE as usize + 2);
+    }
+
+    static HOOK: std::sync::Once = std::sync::Once::new();
+
+    #[test]
+    fn crashes_at_once_on_many_threads_are_limited_too() {
+        HOOK.call_once(|| install_panic_hook("test.panicked"));
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let threads: Vec<_> = (0..40)
+            .map(|_| {
+                let dispatch = dispatch.clone();
+                std::thread::spawn(move || {
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        let _ = std::panic::catch_unwind(|| panic!("loop"));
+                    })
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let crashes =
+            diagnostics.recent().iter().filter(|event| event["event"] == "test.panicked").count();
+        assert_eq!(crashes, limit::PER_MINUTE as usize);
+    }
+
+    #[test]
+    fn a_crash_reaches_the_file_at_once_without_its_message() {
+        HOOK.call_once(|| install_panic_hook("test.panicked"));
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
+        let worker = std::thread::Builder::new().name("crash-worker".into());
+        worker
+            .spawn(move || {
+                tracing::subscriber::with_default(subscriber, || {
+                    let crashed = std::panic::catch_unwind(|| {
+                        panic!("Marker-Panic-Text in /Users/marker-user/secret.rs")
+                    });
+                    assert!(crashed.is_err());
+                    // The log goes on after a panic the process survives.
+                    tracing::info!(target: "specdeck_core::diag", "signalling.connected");
+                });
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+
+        // Read before the writer is flushed: the crash's line is already there.
+        let text = std::fs::read_to_string(&log_files(dir.path())[0].path).unwrap();
+        assert!(!text.contains("arker"), "{text}");
+        let crash: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(crash["event"], "test.panicked");
+        assert_eq!(crash["level"], "ERROR");
+        assert_eq!(crash["kind"], "other");
+        assert_eq!(crash["thread"], "crash-worker");
+        assert!(crash["location"].as_str().unwrap().starts_with("crates/diag/src/lib.rs:"));
+
+        let names: Vec<_> =
+            diagnostics.recent().iter().map(|e| e["event"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(names, ["signalling.connected", "test.panicked"]);
+        drop(diagnostics);
+        let text = std::fs::read_to_string(&log_files(dir.path())[0].path).unwrap();
+        assert_eq!(text.lines().count(), 2, "the crash is written once");
+    }
+
+    #[test]
+    fn verbose_traffic_is_not_limited() {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
+        diagnostics.set_verbose(true);
+        tracing::subscriber::with_default(subscriber, || {
+            for _ in 0..120 {
+                tracing::debug!(target: "specdeck_core::diag", "host.traffic");
+            }
+        });
+        assert_eq!(diagnostics.recent().len(), 120);
+    }
+
+    #[test]
+    fn an_export_includes_a_pending_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        let (diagnostics, subscriber) = Diagnostics::new(logs, APP_LOG);
+        tracing::subscriber::with_default(subscriber, || {
+            for _ in 0..40 {
+                tracing::warn!(target: "specdeck_core::diag", "peer.send_failed");
+            }
+        });
+        // As if the minute had passed: the window started long ago.
+        for window in diagnostics.sink.limit.lock().unwrap().windows_mut() {
+            window.start -= Duration::from_secs(60);
+        }
+        let header = ExportHeader::new(
+            diagnostics.status("main", SessionStatus::None),
+            "wss://default",
+            "wss://default",
+        );
+        let out = dir.path().join("export.jsonl");
+        diagnostics.export(&out, &header).unwrap();
+        drop(diagnostics);
+        let recent: Vec<Value> = std::fs::read_to_string(&out)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let suppressed = recent.iter().find(|line| line["event"] == "log.suppressed");
+        assert_eq!(suppressed.expect("a count in the export")["count"], 10);
     }
 
     #[test]

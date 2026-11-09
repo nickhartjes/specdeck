@@ -24,6 +24,22 @@ pub enum LaunchError {
     Pty(String),
 }
 
+impl LaunchError {
+    /// Why, as the log records it: a fixed reason and the missing prerequisite's id, never the
+    /// error's text, which can hold the folder's path.
+    pub fn reason(&self) -> (&'static str, Option<&'static str>) {
+        match self {
+            LaunchError::NotInstalled(_) => ("not_installed", None),
+            LaunchError::NoShell => ("no_shell", None),
+            LaunchError::MissingPrerequisite { prerequisite, .. } => {
+                ("missing_prerequisite", Some(prerequisite.id()))
+            }
+            LaunchError::FolderMissing(_) => ("folder_missing", None),
+            LaunchError::Pty(_) => ("pty", None),
+        }
+    }
+}
+
 /// What to start and where.
 #[derive(Clone, Debug)]
 pub struct LaunchOptions {
@@ -226,6 +242,19 @@ mod tests {
             error.to_string(),
             "Claude Code is not installed. Install it and log in, then start the session again."
         );
+    }
+
+    #[test]
+    fn reasons_hold_no_text() {
+        let missing = LaunchError::FolderMissing("/Users/Marker/gone".into());
+        assert_eq!(missing.reason(), ("folder_missing", None));
+        assert_eq!(LaunchError::Pty("Marker".into()).reason(), ("pty", None));
+        let prerequisite = LaunchError::MissingPrerequisite {
+            agent: AgentId::ClaudeCode,
+            prerequisite: Prerequisite::GitBash,
+        };
+        assert_eq!(prerequisite.reason(), ("missing_prerequisite", Some("git_bash")));
+        assert_eq!(LaunchError::NotInstalled(AgentId::Codex).reason(), ("not_installed", None));
     }
 
     #[test]

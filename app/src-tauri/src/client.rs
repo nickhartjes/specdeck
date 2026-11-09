@@ -83,6 +83,8 @@ struct ClientState {
     answers: HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>>,
     next_answer: u64,
     over: bool,
+    /// The session's start failed, so its process ends without saying the session ended.
+    start_failed: bool,
     /// The session's links, as they passed to the window.
     links: LinkBook,
 }
@@ -364,9 +366,10 @@ impl SessionClient {
     }
 }
 
-/// Connects to the session process at `endpoint`.
+/// Connects to session `id`'s process at `endpoint`.
 /// `browser` runs the session's browser actions (`agent-browser`); without one they fail.
 pub async fn connect(
+    id: SessionId,
     endpoint: &str,
     agent: AgentId,
     observer: Observer,
@@ -402,10 +405,15 @@ pub async fn connect(
     let read_state = state.clone();
     let answers = outgoing.clone();
     tokio::spawn(async move {
+        let mut said_ended = false;
         while let Ok(Some(frame)) = reader.recv().await {
             if !receive(peer, frame, &read_state, &observer, &browser, &answers) {
+                said_ended = true;
                 break;
             }
+        }
+        if !said_ended && !read_state.lock().unwrap().start_failed {
+            tracing::warn!(session = id, "session.lost");
         }
         // Ended, or the process went away: either way the session is over for this app.
         let waiting = {
@@ -470,7 +478,11 @@ fn receive(
             }
         }
         Event::Failed { message } => {
-            let started = state.lock().unwrap().started.take();
+            let started = {
+                let mut state = state.lock().unwrap();
+                state.start_failed |= state.started.is_some();
+                state.started.take()
+            };
             match started {
                 Some(started) => drop(started.send(Err(message))),
                 None => tracing::warn!("session.command_failed"),
@@ -571,7 +583,7 @@ pub async fn launch(
         }
     }
     let browser = launch.browser.is_some();
-    let client = connect(&endpoint, launch.agent, observer, launch.browser, on_ended)
+    let client = connect(id, &endpoint, launch.agent, observer, launch.browser, on_ended)
         .await
         .map_err(failed)?;
     client
@@ -754,6 +766,74 @@ pub fn remove_entry(run_dir: &Path, entry: &RunEntry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Connects to a fake session process that says hello, then sends `last` (if any) and
+    /// closes; returns the app's log once the client saw the session end. With `starting`, the
+    /// app waits for a start first, and `last` answers it.
+    #[cfg(unix)]
+    async fn session_ends(last: Option<Event>, starting: bool) -> Vec<serde_json::Value> {
+        let dir = tempfile::tempdir().unwrap();
+        let run = dir.path().join("run");
+        specdeck_local::make_private_dir(&run).unwrap();
+        let socket = run.join("4.sock");
+        let listener = specdeck_local::Listener::bind(&socket).unwrap();
+        let process = tokio::spawn(async move {
+            let mut connection = listener.accept().await.unwrap();
+            connection.reader.recv().await.unwrap();
+            let hello = Frozen::Hello { protocol: Protocol::own(), release: "test".into() };
+            connection.writer.send(&Frame::control(&hello).unwrap()).await.unwrap();
+            if starting {
+                connection.reader.recv().await.unwrap();
+            }
+            if let Some(last) = last {
+                connection.writer.send(&Frame::control(&last).unwrap()).await.unwrap();
+            }
+        });
+
+        let (diagnostics, subscriber) =
+            specdeck_diag::Diagnostics::new(dir.path().join("logs"), specdeck_diag::APP_LOG);
+        let _default = tracing::subscriber::set_default(subscriber);
+        let (ended, gone) = oneshot::channel();
+        let on_ended: OnEnded = Box::new(move || {
+            let _ = ended.send(());
+        });
+        let endpoint = socket.to_str().unwrap();
+        let client = connect(4, endpoint, AgentId::Terminal, Arc::new(|_| {}), None, on_ended)
+            .await
+            .unwrap();
+        if starting {
+            client.state.lock().unwrap().started = Some(oneshot::channel().0);
+            client.send(&Command::End);
+        }
+        process.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), gone).await.unwrap().unwrap();
+        diagnostics.recent()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_process_that_goes_away_is_lost() {
+        let events = session_ends(None, false).await;
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0]["event"], "session.lost");
+        assert_eq!(events[0]["session"], 4);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_that_ended_is_not_lost() {
+        let events = session_ends(Some(Event::Ended), false).await;
+        assert!(events.is_empty(), "{events:?}");
+    }
+
+    /// Found by hand: a start in a folder that is gone ends the process without `Ended`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_that_failed_to_start_is_not_lost() {
+        let failed = Event::Failed { message: "The folder does not exist.".into() };
+        let events = session_ends(Some(failed), true).await;
+        assert!(events.is_empty(), "{events:?}");
+    }
 
     #[test]
     fn run_entries_are_read_with_their_numbers() {

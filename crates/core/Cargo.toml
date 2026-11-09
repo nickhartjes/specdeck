@@ -36,5 +36,7 @@ libc = "0.2"
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
 specdeck-server = { path = "../server" }
+# The panic hook, for the leak test; a dev-only cycle, which Cargo allows.
+specdeck-diag.workspace = true
 env_logger = "0.11"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }

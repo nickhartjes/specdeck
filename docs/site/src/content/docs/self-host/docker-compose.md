@@ -80,8 +80,18 @@ Check that the service answers:
 
 ```sh
 curl https://specdeck.example.com/health   # prints: ok
-docker compose logs -f                      # follow the logs
+docker compose logs -f server               # follow the server's log
 ```
+
+The server logs one line per event, such as a viewer joining or a wrong code:
+
+```text
+2026-11-09T10:00:00.123456Z  INFO room.opened room=1 rooms_open=1
+2026-11-09T10:00:41.004812Z  INFO peer.joined room=1 peer=1 viewers_on_host=1
+2026-11-09T10:02:13.551230Z  INFO peer.refused reason=unknown_room
+```
+
+`SPECDECK_LOG_LEVEL` in `compose.yaml` sets how much it logs. See [Logs](/specdeck/self-host/configuration/#logs) for every event and what is never logged.
 
 Then [connect the apps](/specdeck/self-host/connect-apps/).
 

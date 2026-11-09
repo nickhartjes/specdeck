@@ -1719,7 +1719,7 @@ async fn find_sessions(app: &AppHandle) -> Vec<SessionId> {
         let runner = browser::runner(app, id);
         let found = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            client::connect(&entry.endpoint, entry.agent, observer, runner, on_ended),
+            client::connect(id, &entry.endpoint, entry.agent, observer, runner, on_ended),
         )
         .await;
         let Ok(Ok(client)) = found else {
@@ -2438,6 +2438,7 @@ pub fn run() {
             let log_dir = profile_dir(app.path().app_log_dir()?);
             let (diagnostics, subscriber) = Diagnostics::new(log_dir.clone(), diagnostics::APP_LOG);
             let _ = tracing::subscriber::set_global_default(subscriber);
+            diagnostics::install_panic_hook("app.panicked");
             let swept = log_dir.clone();
             std::thread::spawn(move || {
                 loop {
@@ -2488,12 +2489,15 @@ pub fn run() {
             if updates.state() != UpdateState::Disabled {
                 start_update_checks(app.handle(), updates);
             }
-            // Notices a window that stopped beating: its own thread cannot say so.
+            // Notices a window that stopped beating: its own thread cannot say so. Also records
+            // what the flood limit left out.
             let watched = app.handle().clone();
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
-                    watched.state::<AppState>().diagnostics.check_windows();
+                    let diagnostics = &watched.state::<AppState>().diagnostics;
+                    diagnostics.check_windows();
+                    diagnostics.tick();
                 }
             });
             // Hosted sessions that outlived the last run get their windows back; without any,

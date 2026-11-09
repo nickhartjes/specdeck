@@ -44,6 +44,8 @@ Set in the ConfigMap `specdeck-network` ([`base/kustomization.yaml`](base/kustom
 
 The server reads its settings from the environment (see [`crates/server/src/main.rs`](../../crates/server/src/main.rs)). In `base`, `SPECDECK_TRUSTED_PROXIES` is `1` because the service runs behind the cluster's ingress: the client's address for rate limiting is then taken from `X-Forwarded-For`. Set it to the number of proxies in front of the service.
 
+The server logs JSON lines at `info` (`SPECDECK_LOG_FORMAT=json`, `SPECDECK_LOG_LEVEL=info`), so a log collector can read their fields; `kubectl logs deploy/specdeck-server` shows them. Set `SPECDECK_LOG_FORMAT` to `plain` for text lines, or the level to `warn` for limits and errors only. The log never holds room ids, codes or client addresses; see [Logs](https://nickhartjes.github.io/specdeck/self-host/configuration/#logs).
+
 ## Ports
 
 | Service | Port | Exposure |

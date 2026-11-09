@@ -68,6 +68,17 @@ If the window stops responding, so the panel does not open, choose **Help › Ex
 
 The web viewer keeps its own diagnostic log for as long as the tab is open, also across a reload, and forgets it when you close the tab. Choose **Export diagnostics…** in the layout menu while watching, or below the message when a session ended or a join failed. The browser downloads a file in the same format, with your browser, its version and your operating system's family in place of the app's version and system. It holds the same kind of events and never more.
 
+### What else the log records
+
+Besides the connections, the log records what goes wrong around the agent:
+
+- **Crashes**: when SpecDeck or a session it hosts crashes, the thread and the place in SpecDeck's code where it happened, and a fixed kind of crash. Never the crash's message.
+- **The agent**: how SpecDeck found your environment (your login shell or its own) and how many entries `PATH` has, which agent started or why it could not (such as not installed, or the folder is gone), and the exit code when it stops. A session that stops without saying goodbye is recorded too.
+- **Claude Code's hooks and the timeline**: when the hook server starts and stops, and per minute how many of Claude Code's messages the timeline could not place, by event and tool name. Tools from MCP servers count as `mcp`, without the server's name. Screenshots left out of the timeline, and changes of shell commands that could not be tracked, with the step that failed.
+- **Updates**: each check, and why a check or download failed (offline, an HTTP error, a signature that does not match, or other), with the versions.
+
+None of these hold error messages, environment variables, prompts, file contents or paths. When the same thing goes wrong more than 30 times a minute, the log keeps the first 30 and then says how many it left out.
+
 ### The log
 
 SpecDeck keeps this log all the time, a few lines a minute: `specdeck.log.<date>` for the app, and `specdeck-session-<number>.log.<date>` for each session you host, which [runs on its own](/specdeck/guide/host/#when-specdeck-restarts-or-stops). Files older than 7 days are removed, and the oldest go first when the logs together pass 50 MB. Only your user account can read the folder:

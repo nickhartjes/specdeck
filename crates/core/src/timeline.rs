@@ -23,7 +23,44 @@ use crate::shell_changes::CommandChanges;
 pub struct HookPayloadError {
     pub event: String,
     pub reason: String,
+    /// The payload's tool, if it names one.
+    pub tool: Option<String>,
+    pub fault: PayloadFault,
 }
+
+/// Why the timeline could not place a payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PayloadFault {
+    /// A hook event [`Payload`] does not know, as when Claude Code renames one.
+    UnknownEvent,
+    /// A known event whose fields are not as expected.
+    BadShape,
+}
+
+impl PayloadFault {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PayloadFault::UnknownEvent => "unknown_event",
+            PayloadFault::BadShape => "bad_shape",
+        }
+    }
+}
+
+/// The hook events [`Payload`] knows; a test keeps the two in step.
+const KNOWN_EVENTS: [&str; 12] = [
+    "UserPromptSubmit",
+    "MessageDisplay",
+    "Stop",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "SessionEnd",
+    "Notification",
+    "SubagentStop",
+    "PermissionRequest",
+    "PreCompact",
+    "PostCompact",
+];
 
 #[derive(Deserialize)]
 #[serde(tag = "hook_event_name")]
@@ -214,8 +251,18 @@ impl TimelineBuilder {
     pub fn handle(&mut self, raw: HookPayload) -> Result<Vec<Entry>, HookPayloadError> {
         let event =
             raw.get("hook_event_name").and_then(Value::as_str).unwrap_or("unknown").to_owned();
-        let payload: Payload = serde_json::from_value(Value::Object(raw))
-            .map_err(|e| HookPayloadError { event, reason: e.to_string() })?;
+        let tool = raw.get("tool_name").and_then(Value::as_str).map(str::to_owned);
+        let payload: Payload =
+            serde_json::from_value(Value::Object(raw)).map_err(|e| HookPayloadError {
+                fault: if KNOWN_EVENTS.contains(&event.as_str()) {
+                    PayloadFault::BadShape
+                } else {
+                    PayloadFault::UnknownEvent
+                },
+                event,
+                reason: e.to_string(),
+                tool,
+            })?;
 
         Ok(match payload {
             Payload::UserPromptSubmit { prompt_id, prompt } => {
@@ -1685,5 +1732,34 @@ mod tests {
         assert_eq!(compact("PostCompact", "manual"), Some(false));
         assert_eq!(compact("PreCompact", "auto"), None);
         assert_eq!(compact("Stop", "manual"), None);
+    }
+
+    /// Serde names the variants it expects when it meets an unknown one: they must be exactly
+    /// [`KNOWN_EVENTS`].
+    #[test]
+    fn known_events_are_the_payload_variants() {
+        let payload = serde_json::json!({ "hook_event_name": "Renamed" });
+        let error = serde_json::from_value::<Payload>(payload).err().unwrap().to_string();
+        let expected = error.split("expected one of ").nth(1).unwrap();
+        let mut variants: Vec<&str> =
+            expected.split(", ").map(|name| name.trim_matches(|c| c == '`' || c == ' ')).collect();
+        let mut known = KNOWN_EVENTS.to_vec();
+        variants.sort();
+        known.sort();
+        assert_eq!(variants, known);
+    }
+
+    #[test]
+    fn payloads_that_cannot_be_placed_say_why() {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        let renamed = payload(serde_json::json!({ "hook_event_name": "PromptSent", "x": 1 }));
+        let error = builder.handle(renamed).unwrap_err();
+        assert_eq!(error.fault, PayloadFault::UnknownEvent);
+        assert_eq!(error.event, "PromptSent");
+        let mut odd = call("PreToolUse", "Read", "r", serde_json::json!({}));
+        odd.remove("prompt_id");
+        let error = builder.handle(odd).unwrap_err();
+        assert_eq!(error.fault, PayloadFault::BadShape);
+        assert_eq!(error.tool.as_deref(), Some("Read"));
     }
 }
