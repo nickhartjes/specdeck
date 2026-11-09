@@ -4,6 +4,9 @@
     "config:recommended"
   ],
   "minimumReleaseAge": "1 day",
+  "description": "Updates once a week, also rebases: every push to a Renovate branch runs CI on three platforms and the Nix build. Security updates still come at once.",
+  "schedule": ["before 6am on monday"],
+  "updateNotScheduled": false,
   "lockFileMaintenance": {
     "description": "Indirect dependencies in Cargo.lock and pnpm-lock.yaml, which no other update touches",
     "enabled": true,
@@ -24,6 +27,12 @@
       "matchManagers": ["github-actions"],
       "matchDatasources": ["github-tags"],
       "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Minor and patch updates of the npm packages in one pull request, so one CI run covers them",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm non-major"
     }
   ]
 }
