@@ -7,7 +7,7 @@ name: Nix
 # of ci.yml already fill most of the 10 GB. Saved from main only, like those: pull requests restore
 # main's. A change to Cargo.lock, flake.lock or nix/ still builds everything once, so pull requests
 # run this only when they touch what the Nix build depends on beyond the code itself; every push to
-# main runs it.
+# main that changes more than documentation runs it.
 on:
   push:
     branches: [main]

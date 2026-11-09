@@ -97,7 +97,8 @@ let
     // {
       buildPhaseCargoCommand = ''
         cargoWithProfile build --locked --target ${target} -p specdeck-app --features tauri/custom-protocol
-        cargoWithProfile build --locked --target ${target} -p specdeck-session
+        cargoWithProfile build --locked --target ${target} -p specdeck-app -p specdeck-session \
+          --bin specdeck-session --features tauri/custom-protocol
       '';
     }
   );
