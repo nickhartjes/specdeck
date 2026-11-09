@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_notification::NotificationExt;
 
+use specdeck_session::runtime::HostNotice;
+
 use crate::sessions::SessionId;
+use crate::settings::HostNotificationKind;
 
 /// Notifications remembered for clicks; older ones fall back to the last session notified.
 const REMEMBERED: usize = 64;
@@ -34,6 +37,10 @@ pub enum NoticeOpen {
     Shared {
         file: u64,
     },
+    /// The question texts of the host's read request `ask` (`host-ask-notifications`).
+    Questions {
+        ask: u32,
+    },
 }
 
 impl NoticeOpen {
@@ -44,7 +51,7 @@ impl NoticeOpen {
             Self::PlanMode { tool_use_id } => {
                 !tool_use_id.is_empty() && tool_use_id.len() <= OPEN_ID_BYTES
             }
-            Self::Shared { .. } => true,
+            Self::Shared { .. } | Self::Questions { .. } => true,
         };
         fits.then_some(self)
     }
@@ -89,9 +96,75 @@ pub fn title(title: &str, name: Option<&str>, sessions: usize) -> String {
 }
 
 /// Most characters of a viewer notification's title and body; the window builds them from names
-/// of changes and files.
+/// of changes and files. The host's notifications about their asks use them too.
 const VIEWER_TITLE_CHARS: usize = 120;
 const VIEWER_BODY_CHARS: usize = 300;
+
+/// Most characters of an estimate's task in the host's notification.
+const TASK_CHARS: usize = 60;
+
+/// A notification about the answers to the host's asks (`host-ask-notifications` design
+/// decision 3).
+#[derive(Debug, PartialEq, Eq)]
+pub struct AskText {
+    pub kind: HostNotificationKind,
+    pub title: String,
+    pub body: String,
+    pub open: Option<NoticeOpen>,
+}
+
+/// What the host is told about `notice`, cut to the limits; None for notices of another kind.
+pub fn ask_text(notice: &HostNotice) -> Option<AskText> {
+    let (kind, title, body, open) = match notice {
+        HostNotice::Question { ask, name, text, label } => (
+            HostNotificationKind::Questions,
+            format!("{name} has a question"),
+            text.clone().unwrap_or_else(|| format!("About {label}.")),
+            Some(NoticeOpen::Questions { ask: *ask }),
+        ),
+        HostNotice::EveryoneRead { label, ready, questions } => {
+            let body = match (ready, questions) {
+                (ready, 0) if *ready > 1 => format!("All {ready} are ready."),
+                _ => counts(*ready, *questions, 0),
+            };
+            (HostNotificationKind::Read, format!("Everyone has read {label}"), body, None)
+        }
+        HostNotice::TimeUp { label, ready, questions, reading } => (
+            HostNotificationKind::Read,
+            format!("Time is up for {label}"),
+            counts(*ready, *questions, *reading),
+            None,
+        ),
+        HostNotice::EveryoneVoted { task, votes, host_missing } => {
+            let votes = if *votes == 1 { "1 vote".into() } else { format!("{votes} votes") };
+            let mut body =
+                format!("{votes} on “{}”. Reveal them when you're ready.", cut(task, TASK_CHARS));
+            if *host_missing {
+                body.push_str(" Your vote is still missing.");
+            }
+            (HostNotificationKind::Voted, "Everyone has voted".into(), body, None)
+        }
+        _ => return None,
+    };
+    let (title, body) = viewer_text(&title, &body);
+    Some(AskText { kind, title, body, open })
+}
+
+/// How many are ready, have a question and still read, leaving out the ones at 0.
+fn counts(ready: usize, questions: usize, reading: usize) -> String {
+    let questions = match questions {
+        0 => None,
+        1 => Some("1 has a question".to_owned()),
+        n => Some(format!("{n} have a question")),
+    };
+    let parts = [
+        (ready > 0).then(|| format!("{ready} ready")),
+        questions,
+        (reading > 0).then(|| format!("{reading} still reading")),
+    ];
+    let parts: Vec<String> = parts.into_iter().flatten().collect();
+    format!("{}.", parts.join(", "))
+}
 
 /// A viewer notification's title and body, cut to their limits.
 pub fn viewer_text(title: &str, body: &str) -> (String, String) {
@@ -164,6 +237,10 @@ mod tests {
             NoticeOpen::PlanMode { tool_use_id: "toolu_1".into() }
         );
         assert_eq!(read(r#"{"kind":"shared","file":7}"#).unwrap(), NoticeOpen::Shared { file: 7 });
+        assert_eq!(
+            serde_json::to_value(NoticeOpen::Questions { ask: 3 }).unwrap(),
+            serde_json::json!({ "kind": "questions", "ask": 3 })
+        );
         assert!(read(r#"{"kind":"shared","file":-1}"#).is_err());
         assert!(read(r#"{"kind":"terminal","path":"x"}"#).is_err());
         assert_eq!(
@@ -190,6 +267,86 @@ mod tests {
         assert_eq!(title.chars().count(), 121);
         assert!(title.ends_with('…'));
         assert_eq!(body.chars().count(), 301);
+    }
+
+    #[test]
+    fn a_click_finds_a_question() {
+        let mut notices = Notices::default();
+        let asked = notices.record(1, Some(NoticeOpen::Questions { ask: 3 }));
+        assert_eq!(notices.clicked(Some(asked)), Some((1, Some(NoticeOpen::Questions { ask: 3 }))));
+    }
+
+    fn text(notice: HostNotice) -> (HostNotificationKind, String, String) {
+        let text = ask_text(&notice).unwrap();
+        (text.kind, text.title, text.body)
+    }
+
+    #[test]
+    fn what_the_host_hears_about_a_question() {
+        let question = |text: Option<&str>| HostNotice::Question {
+            ask: 3,
+            name: "Anna".into(),
+            text: text.map(Into::into),
+            label: "design.md".into(),
+        };
+        let with = ask_text(&question(Some("Why not reuse the bucket?"))).unwrap();
+        assert_eq!(with.kind, HostNotificationKind::Questions);
+        assert_eq!(with.title, "Anna has a question");
+        assert_eq!(with.body, "Why not reuse the bucket?");
+        assert_eq!(with.open, Some(NoticeOpen::Questions { ask: 3 }));
+        assert_eq!(ask_text(&question(None)).unwrap().body, "About design.md.");
+        // A question of 280 characters fits; nothing longer is ever shown.
+        let long = ask_text(&question(Some(&"x".repeat(400)))).unwrap();
+        assert_eq!(long.body.chars().count(), VIEWER_BODY_CHARS + 1);
+        assert_eq!(ask_text(&HostNotice::ViewerJoined("Anna".into())), None);
+    }
+
+    #[test]
+    fn what_the_host_hears_when_everyone_has_read() {
+        let label = || "design.md".to_owned();
+        assert_eq!(
+            text(HostNotice::EveryoneRead { label: label(), ready: 4, questions: 1 }),
+            (
+                HostNotificationKind::Read,
+                "Everyone has read design.md".into(),
+                "4 ready, 1 has a question.".into()
+            )
+        );
+        let body = |ready, questions| {
+            text(HostNotice::EveryoneRead { label: label(), ready, questions }).2
+        };
+        assert_eq!(body(5, 0), "All 5 are ready.");
+        assert_eq!(body(1, 0), "1 ready.");
+        assert_eq!(body(0, 2), "2 have a question.");
+        assert_eq!(
+            text(HostNotice::TimeUp { label: label(), ready: 3, questions: 1, reading: 1 }),
+            (
+                HostNotificationKind::Read,
+                "Time is up for design.md".into(),
+                "3 ready, 1 has a question, 1 still reading.".into()
+            )
+        );
+    }
+
+    #[test]
+    fn what_the_host_hears_when_everyone_has_voted() {
+        let voted = |task: &str, votes, host_missing| {
+            text(HostNotice::EveryoneVoted { task: task.into(), votes, host_missing })
+        };
+        assert_eq!(
+            voted("Show unreachable", 4, false),
+            (
+                HostNotificationKind::Voted,
+                "Everyone has voted".into(),
+                "4 votes on “Show unreachable”. Reveal them when you're ready.".into()
+            )
+        );
+        assert_eq!(
+            voted("Show unreachable", 1, true).2,
+            "1 vote on “Show unreachable”. Reveal them when you're ready. Your vote is still missing."
+        );
+        let long = voted(&"t".repeat(300), 3, false).2;
+        assert!(long.starts_with(&format!("3 votes on “{}…”", "t".repeat(TASK_CHARS))));
     }
 
     #[test]

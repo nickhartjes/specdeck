@@ -1,0 +1,17 @@
+{
+  "cwd": "/workspace/project",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "prompt_id": "f29381f8-1917-4c37-be5c-ca3ba59341b6",
+  "session_id": "9fd341fa-b301-42ec-8fb3-dcdbcd63afad",
+  "tool_input": {
+    "max_results": 5,
+    "query": "select:mcp__playwright__browser_navigate,mcp__playwright__browser_snapshot,mcp__playwright__browser_type,mcp__playwright__browser_fill_form,mcp__playwright__browser_click"
+  },
+  "tool_name": "ToolSearch",
+  "tool_use_id": "toolu_01QCzBa3tNen8zHbhkPVxGvG",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/9fd341fa-b301-42ec-8fb3-dcdbcd63afad.jsonl"
+}

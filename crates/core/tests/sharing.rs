@@ -4,8 +4,9 @@
 
 #[path = "support/capture.rs"]
 mod capture;
+#[path = "support/executable.rs"]
+mod executable;
 
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -88,8 +89,7 @@ async fn host_agent(
     let bin = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let program = bin.path().join(command);
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(&program, script);
     let env: Environment =
         [("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))].into_iter().collect();
     let config = HostConfig {
@@ -871,6 +871,54 @@ async fn each_reconnect_attempt_is_recorded() {
         assert!(connected >= 50, "it was connected: {event:?}");
     }
     assert_eq!(capture.named("viewer.attempt_started").len(), 3);
+}
+
+/// The events named `name` captured so far, once there are `count` of them.
+async fn captured(capture: &Capture, name: &str, count: usize) -> Vec<capture::Captured> {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let events = capture.named(name);
+            if events.len() >= count {
+                return events;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("no {count} {name} events: {:?}", capture.named(name)))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_join_records_the_replay_on_both_sides() {
+    let (capture, _guard) = Capture::start();
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    for i in 0..50 {
+        hosted.session.input(format!("line {i}\r").as_bytes()).unwrap();
+    }
+    let (viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:line 49")).await;
+
+    let replay = &captured(&capture, "host.replay", 1).await[0];
+    let caught_up = &captured(&capture, "viewer.caught_up", 1).await[0];
+    assert_eq!(replay.field("finished"), Some("true"));
+    assert_eq!(replay.field("returning"), Some("false"));
+    assert_eq!(caught_up.field("reconnected"), Some("false"));
+    // Both sides count the same frames.
+    assert_eq!(replay.field("batches"), caught_up.field("batches"));
+    assert_eq!(replay.field("bytes"), caught_up.field("bytes"));
+    assert_ne!(replay.field("batches"), Some("0"));
+
+    // A reconnect replays what was missed, and is marked so on both sides.
+    viewer.interrupt(Duration::from_millis(100));
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    until(&mut events, &mut seen, |_, e| matches!(e, ViewerEvent::Welcome { .. })).await;
+    let replay = &captured(&capture, "host.replay", 2).await[1];
+    let caught_up = &captured(&capture, "viewer.caught_up", 2).await[1];
+    assert_eq!(replay.field("returning"), Some("true"));
+    assert_eq!(caught_up.field("reconnected"), Some("true"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1956,6 +2004,8 @@ async fn a_read_request_closes_when_its_time_is_up() {
     assert_eq!(sharing.ask(read()).await.unwrap(), Ok(()));
     tokio::time::sleep(Duration::from_secs(119)).await;
     assert!(entries(&view).is_empty(), "not before 120 seconds");
+    // The host hears that the time was up just before the asks without the request.
+    assert!(read_closed(&mut events).await);
     host_asks(&mut events, |asks| asks.read.is_none()).await;
     assert!(start.elapsed() >= Duration::from_secs(120));
     assert!(matches!(entries(&view)[..], [Entry::ReadDone { time_up: true, .. }]));
@@ -1965,6 +2015,20 @@ async fn a_read_request_closes_when_its_time_is_up() {
     tokio::time::sleep(Duration::from_secs(30)).await;
     assert_eq!(sharing.ask(AskCommand::EndRead).await.unwrap(), Ok(()));
     assert!(matches!(entries(&view)[1], Entry::ReadDone { time_up: false, .. }));
+    assert!(!read_closed(&mut events).await);
+}
+
+/// Waits for the host to hear that the read request closed; whether its time was up.
+async fn read_closed(events: &mut UnboundedReceiver<SharingEvent>) -> bool {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(SharingEvent::ReadClosed { time_up }) = events.recv().await {
+                return time_up;
+            }
+        }
+    })
+    .await
+    .expect("the read request did not close")
 }
 
 /// What a viewer's request to the host came to.

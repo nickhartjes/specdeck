@@ -10,20 +10,26 @@
 //! - `SPECDECK_MAX_CONNECTIONS_PER_IP`: open connections per client network, an IPv4 address or an
 //!   IPv6 /64 (default 100)
 //! - `SPECDECK_MAX_ROOMS`: open rooms in total (default 4000)
+//! - `SPECDECK_LOG_LEVEL`: `error`, `warn`, `info` or `debug` (default `info`); when it is unset,
+//!   a `RUST_LOG` that is a plain level is used
+//! - `SPECDECK_LOG_FORMAT`: `plain` (default) or `json`, one object per line
 //!
 //! Built with the `web-viewer` feature, it also serves the web viewer at `/`.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use specdeck_server::{Config, Service, TurnConfig, serve};
+use specdeck_server::{Config, Service, TurnConfig, log, serve};
 use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    let var = |name| std::env::var(name).ok();
+    log::init(&log::settings(
+        var("SPECDECK_LOG_LEVEL").as_deref(),
+        var("RUST_LOG").as_deref(),
+        var("SPECDECK_LOG_FORMAT").as_deref(),
+    ));
     let address = std::env::var("SPECDECK_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let defaults = Config::default();
     let config = Config {
@@ -39,10 +45,10 @@ async fn main() -> std::io::Result<()> {
         ..defaults
     };
     if config.turn.is_none() {
-        tracing::warn!("no TURN relay configured (SPECDECK_TURN_SECRET, SPECDECK_TURN_URLS)");
+        log::no_turn();
     }
     let listener = TcpListener::bind(&address).await?;
-    tracing::info!("sharing service listening on {address}");
+    log::started(config.turn.is_some(), config.web.is_some());
     serve(listener, Arc::new(Service::new(config))).await
 }
 

@@ -23,6 +23,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::browser::{self, BrowserHandler};
+use crate::diag;
 
 /// Environment variable through which Claude Code gets the endpoint's token, so the token never
 /// appears in the settings file.
@@ -169,12 +170,16 @@ impl HookEndpoint {
         }
         let app = app.layer(DefaultBodyLimit::max(MAX_BODY_BYTES)).with_state(state);
         let (stop, stopped) = oneshot::channel();
+        diag::hooks_listening();
+        // Only our own event gets the subscriber: the server's own are not ours to record.
+        let scope = diag::Scope::current();
         tokio::spawn(async move {
-            let _ = axum::serve(listener, app)
+            let served = axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = stopped.await;
                 })
                 .await;
+            scope.run(|| diag::hooks_stopped(served.err().as_ref().map(diag::Reason::from_io)));
         });
         Ok(Self { url, status_url, mcp_url, token, stop: Some(stop) })
     }
@@ -220,7 +225,9 @@ async fn receive(
     }
     // Off the async runtime: around shell commands the callback snapshots the folder (decision
     // 10b), and Claude Code waits for this answer.
-    let _ = tokio::task::spawn_blocking(move || (handler.on_payload)(payload)).await;
+    if tokio::task::spawn_blocking(move || (handler.on_payload)(payload)).await.is_err() {
+        diag::hooks_handler_failed("hooks");
+    }
     StatusCode::NO_CONTENT
 }
 
@@ -241,7 +248,9 @@ async fn receive_status_line(
     payload.insert("hook_event_name".into(), STATUS_LINE_EVENT.into());
     // Off the async runtime: around shell commands the callback snapshots the folder (decision
     // 10b), and Claude Code waits for this answer.
-    let _ = tokio::task::spawn_blocking(move || (handler.on_payload)(payload)).await;
+    if tokio::task::spawn_blocking(move || (handler.on_payload)(payload)).await.is_err() {
+        diag::hooks_handler_failed("status_line");
+    }
     StatusCode::NO_CONTENT
 }
 
@@ -310,6 +319,34 @@ mod tests {
         let endpoint =
             HookEndpoint::start(move |payload| sink.lock().unwrap().push(payload)).await.unwrap();
         (endpoint, received)
+    }
+
+    #[tokio::test]
+    async fn the_server_says_when_it_listens_and_stops() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let (endpoint, _) = endpoint().await;
+        assert_eq!(capture.named("hooks.listening").len(), 1);
+        drop(endpoint);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while capture.named("hooks.stopped").is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("no hooks.stopped");
+        assert_eq!(capture.named("hooks.stopped")[0].field("reason"), Some("local"));
+    }
+
+    #[tokio::test]
+    async fn a_handler_that_fails_is_recorded_and_answered() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let endpoint = HookEndpoint::start(|_| panic!("handler failed")).await.unwrap();
+        let auth = format!("Bearer {}", endpoint.token);
+        let status = post_hook(&endpoint.url, Some(&auth), r#"{"hook_event_name":"Stop"}"#).await;
+        assert_eq!(status, 204);
+        let failed = capture.named("hooks.handler_failed");
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].field("route"), Some("hooks"));
     }
 
     #[tokio::test]

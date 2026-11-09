@@ -5,8 +5,9 @@
 
 #[path = "support/capture.rs"]
 mod capture;
+#[path = "support/executable.rs"]
+mod executable;
 
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,6 +49,10 @@ const BRAINDUMP_NAME_MARKER: &str = "Marker-Braindump-Name";
 const READ_LABEL_MARKER: &str = "Marker-Read-Label";
 const QUESTION_MARKER: &str = "Marker-Question-Text";
 const TASK_MARKER: &str = "Marker-Task-Text";
+const RENAMED_MARKER: &str = "Marker-Renamed-Text";
+const MCP_SERVER_MARKER: &str = "Marker-Mcp-Server";
+const PANIC_MARKER: &str = "Marker-Panic-Text";
+const MISSING_FOLDER_MARKER: &str = "Marker-Missing-Folder";
 
 /// A fake Claude Code: prints the output marker, and on the line "go" reports a prompt, a tool
 /// call and a written code file holding the other markers through its hooks. Then echoes lines.
@@ -62,6 +67,8 @@ post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Read","tool_
 post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"marker-code-path.rs"}}'
 echo 'const C: &str = "Marker-Code-Text";' > "$(dirname "$0")/marker-code-path.rs"
 post '{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"marker-code-path.rs"},"tool_response":{"filePath":"marker-code-path.rs","originalFile":null,"content":"x"}}'
+post '{"hook_event_name":"PromptRenamed","prompt_id":"p1","prompt":"Marker-Renamed-Text"}'
+post '{"hook_event_name":"PreToolUse","tool_name":"mcp__Marker-Mcp-Server__tool","tool_input":{"x":"Marker-Renamed-Text"}}'
 echo posted
 while read line; do echo "got:$line"; done
 "#;
@@ -113,8 +120,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     let bin = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let program = bin.path().join("claude");
-    std::fs::write(&program, AGENT).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(&program, AGENT);
     let env: Environment =
         [("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))].into_iter().collect();
     let config = HostConfig {
@@ -125,6 +131,13 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         data_dir: data.path().to_owned(),
         screenshots: true,
     };
+    // An agent that cannot start, in a folder whose name is a marker.
+    let missing = HostConfig { folder: bin.path().join(MISSING_FOLDER_MARKER), ..config.clone() };
+    HostSession::start(missing, &env).await.err().unwrap();
+    // A panic whose message holds a marker and a path.
+    specdeck_diag::install_panic_hook("test.panicked");
+    let panic = std::panic::catch_unwind(|| panic!("{PANIC_MARKER} in {}", bin.path().display()));
+    assert!(panic.is_err());
     let (session, _session_events) = HostSession::start(config, &env).await.unwrap();
     let (sharing, mut sharing_events) = Sharing::start(
         session.view(),
@@ -345,6 +358,9 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     viewer.leave();
     tokio::time::sleep(Duration::from_millis(800)).await;
     drop(sharing);
+    // Ending the session records the payloads it could not place.
+    session.close();
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
     let captured = capture.events();
     let names = |name: &str| captured.iter().filter(|e| e.name == name).count();
@@ -353,6 +369,8 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "signalling.connect_failed",
         "host.turn_credentials",
         "host.viewer_admitted",
+        "host.replay",
+        "viewer.caught_up",
         "peer.path",
         "viewer.attempt_ended",
         "host.viewer_left",
@@ -381,6 +399,11 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "viewer.file_uploaded",
         "host.traffic",
         "viewer.traffic",
+        "agent.start_failed",
+        "agent.started",
+        "hooks.listening",
+        "timeline.unplaced",
+        "test.panicked",
     ] {
         assert!(
             names(name) > 0,
@@ -410,6 +433,10 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         READ_LABEL_MARKER,
         QUESTION_MARKER,
         TASK_MARKER,
+        RENAMED_MARKER,
+        MCP_SERVER_MARKER,
+        PANIC_MARKER,
+        MISSING_FOLDER_MARKER,
         "XL",
         TURN_SECRET,
         code.as_str(),
@@ -427,9 +454,13 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     assert!(leaks.is_empty(), "leaked: {leaks:?}");
 
     // Credentials, tokens and any error text would not fit this: only numbers, flags and names.
+    // A crash's thread and place are names of our own, reduced by the panic hook.
     let unplain: Vec<_> = captured
         .iter()
         .flat_map(|event| event.fields.iter().map(move |(k, v)| (&event.name, k, v)))
+        .filter(|(name, key, _)| {
+            !(name.ends_with(".panicked") && ["thread", "location"].contains(&key.as_str()))
+        })
         .filter(|(_, _, value)| !plain(value))
         .collect();
     assert!(unplain.is_empty(), "values that are not plain: {unplain:?}");
@@ -447,4 +478,15 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         .map(|e| e.field("answer").map(str::to_owned))
         .collect();
     assert_eq!(answers, [Some("kept".to_owned()), Some("sent".to_owned())]);
+
+    // The payloads the timeline could not place, by name only.
+    let unplaced = capture.named("timeline.unplaced");
+    let placed = |event: &str, tool: &str| {
+        unplaced
+            .iter()
+            .any(|e| e.field("hook_event") == Some(event) && e.field("tool") == Some(tool))
+    };
+    assert!(placed("PromptRenamed", "none") && placed("PreToolUse", "mcp"), "{unplaced:?}");
+    let failed = capture.named("agent.start_failed");
+    assert_eq!(failed[0].field("reason"), Some("folder_missing"));
 }

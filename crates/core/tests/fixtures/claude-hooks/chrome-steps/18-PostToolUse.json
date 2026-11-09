@@ -1,0 +1,38 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 101,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "claude-in-chrome",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "3299b582-b40c-4d7e-9006-c5b1db7df2ed",
+  "session_id": "79bba932-87a4-4405-8603-7aba4ccf58e6",
+  "tool_input": {
+    "action": "left_click",
+    "action_summary": "Focuses the Password field",
+    "ref": "ref_6",
+    "tabId": 482154941
+  },
+  "tool_name": "mcp__claude-in-chrome__computer",
+  "tool_response": [
+    {
+      "text": "Clicked on element ref_6",
+      "type": "text"
+    },
+    {
+      "text": "\n\nTab Context:\n- Executed on tabId: 482154941\n- Available tabs:\n  • tabId 482154940: \"New tab\" (\"chrome://newtab/\")\n  • tabId 482154941: \"Sign in\" (\"http://127.0.0.1:5179/\")",
+      "type": "text"
+    },
+    {
+      "text": "<system-reminder>You used a single tool call this turn. Prefer browser_batch to execute multiple actions in one call — it is significantly faster. Batch your next sequence of clicks, types, navigations, and screenshots together.</system-reminder>",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01F8jA1ta1A2E3pG2wVnsMxf",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/79bba932-87a4-4405-8603-7aba4ccf58e6.jsonl"
+}

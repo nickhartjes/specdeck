@@ -27,6 +27,8 @@ pub struct Settings {
     pub notifications: bool,
     /// Which kinds of notification the user gets about sessions they watch, under `notifications`.
     pub viewer_notifications: ViewerNotifications,
+    /// Which kinds of notification the host gets about their asks, under `notifications`.
+    pub host_notifications: HostNotifications,
     /// How the user followed sessions before layouts; read once to make their first layout, and
     /// kept for older versions.
     pub view: Option<View>,
@@ -134,6 +136,53 @@ impl ViewerNotifications {
     }
 }
 
+/// The kinds of notification the host gets about the answers to their read requests and votes
+/// (`host-ask-notifications` design decision 4); all on, also in a file from before they existed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HostNotifications {
+    /// A viewer has a question.
+    pub questions: bool,
+    /// Everyone has read, or the time is up while someone still reads.
+    pub read: bool,
+    /// Every viewer has voted.
+    pub voted: bool,
+}
+
+impl Default for HostNotifications {
+    fn default() -> Self {
+        Self { questions: true, read: true, voted: true }
+    }
+}
+
+/// A kind of the host's notification about their asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostNotificationKind {
+    Questions,
+    Read,
+    Voted,
+}
+
+impl HostNotificationKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Questions => "questions",
+            Self::Read => "read",
+            Self::Voted => "voted",
+        }
+    }
+}
+
+impl HostNotifications {
+    pub fn allows(&self, kind: HostNotificationKind) -> bool {
+        match kind {
+            HostNotificationKind::Questions => self.questions,
+            HostNotificationKind::Read => self.read,
+            HostNotificationKind::Voted => self.voted,
+        }
+    }
+}
+
 /// The app's appearance (`appearance-setting` design decision 2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -183,6 +232,7 @@ impl Default for Settings {
             last_agent: None,
             notifications: true,
             viewer_notifications: ViewerNotifications::default(),
+            host_notifications: HostNotifications::default(),
             view: None,
             layout: None,
             sharing_service: None,
@@ -462,6 +512,37 @@ mod tests {
         assert!(Settings::load(&path).notifications);
         std::fs::write(&path, br#"{"notifications":false}"#).unwrap();
         assert!(!Settings::load(&path).notifications);
+    }
+
+    #[test]
+    fn host_notifications_are_on_until_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Settings from before the switches existed: all on, and everything else kept.
+        let older =
+            br#"{"username":"nick","notifications":false,"viewerNotifications":{"finished":true}}"#;
+        std::fs::write(&path, older).unwrap();
+        let settings = Settings::load(&path);
+        assert_eq!(settings.host_notifications, HostNotifications::default());
+        assert!(settings.host_notifications.allows(HostNotificationKind::Questions));
+        assert!(settings.host_notifications.allows(HostNotificationKind::Read));
+        assert!(settings.host_notifications.allows(HostNotificationKind::Voted));
+        assert_eq!(settings.username.as_deref(), Some("nick"));
+        assert!(!settings.notifications && settings.viewer_notifications.finished);
+
+        // A kind the file does not have gets its default.
+        std::fs::write(&path, br#"{"hostNotifications":{"voted":false}}"#).unwrap();
+        let kinds = Settings::load(&path).host_notifications;
+        assert_eq!(kinds, HostNotifications { questions: true, read: true, voted: false });
+
+        let mut settings = Settings::default();
+        settings.host_notifications.questions = false;
+        settings.save(&path).unwrap();
+        let kinds = Settings::load(&path).host_notifications;
+        assert!(!kinds.allows(HostNotificationKind::Questions));
+        assert!(
+            kinds.allows(HostNotificationKind::Read) && kinds.allows(HostNotificationKind::Voted)
+        );
     }
 
     #[test]

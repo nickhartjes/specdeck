@@ -465,6 +465,23 @@ impl HostSession {
         env: &Environment,
         browser: Option<BrowserHandler>,
     ) -> Result<(Self, mpsc::UnboundedReceiver<SessionEvent>), LaunchError> {
+        let agent = config.agent;
+        let started = Self::launch(config, env, browser).await;
+        match &started {
+            Ok(_) => diag::agent_started(agent),
+            Err(error) => {
+                let (reason, prerequisite) = error.reason();
+                diag::agent_start_failed(agent, reason, prerequisite);
+            }
+        }
+        started
+    }
+
+    async fn launch(
+        config: HostConfig,
+        env: &Environment,
+        browser: Option<BrowserHandler>,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<SessionEvent>), LaunchError> {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let whole_files = Arc::new(AtomicBool::new(false));
         let io_error = |e: std::io::Error| LaunchError::Pty(e.to_string());
@@ -538,7 +555,7 @@ impl HostSession {
         let log = Arc::new(OutputLog::create(&config.data_dir).map_err(io_error)?);
         let killer = process.child.clone_killer();
         spawn_reader(process.reader, commands.clone());
-        spawn_exit_watcher(process.child, commands.clone());
+        spawn_exit_watcher(config.agent, process.child, commands.clone());
         spawn_git_watcher(config.folder.clone(), env.clone(), commands.clone());
         let plans = config
             .agent
@@ -581,6 +598,7 @@ impl HostSession {
             responder: Responder::Mirror,
             writer: session.writer.clone(),
             activity: Activity::new(config.agent),
+            unplaced: diag::Unplaced::default(),
             builder: TimelineBuilder::new(SessionFolder::from_environment(&config.folder, env))
                 .with_screenshots(config.screenshots),
             usage: config.agent.has_timeline().then(|| UsageReader::new(usage::projects_dir(env))),
@@ -597,7 +615,7 @@ impl HostSession {
             events,
         };
         pump.emit_entry(pump.builder.session_started());
-        tokio::spawn(pump.run(command_rx));
+        diag::spawn(pump.run(command_rx));
         Ok((session, event_rx))
     }
 
@@ -867,6 +885,8 @@ struct Pump {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     activity: Activity,
     builder: TimelineBuilder,
+    /// Hook payloads the timeline could not place, for the log.
+    unplaced: diag::Unplaced,
     /// Token usage from Claude Code's transcript; only for agents with a timeline.
     usage: Option<UsageReader>,
     status_line: StatusLineReader,
@@ -908,6 +928,7 @@ impl Pump {
                     // The transcript can grow after the hook that named it, for example the
                     // final answer, or a compaction, which sends no hook.
                     self.poll_usage();
+                    self.unplaced.poll(Instant::now());
                     continue;
                 }
             };
@@ -999,6 +1020,7 @@ impl Pump {
                 Some(Command::Close) | None => break,
             }
         }
+        self.unplaced.flush();
     }
 
     /// In a terminal session, the program in front has exited when the shell is back in front,
@@ -1084,6 +1106,8 @@ impl Pump {
                 }
             }
             Err(error) => {
+                let fault = error.fault.as_str();
+                self.unplaced.add(&error.event, error.tool.as_deref(), fault, Instant::now());
                 let changes = self.activity.on_bad_payload(error.to_string());
                 self.apply(changes);
             }
@@ -1209,11 +1233,15 @@ fn spawn_git_watcher(folder: PathBuf, env: Environment, commands: mpsc::Unbounde
 }
 
 fn spawn_exit_watcher(
+    agent: AgentId,
     mut child: Box<dyn portable_pty::Child + Send + Sync>,
     commands: mpsc::UnboundedSender<Command>,
 ) {
+    let started = Instant::now();
+    let scope = diag::Scope::current();
     thread::spawn(move || {
         let code = child.wait().map_or(1, |status| status.exit_code());
+        scope.run(|| diag::agent_exited(agent, code, started.elapsed()));
         // Give the reader a moment to deliver the last output before the exit.
         thread::sleep(Duration::from_millis(50));
         let _ = commands.send(Command::Exited { code });

@@ -1,0 +1,20 @@
+{
+  "cwd": "/workspace/project",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "mcp_server": {
+    "name": "playwright",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "f29381f8-1917-4c37-be5c-ca3ba59341b6",
+  "session_id": "9fd341fa-b301-42ec-8fb3-dcdbcd63afad",
+  "tool_input": {
+    "url": "http://127.0.0.1:5179/"
+  },
+  "tool_name": "mcp__playwright__browser_navigate",
+  "tool_use_id": "toolu_0173s3q3J4zdw6MDv9s366pD",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/9fd341fa-b301-42ec-8fb3-dcdbcd63afad.jsonl"
+}

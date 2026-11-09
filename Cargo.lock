@@ -2836,15 +2836,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "matchers"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
-dependencies = [
- "regex-automata",
-]
-
-[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4741,7 +4732,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-app"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "base64 0.23.1",
  "block2",
@@ -4780,7 +4771,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-core"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "alacritty_terminal",
  "axum",
@@ -4795,6 +4786,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "specdeck-diag",
  "specdeck-protocol",
  "specdeck-server",
  "tempfile",
@@ -4808,7 +4800,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-diag"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4822,7 +4814,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-local"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "libc",
  "serde",
@@ -4834,7 +4826,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-protocol"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -4852,7 +4844,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-server"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -4868,11 +4860,12 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "tungstenite 0.29.0",
 ]
 
 [[package]]
 name = "specdeck-session"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "base64 0.23.1",
  "serde",
@@ -4889,8 +4882,9 @@ dependencies = [
 
 [[package]]
 name = "specdeck-web"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
+ "ed25519-dalek",
  "serde",
  "serde-wasm-bindgen",
  "specdeck-protocol",
@@ -5979,14 +5973,10 @@ version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
- "matchers",
  "nu-ansi-term",
- "once_cell",
- "regex-automata",
  "sharded-slab",
  "smallvec",
  "thread_local",
- "tracing",
  "tracing-core",
  "tracing-log",
 ]

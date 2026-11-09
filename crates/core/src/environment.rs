@@ -12,6 +12,8 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::diag::{self, EnvOutcome, EnvSource, PathShape};
+
 /// Printed before the environment so output from shell startup files can be skipped.
 const MARKER: &str = "__SPECDECK_ENV__";
 
@@ -57,18 +59,48 @@ impl Environment {
     /// The user's login shell environment on macOS and Linux, or the app's own environment on
     /// Windows and when the shell cannot be read within `timeout`.
     pub fn detect(timeout: Duration) -> Self {
-        let process = Self::from_process();
-        if cfg!(windows) {
-            return process;
-        }
-        let Some(shell) = process.get("SHELL").filter(|shell| !shell.is_empty()) else {
-            return process;
-        };
-        probe_login_shell(Path::new(&shell), timeout).unwrap_or(process)
+        Self::detect_from(Self::from_process(), timeout)
     }
 
+    /// As [`detect`](Self::detect), with `process` as the app's own environment.
+    fn detect_from(process: Self, timeout: Duration) -> Self {
+        let shell = process.get("SHELL").filter(|shell| !shell.is_empty());
+        let (env, source, outcome) = match shell {
+            Some(shell) if !cfg!(windows) => match probe_login_shell(Path::new(&shell), timeout) {
+                Ok(env) => (env, EnvSource::LoginShell, EnvOutcome::Ok),
+                Err(outcome) => (process, EnvSource::Process, outcome),
+            },
+            _ => (process, EnvSource::Process, EnvOutcome::Skipped),
+        };
+        diag::environment_loaded(source, outcome, env.path_shape());
+        env
+    }
+
+    /// Whether this environment has a `PATH` and how many entries it holds, for the log.
+    pub fn path_shape(&self) -> PathShape {
+        let exact = self.vars.contains_key(&OsString::from("PATH"));
+        let path = self.get("PATH");
+        PathShape {
+            found: path.is_some(),
+            case_only: path.is_some() && !exact,
+            entries: path.map_or(0, |path| std::env::split_paths(&path).count()),
+        }
+    }
+
+    /// The value of `name`. On Windows names are compared without case, as Windows does: its
+    /// environment usually holds `Path`, which `get("PATH")` must find.
     pub fn get(&self, name: &str) -> Option<OsString> {
-        self.vars.get(&OsString::from(name)).cloned()
+        if let Some(value) = self.vars.get(&OsString::from(name)) {
+            return Some(value.clone());
+        }
+        if cfg!(windows) {
+            return self
+                .vars
+                .iter()
+                .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.clone());
+        }
+        None
     }
 
     pub fn set(&mut self, name: impl Into<OsString>, value: impl Into<OsString>) {
@@ -93,8 +125,9 @@ impl<K: Into<OsString>, V: Into<OsString>> FromIterator<(K, V)> for Environment 
     }
 }
 
-/// Runs `shell` as an interactive login shell and reads the environment it ends up with.
-fn probe_login_shell(shell: &Path, timeout: Duration) -> Option<Environment> {
+/// Runs `shell` as an interactive login shell and reads the environment it ends up with; else
+/// whether it took too long or failed.
+fn probe_login_shell(shell: &Path, timeout: Duration) -> Result<Environment, EnvOutcome> {
     let mut command = Command::new(shell);
     command
         .args(["-l", "-i", "-c", &format!("printf '\\0{MARKER}\\0'; env -0")])
@@ -111,10 +144,11 @@ fn probe_login_shell(shell: &Path, timeout: Duration) -> Option<Environment> {
             if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
         });
     }
-    let mut child = command.spawn().ok()?;
+    let failed = |_| EnvOutcome::Failed;
+    let mut child = command.spawn().map_err(failed)?;
 
     // Read on a separate thread so a large environment cannot fill the pipe and block the shell.
-    let mut stdout = child.stdout.take()?;
+    let mut stdout = child.stdout.take().ok_or(EnvOutcome::Failed)?;
     let reader = thread::spawn(move || {
         let mut output = Vec::new();
         stdout.read_to_end(&mut output).map(|_| output)
@@ -124,16 +158,17 @@ fn probe_login_shell(shell: &Path, timeout: Duration) -> Option<Environment> {
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return None,
+            Ok(Some(_)) | Err(_) => return Err(EnvOutcome::Failed),
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return Err(EnvOutcome::Timeout);
             }
             Ok(None) => thread::sleep(Duration::from_millis(20)),
         }
     }
-    parse_env_output(&reader.join().ok()?.ok()?)
+    let output = reader.join().map_err(|_| EnvOutcome::Failed)?.map_err(failed)?;
+    parse_env_output(&output).ok_or(EnvOutcome::Failed)
 }
 
 /// Parses `\0MARKER\0` followed by `env -0` output, ignoring anything printed before the marker.
@@ -165,6 +200,21 @@ mod tests {
         env.set("RAW", <OsString as std::os::unix::ffi::OsStringExt>::from_vec(vec![0x66, 0xff]));
         let json = serde_json::to_string(&env).unwrap();
         assert_eq!(serde_json::from_str::<Environment>(&json).unwrap(), env);
+    }
+
+    #[test]
+    fn names_are_compared_without_case_only_on_windows() {
+        let env: Environment = [("Path", r"C:\Windows")].into_iter().collect();
+        assert_eq!(env.get("Path").unwrap(), r"C:\Windows");
+        assert_eq!(env.get("PATH").is_some(), cfg!(windows));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn programs_are_found_through_windows_path() {
+        // The test process's own environment, as the app has it: Windows spells it `Path`.
+        let env = Environment::from_process();
+        assert!(env.find_executable("cmd").is_some());
     }
 
     #[test]
@@ -206,13 +256,62 @@ mod tests {
         assert_eq!(group, pid);
     }
 
+    /// The `environment.loaded` event of detecting with `process`; never a name or a value.
+    fn loaded(process: Environment, timeout: Duration) -> crate::capture::Captured {
+        let (capture, _guard) = crate::capture::Capture::start();
+        Environment::detect_from(process, timeout);
+        let events = capture.named("environment.loaded");
+        assert_eq!(events.len(), 1);
+        let event = events[0].clone();
+        let keys: Vec<&str> = event.fields.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["has_path", "outcome", "path_case_only", "path_entries", "source"]);
+        assert!(event.fields.values().all(|value| !value.contains("arker")), "{event:?}");
+        event
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_shell_that_hangs_is_recorded_as_a_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let shell = fake_shell(dir.path(), "sleep 10");
+        let process: Environment =
+            [("SHELL", shell.to_str().unwrap()), ("PATH", "/usr/bin:/bin:/Marker-Path")]
+                .into_iter()
+                .collect();
+        let event = loaded(process, Duration::from_millis(300));
+        assert_eq!(event.field("source"), Some("process"));
+        assert_eq!(event.field("outcome"), Some("timeout"));
+        assert_eq!(event.field("has_path"), Some("true"));
+        assert_eq!(event.field("path_entries"), Some("3"));
+    }
+
+    #[test]
+    fn an_environment_without_path_is_recorded() {
+        let process: Environment = [("HOME", "/Users/Marker-User")].into_iter().collect();
+        let event = loaded(process, PROBE_TIMEOUT);
+        assert_eq!(event.field("outcome"), Some("skipped"));
+        assert_eq!(event.field("has_path"), Some("false"));
+        assert_eq!(event.field("path_entries"), Some("0"));
+        assert_eq!(event.level.as_str(), "WARN");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_is_found_only_without_case() {
+        let process: Environment = [("Path", r"C:\Windows;C:\Marker")].into_iter().collect();
+        let event = loaded(process, PROBE_TIMEOUT);
+        assert_eq!(event.field("has_path"), Some("true"));
+        assert_eq!(event.field("path_case_only"), Some("true"));
+        assert_eq!(event.field("path_entries"), Some("2"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn falls_back_when_the_shell_hangs() {
         let dir = tempfile::tempdir().unwrap();
         let shell = fake_shell(dir.path(), "sleep 10");
         let started = Instant::now();
-        assert!(probe_login_shell(&shell, Duration::from_millis(300)).is_none());
+        assert_eq!(probe_login_shell(&shell, Duration::from_millis(300)), Err(EnvOutcome::Timeout));
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
@@ -226,16 +325,12 @@ mod tests {
             if attempt > 0 {
                 thread::sleep(Duration::from_millis(50));
             }
-            probe_login_shell(shell, PROBE_TIMEOUT)
+            probe_login_shell(shell, PROBE_TIMEOUT).ok()
         })
     }
 
     #[cfg(unix)]
     fn fake_shell(dir: &Path, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("fake-shell");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
+        crate::test_support::fake_executable(dir, "fake-shell", body)
     }
 }

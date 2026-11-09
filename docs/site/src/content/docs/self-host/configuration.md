@@ -17,7 +17,8 @@ description: The SpecDeck server's settings and the coturn options it relies on.
 | `SPECDECK_MAX_CONNECTIONS` | `2000` | Open connections in total. See [Limits](#limits) |
 | `SPECDECK_MAX_CONNECTIONS_PER_IP` | `100` | Open connections from one client network. See [Limits](#limits) |
 | `SPECDECK_MAX_ROOMS` | `4000` | Open rooms in total. See [Limits](#limits) |
-| `RUST_LOG` | none | Log level, such as `info` or `debug` |
+| `SPECDECK_LOG_LEVEL` | `info` | `error`, `warn`, `info` or `debug`. When it is unset, a `RUST_LOG` that is a plain level, such as `debug`, is used instead. See [Logs](#logs) |
+| `SPECDECK_LOG_FORMAT` | `plain` | `plain` for text lines, `json` for one JSON object per line. See [Logs](#logs) |
 
 It serves two paths:
 
@@ -30,7 +31,7 @@ The service keeps rooms in memory, so run exactly one instance.
 
 ## Limits
 
-The service bounds everything it holds, so one client cannot use it up for everyone else. When a limit refuses a connection, a room or a join, the apps say the sharing service is busy and keep retrying where they already would. Each limit that is reached is logged as a warning with its name and count, at most once a minute, without client addresses.
+The service bounds everything it holds, so one client cannot use it up for everyone else. When a limit refuses a connection, a room or a join, the apps say the sharing service is busy and keep retrying where they already would. Each limit that is reached is logged as a `limit.reached` warning with its name and count, at most once a minute, without client addresses; see [Logs](#logs).
 
 | Limit | Default | Protects against |
 |---|---|---|
@@ -49,6 +50,50 @@ The service bounds everything it holds, so one client cannot use it up for every
 Every viewer and every host keeps a connection open for the whole session. If your team shares one office address and more than 100 people host or watch at once, raise `SPECDECK_MAX_CONNECTIONS_PER_IP`.
 
 The service gives TURN credentials only to a connection that hosts a room or has joined one, and the same credentials each time it asks. Apps from earlier releases ask before they join; the service then waits 2 seconds for the room, so their hosts keep the relay, but their viewers join without it and need a direct connection until they update.
+
+## Logs
+
+The service writes its log to standard output, one line per event: `docker compose logs server` or `kubectl logs` shows it. Each line has the time (UTC), the level, the event's name and its fields:
+
+```text
+2026-11-09T10:00:00.123456Z  INFO peer.joined room=3 peer=7 viewers_on_host=2
+```
+
+With `SPECDECK_LOG_FORMAT=json`, the same event is one JSON object, for a log collector:
+
+```json
+{"event":"peer.joined","level":"INFO","peer":7,"room":3,"time":"2026-11-09T10:00:00.123456Z","viewers_on_host":2}
+```
+
+The provided Compose file logs plain text and the Kubernetes manifest JSON, both at `info`.
+
+### Events
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `service.started` | info | `version`, `turn`, `web_viewer` | The service starts; whether it hands out TURN credentials and serves the web viewer |
+| `service.no_turn` | warn | | No TURN relay is set, so only direct connections work |
+| `config.invalid` | warn | `setting` | `SPECDECK_LOG_LEVEL`, `SPECDECK_LOG_FORMAT` or `RUST_LOG` has a value the service does not understand; it uses the default |
+| `room.opened` | info | `room`, `rooms_open` | A host opens a room for an invite code |
+| `room.closed` | info | `room`, `viewers`, `lasted_s`, `why` | A room closes: `why` is `closed` when the host replaced its code or ended the session, `host_left` when its connection ended. `viewers` joined through it; `lasted_s` is how long it was open |
+| `room.refused` | info | `reason` | A host cannot open a room: `room_taken`, `busy` or `bad_message` |
+| `peer.joined` | info | `room`, `peer`, `viewers_on_host` | A viewer joins |
+| `peer.left` | info | `peer`, `lasted_s` | A viewer's connection to the service ends |
+| `peer.refused` | info | `reason` | A join or a connection is turned away: `unknown_room` (wrong or old code), `rate_limited` (too many wrong codes), `busy` (a limit), `bad_message` |
+| `socket.error` | info | `kind` | A connection fails: `reset` (it broke off), `too_large`, `protocol`, `bad_message` (not a SpecDeck message), `backlog_full` (it stopped reading) |
+| `socket.idle_closed` | debug | | A connection that neither hosted nor joined within 30 seconds is closed |
+| `limit.reached` | warn | `limit`, `count` | A [limit](#limits) refused something: `connections`, `connections_per_network`, `rooms`, `rooms_per_host`, `viewers_per_host`, `signals_per_viewer` or `backlog` |
+| `service.stats` | info | `connections`, `rooms`, `viewers`, `turn_issued` | Every 5 minutes, when something changed: what is open now, and how many connections got TURN credentials since the last one |
+
+`room` and `peer` are numbers the service gives out in order from 1 each time it starts, so you can follow one session through the log. They are not the room id or the connection id, and say nothing about them.
+
+**Bursts.** `peer.refused`, `room.refused` and `socket.error` are logged the first time for each reason in a minute. The rest of that minute is counted and logged as one more line with `count`, so a flood of wrong codes or connections cannot flood the log. At `debug`, each one is logged.
+
+**What is never logged**, at any level and in either format: room ids, invite codes, connection ids, the messages that set up a connection (session descriptions and ICE candidates), TURN credentials, error text, and client IP addresses. Only the service's own events are written, not those of the libraries it uses. There is no setting to add addresses; if you need them, your reverse proxy's or ingress's access log has them.
+
+**Levels.** `info` logs everything above. `warn` logs only limits, a missing relay and setting problems, so it no longer says when sessions happen. `debug` adds idle connections and logs every refusal and error on its own line.
+
+The service keeps no log files: how long the log is kept is up to Docker, your cluster or your log collector.
 
 ## coturn
 

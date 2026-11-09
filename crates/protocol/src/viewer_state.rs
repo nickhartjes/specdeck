@@ -98,6 +98,8 @@ pub enum StreamUpdate {
         seq: u64,
         event: TimelineEvent,
     },
+    /// The host has sent everything the session had when this viewer was admitted.
+    CaughtUp,
 }
 
 impl ViewerState {
@@ -245,6 +247,7 @@ impl ViewerState {
                 }
                 return (StreamUpdate::None, None);
             }
+            Ok(Frame::CaughtUp { .. }) => return (StreamUpdate::CaughtUp, None),
             Err(_) => return (StreamUpdate::None, self.request_resend()),
         };
         let fresh: Vec<Record> =
@@ -335,6 +338,20 @@ mod tests {
         assert_eq!(request, None);
         assert_eq!(seen, [0, 1, 2, 3]);
         assert_eq!(viewer.next_record, 4);
+    }
+
+    #[test]
+    fn caught_up_comes_between_the_history_and_live_records() {
+        let key = SessionKey::generate();
+        let mut viewer = viewer(&key);
+        let history = Frame::History(vec![output(0), output(1)]);
+        assert_eq!(applied(viewer.on_stream(&key.encode(&history)).0), [0, 1]);
+        assert_eq!(
+            viewer.on_stream(&key.encode(&Frame::CaughtUp { seq: 0 })),
+            (StreamUpdate::CaughtUp, None)
+        );
+        assert_eq!((viewer.next_record, viewer.next_event), (2, 0), "the cursors stay");
+        assert_eq!(applied(viewer.on_stream(&key.encode(&Frame::Record(output(2)))).0), [2]);
     }
 
     #[test]

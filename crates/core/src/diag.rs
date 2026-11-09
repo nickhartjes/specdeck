@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use datachannel::GatheringState;
+use specdeck_protocol::AgentId;
+use specdeck_protocol::timeline::LeftOut;
 use tokio_tungstenite::tungstenite;
 use tracing::{Level, debug, info, warn};
 
@@ -602,6 +604,262 @@ fn viewer_traffic(messages: u64, bytes: u64) {
     debug!(messages, bytes, "viewer.traffic");
 }
 
+// Replay and catch-up (`viewer-diagnostics`): how long a viewer took to get the history the
+// session had when it was admitted, and what that took on the wire. Counts and sizes only.
+
+/// What the host sent a viewer of the history, and how often the stream channel was full.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplayCounts {
+    /// Stream frames: each history batch and each timeline event is one.
+    pub batches: u64,
+    pub records: u64,
+    pub events: u64,
+    pub bytes: u64,
+    /// Times sending stopped because the viewer's stream channel was full.
+    pub waits: u64,
+}
+
+/// Viewer `viewer` has been sent the history it was admitted to, or left first (`finished`
+/// false). `returning` for a viewer that reconnected and was sent only what it missed.
+pub fn host_replay(
+    viewer: u32,
+    returning: bool,
+    counts: &ReplayCounts,
+    took: Duration,
+    finished: bool,
+) {
+    let ReplayCounts { batches, records, events, bytes, waits } = *counts;
+    let took_ms = millis(took);
+    info!(
+        viewer,
+        returning, batches, records, events, bytes, waits, took_ms, finished, "host.replay"
+    );
+}
+
+/// The host said this viewer has the history it was admitted to; `batches` and `bytes` are the
+/// stream frames received since the welcome.
+pub fn viewer_caught_up(reconnected: bool, batches: u64, bytes: u64, took: Duration) {
+    info!(reconnected, batches, bytes, took_ms = millis(took), "viewer.caught_up");
+}
+
+// The agent and its environment (`app-diagnostics`).
+
+/// Where the environment for agents came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnvSource {
+    LoginShell,
+    Process,
+}
+
+/// How reading the login shell went; `Skipped` on Windows, or without a `SHELL`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnvOutcome {
+    Ok,
+    Timeout,
+    Failed,
+    Skipped,
+}
+
+/// The environment's `PATH`: whether it has one, whether only by Windows' case-insensitive
+/// match (`Path`), and how many entries. Never a name or a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PathShape {
+    pub found: bool,
+    pub case_only: bool,
+    pub entries: usize,
+}
+
+pub fn environment_loaded(source: EnvSource, outcome: EnvOutcome, path: PathShape) {
+    let source = match source {
+        EnvSource::LoginShell => "login_shell",
+        EnvSource::Process => "process",
+    };
+    let outcome = match outcome {
+        EnvOutcome::Ok => "ok",
+        EnvOutcome::Timeout => "timeout",
+        EnvOutcome::Failed => "failed",
+        EnvOutcome::Skipped => "skipped",
+    };
+    let fields = (path.found, path.case_only, path.entries as u64);
+    if path.found {
+        info!(
+            source,
+            outcome,
+            has_path = fields.0,
+            path_case_only = fields.1,
+            path_entries = fields.2,
+            "environment.loaded"
+        );
+    } else {
+        warn!(
+            source,
+            outcome,
+            has_path = fields.0,
+            path_case_only = fields.1,
+            path_entries = fields.2,
+            "environment.loaded"
+        );
+    }
+}
+
+fn agent_str(agent: AgentId) -> &'static str {
+    match agent {
+        AgentId::ClaudeCode => "claude_code",
+        AgentId::OpenCode => "open_code",
+        AgentId::Omp => "omp",
+        AgentId::Terminal => "terminal",
+        AgentId::Codex => "codex",
+        AgentId::Grok => "grok",
+        AgentId::Pi => "pi",
+    }
+}
+
+pub fn agent_started(agent: AgentId) {
+    info!(agent = agent_str(agent), "agent.started");
+}
+
+/// The agent could not start: a fixed reason, and the missing prerequisite's id if that is why.
+/// Never the error's text, which can hold the folder's path.
+pub fn agent_start_failed(
+    agent: AgentId,
+    reason: &'static str,
+    prerequisite: Option<&'static str>,
+) {
+    match prerequisite {
+        Some(prerequisite) => {
+            warn!(agent = agent_str(agent), reason, prerequisite, "agent.start_failed")
+        }
+        None => warn!(agent = agent_str(agent), reason, "agent.start_failed"),
+    }
+}
+
+/// The agent exited with `code`, `after` it started.
+pub fn agent_exited(agent: AgentId, code: u32, after: Duration) {
+    info!(agent = agent_str(agent), code, after_ms = millis(after), "agent.exited");
+}
+
+// Claude Code's hooks and the timeline (`app-diagnostics`).
+
+/// A hook event's or tool's name as the log may hold it: Claude Code's own plain names as they
+/// are, any MCP tool as `mcp` (SpecDeck's browser as `mcp_specdeck`, Claude's Chrome as
+/// `mcp_chrome`), anything else as `other`. MCP server names are the user's own, so never kept.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AgentName(String);
+
+impl AgentName {
+    pub fn new(name: &str) -> Self {
+        let name = if let Some(tool) = name.strip_prefix("mcp__") {
+            match tool.split_once("__").map(|(server, _)| server) {
+                Some("specdeck") => "mcp_specdeck",
+                Some("claude-in-chrome") => "mcp_chrome",
+                _ => "mcp",
+            }
+        } else {
+            let mut chars = name.chars();
+            let plain = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && name.len() <= 40;
+            if plain { name } else { "other" }
+        };
+        Self(name.to_owned())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The hook server listens; never its address or port.
+pub fn hooks_listening() {
+    info!("hooks.listening");
+}
+
+/// The hook server stopped: `None` when this side stopped it.
+pub fn hooks_stopped(reason: Option<Reason>) {
+    match reason {
+        Some(reason) => warn!(reason = %reason, "hooks.stopped"),
+        None => info!(reason = "local", "hooks.stopped"),
+    }
+}
+
+/// A payload's handler did not finish, on `route` (`hooks` or `status_line`).
+pub fn hooks_handler_failed(route: &'static str) {
+    warn!(route, "hooks.handler_failed");
+}
+
+/// A screenshot was left out of the timeline as too large or unreadable; `bytes` is its size.
+/// Turned off is the host's choice and not recorded.
+pub fn screenshot_left_out(left_out: LeftOut, bytes: u64) {
+    let reason = match left_out {
+        LeftOut::TurnedOff => return,
+        LeftOut::TooLarge => "too_large",
+        LeftOut::Unreadable => "unreadable",
+    };
+    warn!(reason, bytes, "timeline.screenshot_left_out");
+}
+
+/// Snapshots of shell commands cannot be set up for this session, at `step`; `expected` when
+/// that is a normal way to work (no git, or a folder outside a repository).
+pub fn shell_changes_unavailable(step: &'static str, expected: bool) {
+    if expected {
+        info!(step, "shell_changes.unavailable");
+    } else {
+        warn!(step, "shell_changes.unavailable");
+    }
+}
+
+/// A snapshot around one shell command failed at `step`.
+pub fn shell_changes_failed(step: &'static str) {
+    warn!(step, "shell_changes.failed");
+}
+
+/// Payloads the timeline could not place, counted by hook event, tool and fault, and recorded
+/// as `timeline.unplaced` once a minute: one line per kind of payload, never its content.
+#[derive(Default)]
+pub struct Unplaced {
+    since: Option<std::time::Instant>,
+    counts: std::collections::BTreeMap<(AgentName, AgentName, &'static str), u64>,
+}
+
+impl Unplaced {
+    const EVERY: Duration = Duration::from_secs(60);
+
+    /// Counts one payload of hook event `event` and tool `tool` (if any) that could not be
+    /// placed, for `fault` (`unknown_event` or `bad_shape`).
+    pub fn add(
+        &mut self,
+        event: &str,
+        tool: Option<&str>,
+        fault: &'static str,
+        now: std::time::Instant,
+    ) {
+        self.since.get_or_insert(now);
+        let tool = AgentName::new(tool.unwrap_or("none"));
+        *self.counts.entry((AgentName::new(event), tool, fault)).or_default() += 1;
+    }
+
+    /// Records the counts once their minute is over.
+    pub fn poll(&mut self, now: std::time::Instant) {
+        if self.since.is_some_and(|since| now.saturating_duration_since(since) >= Self::EVERY) {
+            self.flush();
+        }
+    }
+
+    /// Records the counts so far, as at the session's end.
+    pub fn flush(&mut self) {
+        self.since = None;
+        for ((event, tool, fault), count) in std::mem::take(&mut self.counts) {
+            warn!(
+                hook_event = event.as_str(),
+                tool = tool.as_str(),
+                fault,
+                count,
+                "timeline.unplaced"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,6 +953,53 @@ mod tests {
             // Only the type survives: nothing of the address is in what gets logged.
             assert!(!parsed.as_str().contains('.'));
         }
+    }
+
+    #[test]
+    fn agent_names_keep_only_plain_names() {
+        let cases = [
+            ("Read", "Read"),
+            ("PreToolUse", "PreToolUse"),
+            ("mcp__specdeck__click", "mcp_specdeck"),
+            ("mcp__claude-in-chrome__navigate", "mcp_chrome"),
+            ("mcp__marker-server__x", "mcp"),
+            ("mcp__Marker_Server__x", "mcp"),
+            ("a b", "other"),
+            ("", "other"),
+            ("1Read", "other"),
+            ("x/../Marker", "other"),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(AgentName::new(name).as_str(), expected, "{name}");
+        }
+        assert_eq!(AgentName::new(&"A".repeat(40)).as_str(), "A".repeat(40));
+        assert_eq!(AgentName::new(&"A".repeat(41)).as_str(), "other");
+    }
+
+    #[test]
+    fn unplaced_payloads_are_counted_per_minute() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let mut unplaced = Unplaced::default();
+        let start = std::time::Instant::now();
+        for i in 0..12 {
+            unplaced.add("PromptSent", None, "unknown_event", start + Duration::from_secs(i));
+        }
+        unplaced.add("PreToolUse", Some("mcp__Marker-Server__x"), "bad_shape", start);
+        unplaced.poll(start + Duration::from_secs(59));
+        assert!(capture.named("timeline.unplaced").is_empty(), "not before the minute is over");
+        unplaced.poll(start + Duration::from_secs(60));
+        let lines = capture.named("timeline.unplaced");
+        assert_eq!(lines.len(), 2);
+        let renamed = lines.iter().find(|line| line.field("hook_event") == Some("PromptSent"));
+        let renamed = renamed.unwrap();
+        assert_eq!(renamed.field("count"), Some("12"));
+        assert_eq!(renamed.field("fault"), Some("unknown_event"));
+        assert_eq!(renamed.field("tool"), Some("none"));
+        let mcp = lines.iter().find(|line| line.field("tool") == Some("mcp")).unwrap();
+        assert_eq!(mcp.field("count"), Some("1"));
+        assert!(!format!("{lines:?}").contains("Marker"));
+        unplaced.poll(start + Duration::from_secs(200));
+        assert_eq!(capture.named("timeline.unplaced").len(), 2, "counted once");
     }
 
     #[test]

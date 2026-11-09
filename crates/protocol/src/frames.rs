@@ -15,6 +15,7 @@ const KIND_OUTPUT: u8 = 1;
 const KIND_RESIZE: u8 = 2;
 const KIND_HISTORY: u8 = 3;
 const KIND_EVENT: u8 = 4;
+const KIND_CAUGHT_UP: u8 = 5;
 const HEADER: usize = 1 + 8;
 const SIGNATURE: usize = 64;
 
@@ -48,6 +49,9 @@ pub enum Frame {
     History(Vec<Record>),
     /// A timeline event; `seq` is the event sequence, separate from the record sequence.
     Event { seq: u64, event: TimelineEvent },
+    /// The viewer has everything the session had when it was admitted (protocol version 7):
+    /// sent once, after the last frame of that history. `seq` is the next event sequence.
+    CaughtUp { seq: u64 },
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -88,6 +92,7 @@ impl SessionKey {
             Frame::Event { seq, event } => {
                 (KIND_EVENT, *seq, serde_json::to_vec(event).expect("events always encode"))
             }
+            Frame::CaughtUp { seq } => (KIND_CAUGHT_UP, *seq, Vec::new()),
         };
         let mut bytes = Vec::with_capacity(HEADER + payload.len() + SIGNATURE);
         bytes.push(kind);
@@ -140,6 +145,7 @@ impl FrameVerifier {
                 seq,
                 event: serde_json::from_slice(payload).map_err(|_| FrameError::Malformed)?,
             },
+            KIND_CAUGHT_UP if payload.is_empty() => Frame::CaughtUp { seq },
             _ => return Err(FrameError::Malformed),
         })
     }
@@ -232,10 +238,27 @@ mod tests {
                     truncated: false,
                 },
             },
+            Frame::CaughtUp { seq: 7 },
         ];
         for frame in frames {
             assert_eq!(verifier.decode(&key.encode(&frame)), Ok(frame));
         }
+    }
+
+    #[test]
+    fn caught_up_is_signed_and_has_no_payload() {
+        let (key, verifier) = keys();
+        let mut tampered = key.encode(&Frame::CaughtUp { seq: 3 });
+        tampered[8] ^= 1;
+        assert_eq!(verifier.decode(&tampered), Err(FrameError::BadSignature));
+
+        // A caught-up kind with a payload, properly signed, is not a caught-up frame.
+        let mut bytes = vec![KIND_CAUGHT_UP];
+        bytes.extend_from_slice(&3u64.to_be_bytes());
+        bytes.push(0);
+        let signature = key.0.sign(&bytes);
+        bytes.extend_from_slice(&signature.to_bytes());
+        assert_eq!(verifier.decode(&bytes), Err(FrameError::Malformed));
     }
 
     #[test]

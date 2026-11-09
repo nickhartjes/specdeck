@@ -1,0 +1,35 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 1047,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "claude-in-chrome",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "68fb507b-b864-44aa-b5be-e27454f0b804",
+  "session_id": "b0e43ade-e28e-4f5a-a30c-a0943d699d7b",
+  "tool_input": {
+    "createIfEmpty": true
+  },
+  "tool_name": "mcp__claude-in-chrome__tabs_context_mcp",
+  "tool_response": [
+    {
+      "text": "{\"availableTabs\":[{\"tabId\":482154942,\"title\":\"New Tab\",\"url\":\"chrome://newtab/\"}],\"tabGroupId\":794781765}",
+      "type": "text"
+    },
+    {
+      "text": "\n\nTab Context:\n- Available tabs:\n  • tabId 482154942: \"New Tab\" (\"chrome://newtab/\")",
+      "type": "text"
+    },
+    {
+      "text": "<system-reminder>You used a single tool call this turn. Prefer browser_batch to execute multiple actions in one call — it is significantly faster. Batch your next sequence of clicks, types, navigations, and screenshots together.</system-reminder>",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01TV283Y2gKdJ4NekcH8Q2j4",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/b0e43ade-e28e-4f5a-a30c-a0943d699d7b.jsonl"
+}

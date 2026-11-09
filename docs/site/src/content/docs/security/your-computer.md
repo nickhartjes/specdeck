@@ -19,11 +19,13 @@ On Linux the same files are under `~/.config/`, `~/.local/share/` and `~/.cache/
 
 `settings.json` and the log files are written with your account's default permissions, not made private to you. On macOS your Library folder keeps other accounts out; on Linux and Windows that depends on your home folder. See [Known limits](/specdeck/security/known-limits/#settings-and-logs-use-default-permissions).
 
-In the **web viewer**, the browser keeps only your name and your choices for layout, appearance and notifications, in its local storage for that site.
+In the **web viewer**, the browser keeps only your name and your choices for layout, appearance and notifications, in its local storage for that site. While the tab is open, it also keeps that page's diagnostic log in the tab's own session storage; closing the tab removes it, and the page never uploads it.
 
 ## Logs and diagnostics
 
 The diagnostic log records when connections start and end and why, sizes and timings, and whether a connection is direct or relayed. It never holds terminal output, the timeline, what the agent was asked or did, invite codes, room ids, names, file paths or network addresses. Only your account can open the log folder, files older than 7 days are removed, and the whole log stays under 50 MB.
+
+It also records crashes, the agent starting and stopping, and failed update checks, each with a fixed reason and never the error's own text, which could hold a path or something you typed. See [What else the log records](/specdeck/guide/troubleshooting/#what-else-the-log-records).
 
 **Export Diagnostics…** saves the log and the current connection state to a file where you choose, after saying what it holds. SpecDeck never uploads it. See [The log](/specdeck/guide/troubleshooting/#the-log).
 

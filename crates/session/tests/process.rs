@@ -4,6 +4,9 @@
 //! Code for the browser.
 #![cfg(unix)]
 
+#[path = "../../core/tests/support/executable.rs"]
+mod executable;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as Process};
 use std::sync::Arc;
@@ -40,6 +43,10 @@ struct Process_ {
 
 impl Process_ {
     fn launch(grace_secs: u64) -> Process_ {
+        Process_::launch_with(grace_secs, &[])
+    }
+
+    fn launch_with(grace_secs: u64, args: &[&str]) -> Process_ {
         let dir = tempfile::tempdir().unwrap();
         let run = dir.path().join("run");
         make_private_dir(&run).unwrap();
@@ -52,6 +59,7 @@ impl Process_ {
             .arg("--log-dir")
             .arg(dir.path().join("logs"))
             .args(["--grace-secs", &grace_secs.to_string(), "--loopback"])
+            .args(args)
             .spawn()
             .unwrap();
         Process_ { child, dir, socket }
@@ -283,13 +291,10 @@ done
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_sent_suggestion_is_typed_as_one_prompt() {
-    use std::os::unix::fs::PermissionsExt;
-
     let url = signalling().await;
     let folder = tempfile::tempdir().unwrap();
     let program = folder.path().join("opencode");
-    std::fs::write(&program, BYTES_AGENT).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(&program, BYTES_AGENT);
     let mut process = Process_::launch(600);
     let mut app = App::connect(&process.socket).await;
     let Command::Start {
@@ -470,6 +475,65 @@ async fn sigterm_ends_the_session_like_end() {
 /// The session process's own log holds no content or secrets (the `diagnostics` spec), with
 /// Verbose logging on: the same rule as `crates/core/tests/diagnostics_leak.rs`, applied to the
 /// log file the session binary writes.
+/// The session process's log, all files together.
+fn session_log(process: &Process_) -> String {
+    let logs = process.dir.path().join("logs");
+    let Ok(entries) = std::fs::read_dir(&logs) else { return String::new() };
+    entries.map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_crash_is_in_the_session_log_without_its_message() {
+    let mut process = Process_::launch_with(600, &["--panic-tasks", "1"]);
+    let deadline = Instant::now() + WAIT;
+    let log = loop {
+        let log = session_log(&process);
+        if log.contains("session.panicked") {
+            break log;
+        }
+        assert!(Instant::now() < deadline, "no crash in the log:\n{log}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    // The process survives a task's panic.
+    assert!(process.running());
+    let crash: serde_json::Value = log
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|line| line["event"] == "session.panicked")
+        .unwrap();
+    assert_eq!(crash["process"], "session-1");
+    assert_eq!(crash["kind"], "other");
+    assert!(crash["location"].as_str().unwrap().starts_with("crates/session/src/main.rs:"));
+    let temp = std::env::temp_dir().display().to_string();
+    assert!(!log.contains("test panic") && !log.contains(&temp), "{log}");
+}
+
+/// Takes over a minute, so it runs only when asked: `cargo test -- --ignored`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn a_crash_loop_is_cut_off_and_counted_in_the_session_log() {
+    let url = signalling().await;
+    let folder = tempfile::tempdir().unwrap();
+    let mut process = Process_::launch_with(600, &["--panic-tasks", "40"]);
+    let mut app = App::connect(&process.socket).await;
+    started(&mut app, folder.path(), &url).await;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let log = loop {
+        let log = session_log(&process);
+        if log.contains("log.suppressed") {
+            break log;
+        }
+        assert!(Instant::now() < deadline, "no count in the log:\n{log}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    assert_eq!(log.matches("session.panicked").count(), 30 + 1, "{log}");
+    assert!(log.contains(r#""name":"session.panicked""#) && log.contains(r#""count":10"#));
+    let mut terminal = String::new();
+    app.send(&Command::End).await;
+    app.until(&mut terminal, |event| matches!(event, Event::Ended)).await;
+    process.exits().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_session_log_holds_no_content_or_secrets() {
     const HOST_NAME: &str = "Marker-Host-Name";
@@ -658,8 +722,7 @@ async fn browsing_session(app: &mut App, folder: &Path, url: &str, browser: bool
     let bin = folder.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let claude = bin.join("claude");
-    std::fs::write(&claude, BROWSING_CLAUDE).unwrap();
-    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    executable::write_executable(&claude, BROWSING_CLAUDE);
     let Command::Start { mut environment, .. } = start(folder, url) else { unreachable!() };
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     let mut terminal = String::new();
@@ -743,8 +806,7 @@ async fn whole_code_files_follow_the_hosts_setting() {
     let bin = folder.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let claude = bin.join("claude");
-    std::fs::write(&claude, EDITING_CLAUDE).unwrap();
-    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    executable::write_executable(&claude, EDITING_CLAUDE);
     let Command::Start { mut environment, .. } = start(folder.path(), &url) else { unreachable!() };
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     let mut process = Process_::launch(600);
@@ -1140,13 +1202,10 @@ async fn started_as(app: &mut App, folder: &Path, url: &str, agent: AgentId) -> 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_braindump_is_given_as_one_prompt_ending_with_its_paths() {
-    use std::os::unix::fs::PermissionsExt;
-
     let url = signalling().await;
     let folder = tempfile::tempdir().unwrap();
     let program = folder.path().join("opencode");
-    std::fs::write(&program, BYTES_AGENT).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(&program, BYTES_AGENT);
     let mut process = Process_::launch(600);
     let mut app = App::connect(&process.socket).await;
     let mut terminal = started_as(&mut app, folder.path(), &url, AgentId::OpenCode).await;

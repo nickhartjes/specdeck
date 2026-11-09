@@ -25,6 +25,8 @@ COPY app/ui/package.json app/ui/
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
     pnpm install --frozen-lockfile --filter @specdeck/ui
 COPY app/ui app/ui
+# The page states the release it is built from: the workspace version.
+COPY Cargo.toml ./
 COPY --from=wasm /src/crates/web/pkg crates/web/pkg
 RUN pnpm --dir app/ui build:web
 
@@ -41,5 +43,5 @@ COPY --from=build /src/target/release/specdeck-server /usr/local/bin/specdeck-se
 # Numeric, so Kubernetes can check runAsNonRoot.
 USER 10001
 EXPOSE 8080
-ENV SPECDECK_LISTEN=0.0.0.0:8080 RUST_LOG=info
+ENV SPECDECK_LISTEN=0.0.0.0:8080
 ENTRYPOINT ["specdeck-server"]

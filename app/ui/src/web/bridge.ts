@@ -4,9 +4,12 @@
 
 import type { Bridge } from '../api/bridge';
 import type { Appearance, JoinLink, NoticeOpen, Profile, RequestOutcome, View, ViewEvent, ViewerNotifications } from '../api/types';
+import { DEFAULT_HOST_NOTIFICATIONS } from '../model/hostNotifications';
 import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
 import { asAppearance } from '../appearance';
+import { exportFileName } from '../model/diagnostics';
 import { Connection, type Platform, type ViewerCore } from './connection';
+import { DiagnosticLog, exportHeader, exportText } from './diagnostics';
 
 /** Keys in the browser's storage. */
 export const STORAGE_KEYS = {
@@ -34,6 +37,31 @@ export interface WebBridgeOptions {
   platform?: Platform;
   /** The browser's notifications; null where it has none. The page's own by default. */
   notifications?: BrowserNotifications | null;
+  /** The page's diagnostic log; one of its own, in memory only, when absent. */
+  log?: DiagnosticLog;
+  /** The release the page was built from. */
+  appVersion?: string;
+  /** The browser's user agent, read only for its family, major version and OS. */
+  userAgent?: string;
+  /** Saves `text` as a download named `name`; the browser's own by default. Throws when it cannot. */
+  download?: (name: string, text: string) => void;
+}
+
+/** Saves `text` as a download, as the browser does for a link with `download`. */
+function downloadFile(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/x-ndjson' }));
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    link.style.display = 'none';
+    document.body.append(link);
+    link.click();
+    link.remove();
+  } finally {
+    // After the browser took the file.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
 }
 
 /** What the web viewer needs of the browser's notifications (`viewer-notifications` design decision 5). */
@@ -183,6 +211,7 @@ export function shareRefusal(outcome: RequestOutcome): string {
 
 export function webBridge(options: WebBridgeOptions): Bridge {
   const { storage, service } = options;
+  const log = options.log ?? new DiagnosticLog(null);
   let connection: Connection | null = null;
   // Kept here as well, so a browser that stores nothing still remembers them until reload.
   let username = read(storage, STORAGE_KEYS.username);
@@ -212,6 +241,8 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     watchedSessions: connection !== null ? 1 : 0,
     notifications: allowed(),
     viewerNotifications,
+    // A browser never hosts.
+    hostNotifications: DEFAULT_HOST_NOTIFICATIONS,
     view,
     layout,
     translucent: false,
@@ -263,6 +294,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       write(storage, STORAGE_KEYS.viewerNotifications, JSON.stringify(kinds));
       return Promise.resolve(profile());
     },
+    setHostNotifications: () => Promise.resolve(profile()),
     viewerNotify: (kind, title, body, target) => {
       if (allowed() && viewerNotifications[kind] && notifier?.away()) {
         notifier.show(title, body, () => {
@@ -348,6 +380,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
         url: service,
         username,
         core,
+        log,
         platform: options.platform,
         onRecords: (bytes) => terminal(bytes.slice().buffer),
         onEvent: (event) => {
@@ -360,6 +393,8 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     leaveSession: () => {
       connection?.leave();
       connection = null;
+      // Leaving is often the page going away: keep the log of it for a reload.
+      log.flush();
       return Promise.resolve();
     },
     suggestPrompt: async (text) => {
@@ -436,7 +471,17 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     diagnosticsStatus: () => Promise.reject(new Error('Not available in the browser.')),
     reconnectViewer: () => Promise.resolve(),
     heartbeat: () => Promise.resolve(),
-    exportDiagnostics: () => Promise.resolve(false),
+    // A download of this tab's log, in the app's format (`viewer-diagnostics` design decision 3).
+    exportDiagnostics: async () => {
+      const header = exportHeader({
+        appVersion: options.appVersion ?? 'dev',
+        userAgent: options.userAgent ?? navigator.userAgent,
+        service,
+        session: log.session(),
+      });
+      (options.download ?? downloadFile)(exportFileName(new Date()), exportText(header, log.entries()));
+      return true;
+    },
     onMenu: () => () => {},
   };
 }

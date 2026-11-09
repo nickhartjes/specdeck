@@ -441,6 +441,29 @@ describe('asks on the host screen', () => {
     expect(bridge.hostEndRead).toHaveBeenCalled();
   });
 
+  it('shows the question texts when a question notification is clicked', async () => {
+    let clicked: (open: Parameters<Parameters<Bridge['onNoticeOpen']>[0]>[0]) => void = () => {};
+    await setup({
+      onNoticeOpen: (handler) => {
+        clicked = handler;
+        return () => {};
+      },
+    });
+    act(() => emit({ type: 'asks', read: read([[1, 'reading'], [3, 'question']], [[3, 'Why three heartbeats?']]), vote: null }));
+    const banner = screen.getByRole('region', { name: /You asked everyone to read design.md/ });
+    expect(within(banner).getByText('Why three heartbeats?')).not.toBeVisible();
+    // Another request's question, or something else, opens nothing.
+    act(() => clicked({ kind: 'questions', ask: 9 }));
+    act(() => clicked({ kind: 'document', path: 'README.md' }));
+    expect(within(banner).getByText('Why three heartbeats?')).not.toBeVisible();
+    act(() => clicked({ kind: 'questions', ask: 1 }));
+    expect(within(banner).getByText('Why three heartbeats?')).toBeVisible();
+    // Closed since: nothing to show, and nothing breaks.
+    act(() => emit({ type: 'asks', read: null, vote: null }));
+    act(() => clicked({ kind: 'questions', ask: 1 }));
+    expect(screen.queryByRole('region', { name: /You asked everyone to read/ })).not.toBeInTheDocument();
+  });
+
   it('estimates in T-shirt sizes, votes, reveals and keeps another card', async () => {
     // The demo's vote would close on the first of these; each is only checked to be called.
     const stays = () => vi.fn(async () => {});

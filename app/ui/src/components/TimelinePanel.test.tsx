@@ -475,6 +475,53 @@ describe("Claude's browser steps", () => {
   }
 });
 
+describe('other browsers in the details view', () => {
+  const stamp = (n: number) => ({ outputSeq: n, at: 1_700_000_000_000 + n });
+  const promptId = 'p';
+  const field = (label: string) => ({ kind: 'text field', label, sensitive: false });
+  const events: TimelineEvent[] = [
+    { ...stamp(1), kind: 'prompt', promptId, text: 'Log in' },
+    {
+      ...stamp(2),
+      kind: 'tool-call',
+      promptId,
+      toolUseId: 'form',
+      toolName: 'mcp__playwright__browser_fill_form',
+      input: { fields: [{ name: 'Card number', target: 'e10', type: 'textbox' }, { name: 'Remember me', target: 'e11', type: 'checkbox', value: 'true' }] },
+      targets: [field('Card number'), null],
+    },
+    { ...stamp(3), kind: 'tool-result', promptId, toolUseId: 'form', status: 'succeeded' },
+    {
+      ...stamp(4),
+      kind: 'tool-call',
+      promptId,
+      toolUseId: 'batch',
+      toolName: 'mcp__claude-in-chrome__browser_batch',
+      input: {
+        actions: [
+          { name: 'computer', input: { action: 'type', text: 'test@example.com' } },
+          { name: 'computer', input: { action: 'type' } },
+        ],
+      },
+      targets: [{ kind: 'email field', label: 'Email', sensitive: false }, { kind: 'password field', label: 'Password', sensitive: true }],
+    },
+    { ...stamp(5), kind: 'tool-result', promptId, toolUseId: 'batch', status: 'succeeded' },
+  ];
+
+  for (const steps of ['summary', 'details'] as const) {
+    it(`names each field and action and says which text is hidden, ${steps === 'summary' ? 'in plain words' : 'with every step'}`, async () => {
+      panel(events, steps);
+      if (steps === 'summary') await userEvent.click(screen.getByText(/^Used its browser: filled in “Card number” and Remember me/));
+      await userEvent.click(screen.getByText('mcp__playwright__browser_fill_form', { selector: '.name' }));
+      expect(screen.getByText('Field 1: “Card number”, text field, text hidden')).toBeInTheDocument();
+      expect(screen.queryByText(/^Field 2/)).not.toBeInTheDocument();
+      await userEvent.click(screen.getByText('mcp__claude-in-chrome__browser_batch', { selector: '.name' }));
+      expect(screen.getByText('Action 1: “Email”, email field')).toBeInTheDocument();
+      expect(screen.getByText('Action 2: “Password”, password field, text hidden')).toBeInTheDocument();
+    });
+  }
+});
+
 describe('read requests and estimates', () => {
   const stamp = (n: number) => ({ outputSeq: n, at: 1_700_000_000_000 + n });
   const read: TimelineEvent = {

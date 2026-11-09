@@ -1,0 +1,23 @@
+{
+  "cwd": "/workspace/project",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "mcp_server": {
+    "name": "claude-in-chrome",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "3299b582-b40c-4d7e-9006-c5b1db7df2ed",
+  "session_id": "79bba932-87a4-4405-8603-7aba4ccf58e6",
+  "tool_input": {
+    "action_summary": "Sets the Card number field to a test card",
+    "ref": "ref_9",
+    "tabId": 482154941,
+    "value": 4242424242424242
+  },
+  "tool_name": "mcp__claude-in-chrome__form_input",
+  "tool_use_id": "toolu_01SkCHmEE3zMgxL8TGQQ6Ana",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/79bba932-87a4-4405-8603-7aba4ccf58e6.jsonl"
+}

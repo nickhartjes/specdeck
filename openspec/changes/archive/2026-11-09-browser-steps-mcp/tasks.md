@@ -1,0 +1,30 @@
+# Tasks
+
+## 1. The elements of a call (`crates/protocol`)
+
+- [x] 1.1 Add an optional `targets: Option<Vec<Option<Target>>>` to `Entry::ToolCall` in `crates/protocol/src/timeline.rs`, serde default and skipped when `None` (design decision 3). Verify with unit tests: JSON round trip in camelCase with a `null` in the list, a `tool-call` without `targets` still decodes, and a `tool-call` with `targets` decodes in a copy of today's `Entry` without the field.
+
+## 2. Reads, refs and hidden text (`crates/core`)
+
+- [x] 2.1 In `browser_targets.rs`, recognise the calls of Claude in Chrome (prefix `mcp__claude-in-chrome__`) and Playwright MCP (any server, one of the tool names in `tests/fixtures/claude-hooks/playwright-steps/tools.json`) (design decision 1). Verify with unit tests: `mcp__playwright__browser_click` and `mcp__pw__browser_click` are Playwright, `mcp__claude-in-chrome__computer` is Claude in Chrome, `mcp__specdeck__click` and `mcp__other__click` are neither.
+- [x] 2.2 Parse Playwright's `browser_snapshot` answer and Claude in Chrome's `read_page` answer (alone, and as a `[read_page]` block of a `browser_batch` answer) into `ref → Target`, with kinds and labels as in design decision 2, merging into per-browser maps that a navigation clears. Verify with unit tests on the fixture answers (`playwright-steps/06`, `chrome-steps/12`, `chrome-batch/10` and `/12`): the email field is `email field` “Email” (Chrome, from its label line), the password field is a sensitive `password field`, Playwright's password field is a `text field` “Password”, not sensitive and not known to be ordinary; the interactive read after a full one keeps the labels; a `navigate` for the tab clears it and leaves other tabs alone.
+- [x] 2.3 Find the element each call acts on (design decision 3): Playwright `target` or `ref`; Claude in Chrome `ref` on its tab; Claude in Chrome `computer type` from the last click with a ref on that tab, forgotten by any other action but a screenshot, read or wait; per field of `browser_fill_form` and per action of `browser_batch`. Verify with unit tests: in `chrome-steps`, the type of `hunter2-test` gets the password field; a `key` action between click and type gives no target; in `chrome-batch/13`, the targets are email, email, password, password, code, *Sign in*; a Playwright selector gets none.
+- [x] 2.4 At `PreToolUse`, set `target` or `targets` on these calls and leave out typed text as in design decision 4. Verify with builder tests: Playwright `browser_type` never carries `text`; `browser_fill_form` drops the textbox values and keeps a checkbox value; Claude in Chrome keeps `test@example.com` typed after clicking the read `type="email"` field, and drops `hunter2-test` and text with no known field, alone and in a batch; `form_input` into a known checkbox keeps its value; SpecDeck's own and Claude Code's tools are unchanged.
+- [x] 2.5 Name the element in the permission notice for these calls (design decision 5): "Claude wants to click “Sign in” in its browser", "… fill in “Password” …", "… open 127.0.0.1:5179/ …", and for a batch "Claude wants to use its browser: …". Verify by extending the permission-text test in `timeline.rs`, and that no notice contains hidden text.
+- [x] 2.6 Replay the three recordings in `crates/core/tests/timeline_fixtures.rs`: the targets come out as in 2.3, and `hunter2-test`, `123456` and `4242424242424242` appear in no emitted entry (on the serialized JSON), while `test@example.com` appears only in Claude in Chrome's. Run `cargo test --offline -p specdeck-core -- --test-threads=3` and `cargo test --offline -p specdeck-protocol`.
+
+## 3. Wording in the timeline (`app/ui`)
+
+- [x] 3.1 Add `targets` to the `tool-call` entry in `app/ui/src/api/types.ts` and keep it on `ToolItem` in `model/timeline.ts`. Verify with a `timeline.test.ts` case that a call's targets survive `buildTimeline`.
+- [x] 3.2 In `steps.ts`, put recognised Playwright and Claude in Chrome calls in the browser group and word them by the table in design decision 5, a batch adding one phrase per action, with the fallbacks to Claude's own words. Verify with `steps.test.ts` cases built from the fixture inputs: the Playwright run "Used its browser: opened 127.0.0.1:5179/, read the page, filled in “Email”, filled in “Password”, filled in “Code”, filled in “Card number” and “Notes”, clicked a button, clicked “Sign in”"; the Chrome batch phrases; "Clicked Sign in button in its browser" without a snapshot; "Submits the sign-in form in its browser" for a coordinate click; "typed into" for an older host's call with its text; "used <tool>" for an unknown tool.
+- [x] 3.3 In the details view (`TimelinePanel.tsx`), show "Text hidden" for these calls, fields and batch actions with their text left out, and each target's kind and label. Verify with a `TimelinePanel.test.tsx` case for a fill-form call and a batch.
+- [x] 3.4 Update `docs/site/src/content/docs/guide/browser.md` (*What viewers see*): Playwright MCP and Claude in Chrome steps are described too; text typed through Playwright is always hidden, through Claude in Chrome only for password fields and fields it doesn't know, and one-time-code and card fields there aren't recognised, so use test data. Verify `mise exec node@24.22.2 -- pnpm --filter @specdeck/docs build` passes.
+
+## 4. Integration
+
+- [x] 4.1 Check by hand in `just local-dev`, with a viewer app and a web viewer: Claude logs in to the fixture's test page through Playwright MCP, then through Claude in Chrome (one batch). Both viewers see the steps of design decision 5 while running and when done, the details view shows "Text hidden", and the test password is in no viewer's timeline (search the web viewer's page and the viewer's diagnostics). Record the results in the PR.
+- [x] 4.2 Run `pnpm` checks for `app/ui` (lint, typecheck, tests) through `mise exec node@24.22.2 --`, and `cargo test --offline --workspace -- --test-threads=3`, and verify they pass.
+
+## Workflow follow-up
+
+- Comment on #83 with what landed, and close it when the change is archived.

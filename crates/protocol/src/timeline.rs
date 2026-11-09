@@ -168,6 +168,10 @@ pub enum Entry {
         /// of the page; older apps ignore it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<Target>,
+        /// The elements of a call that acts on several, by position: the fields of a form
+        /// another browser fills in, or the actions of a batch; older apps ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        targets: Option<Vec<Option<Target>>>,
     },
     ToolResult {
         prompt_id: String,
@@ -936,6 +940,7 @@ mod tests {
                 label: Some("Sign in".into()),
                 sensitive: false,
             }),
+            targets: None,
         };
         let json = serde_json::to_value(&entry).unwrap();
         assert_eq!(
@@ -965,6 +970,60 @@ mod tests {
                 tool_name: String,
                 #[allow(dead_code)]
                 input: Map<String, Value>,
+            },
+        }
+        assert!(matches!(serde_json::from_value::<Older>(json).unwrap(), Older::ToolCall { .. }));
+    }
+
+    #[test]
+    fn tool_calls_carry_the_elements_of_a_form_or_batch() {
+        let entry = Entry::ToolCall {
+            prompt_id: "p".into(),
+            tool_use_id: "t".into(),
+            tool_name: "mcp__claude-in-chrome__browser_batch".into(),
+            input: Map::new(),
+            target: None,
+            targets: Some(vec![
+                Some(Target {
+                    kind: "email field".into(),
+                    label: Some("Email".into()),
+                    sensitive: false,
+                }),
+                None,
+            ]),
+        };
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "tool-call", "promptId": "p", "toolUseId": "t",
+                "toolName": "mcp__claude-in-chrome__browser_batch", "input": {},
+                "targets": [{ "kind": "email field", "label": "Email", "sensitive": false }, null]
+            })
+        );
+        assert_eq!(serde_json::from_value::<Entry>(json.clone()).unwrap(), entry);
+
+        // Without targets, as from an older host.
+        let mut plain = json.clone();
+        plain.as_object_mut().unwrap().remove("targets");
+        let Entry::ToolCall { targets, .. } = serde_json::from_value::<Entry>(plain).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(targets, None);
+
+        // An older app, whose tool call has no targets, still reads the entry.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+        enum Older {
+            ToolCall {
+                #[allow(dead_code)]
+                tool_name: String,
+                #[allow(dead_code)]
+                input: Map<String, Value>,
+                #[allow(dead_code)]
+                #[serde(default)]
+                target: Option<Target>,
             },
         }
         assert!(matches!(serde_json::from_value::<Older>(json).unwrap(), Older::ToolCall { .. }));
@@ -1089,6 +1148,7 @@ mod tests {
                     .unwrap()
                     .clone(),
                 target: None,
+                targets: None,
             },
         ];
         for entry in entries {

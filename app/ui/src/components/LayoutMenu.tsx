@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, LayoutTemplate, PanelLeft, PanelRight } from 'lucide-react';
 import { useBridge } from '../api/bridge';
 import type { Appearance } from '../api/types';
 import { APPEARANCES } from '../appearance';
 import { choose, isAdjusted, PRESET_NAMES, type Layout, type Preset } from '../model/layout';
+import { ExportDiagnosticsDialog } from './ExportDiagnostics';
 
 const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
@@ -35,6 +36,8 @@ interface Props {
 /** The toolbar's layout controls: the side panels, and the preset (`session-window` spec: Layout presets). */
 export function LayoutControls({ layout, onLayout, host = false, onAskAgain }: Props) {
   const [open, setOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const stopExporting = useCallback(() => setExporting(false), []);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const adjusted = isAdjusted(layout, host);
@@ -119,8 +122,21 @@ export function LayoutControls({ layout, onLayout, host = false, onAskAgain }: P
               )}
             </p>
             {inWebViewer() && <AppearanceChoice />}
+            {/* The app has Help › Export Diagnostics. */}
+            {inWebViewer() && (
+              <button
+                className="btn small"
+                onClick={() => {
+                  setOpen(false);
+                  setExporting(true);
+                }}
+              >
+                Export diagnostics…
+              </button>
+            )}
           </div>
         )}
+        {exporting && <ExportDiagnosticsDialog onClose={stopExporting} />}
       </div>
       <button
         className="btn ghost icon"

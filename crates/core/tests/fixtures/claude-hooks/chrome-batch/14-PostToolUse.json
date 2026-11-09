@@ -1,0 +1,106 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 381,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "claude-in-chrome",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "68fb507b-b864-44aa-b5be-e27454f0b804",
+  "session_id": "b0e43ade-e28e-4f5a-a30c-a0943d699d7b",
+  "tool_input": {
+    "actions": [
+      {
+        "input": {
+          "action": "left_click",
+          "action_summary": "Focuses the Email field",
+          "ref": "ref_1",
+          "tabId": 482154943
+        },
+        "name": "computer"
+      },
+      {
+        "input": {
+          "action": "type",
+          "action_summary": "Types the test email address",
+          "tabId": 482154943,
+          "text": "test@example.com"
+        },
+        "name": "computer"
+      },
+      {
+        "input": {
+          "action": "left_click",
+          "action_summary": "Focuses the Password field",
+          "ref": "ref_2",
+          "tabId": 482154943
+        },
+        "name": "computer"
+      },
+      {
+        "input": {
+          "action": "type",
+          "action_summary": "Types the test password",
+          "tabId": 482154943,
+          "text": "hunter2-test"
+        },
+        "name": "computer"
+      },
+      {
+        "input": {
+          "action_summary": "Sets the Code field",
+          "ref": "ref_3",
+          "tabId": 482154943,
+          "value": "123456"
+        },
+        "name": "form_input"
+      },
+      {
+        "input": {
+          "action": "left_click",
+          "action_summary": "Submits the sign-in form",
+          "ref": "ref_6",
+          "tabId": 482154943
+        },
+        "name": "computer"
+      }
+    ]
+  },
+  "tool_name": "mcp__claude-in-chrome__browser_batch",
+  "tool_response": [
+    {
+      "text": "[computer:left_click] Clicked on element ref_1",
+      "type": "text"
+    },
+    {
+      "text": "[computer:type] Typed \"test@example.com\"",
+      "type": "text"
+    },
+    {
+      "text": "[computer:left_click] Clicked on element ref_2",
+      "type": "text"
+    },
+    {
+      "text": "[computer:type] Typed \"hunter2-test\"",
+      "type": "text"
+    },
+    {
+      "text": "[form_input] Set text value to \"[redacted]\" (previous: \"[redacted]\")",
+      "type": "text"
+    },
+    {
+      "text": "[computer:left_click] Clicked on element ref_6",
+      "type": "text"
+    },
+    {
+      "text": "\n\nTab Context:\n- Executed on tabId: 482154943\n- Available tabs:\n  • tabId 482154942: \"New tab\" (\"chrome://newtab/\")\n  • tabId 482154943: \"Sign in\" (\"http://127.0.0.1:5179/\")",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01Kg4msbqhqXYmsx1ewggtKm",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/b0e43ade-e28e-4f5a-a30c-a0943d699d7b.jsonl"
+}

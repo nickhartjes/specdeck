@@ -4,11 +4,14 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { errorMessage, useBridge } from '../api/bridge';
 import type { Profile } from '../api/types';
+import { ExportDiagnosticsLink } from '../components/ExportDiagnostics';
 import { ShortcutsDialog } from '../components/ShortcutsDialog';
+import { PLAIN_TEXT } from '../components/fields';
 import { dispatchMenu } from '../menu/menu';
 import { profileLayout } from '../model/layout';
 import { ViewerScreen } from '../screens/ViewerScreen';
 import { serviceName } from './bridge';
+import type { DiagnosticLog } from './diagnostics';
 
 const PANELS: Record<string, string> = { Digit1: 'panel:files', Digit2: 'panel:terminal', Digit3: 'panel:timeline' };
 
@@ -66,9 +69,11 @@ interface Props {
   service: string;
   /** From the address, or empty. */
   initialCode: string;
+  /** The page's diagnostic log; the join page offers its export once it holds something. */
+  diagnostics?: DiagnosticLog;
 }
 
-export function WebApp({ service, initialCode }: Props) {
+export function WebApp({ service, initialCode, diagnostics }: Props) {
   const bridge = useBridge();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [screen, setScreen] = useState<Screen>({ kind: 'join', code: initialCode });
@@ -99,7 +104,14 @@ export function WebApp({ service, initialCode }: Props) {
           onLeave={(retry) => setScreen({ kind: 'join', code: retry?.code ?? '', error: retry?.message })}
         />
       ) : (
-        <JoinPage service={service} profile={profile} screen={screen} onScreen={setScreen} onProfile={setProfile} />
+        <JoinPage
+          service={service}
+          profile={profile}
+          screen={screen}
+          onScreen={setScreen}
+          onProfile={setProfile}
+          canExport={(diagnostics?.entries().length ?? 0) > 0}
+        />
       )}
       {shortcuts && <ShortcutsDialog web onClose={hideShortcuts} />}
     </>
@@ -112,17 +124,21 @@ function JoinPage({
   screen,
   onScreen,
   onProfile,
+  canExport,
 }: {
   service: string;
   profile: Profile;
   screen: Extract<Screen, { kind: 'join' }>;
   onScreen: (screen: Screen) => void;
   onProfile: (profile: Profile) => void;
+  /** Whether there is anything to export: after a join, also a failed one. */
+  canExport: boolean;
 }) {
   const bridge = useBridge();
   const [code, setCode] = useState(screen.code);
   const [name, setName] = useState(profile.username ?? '');
   const [error, setError] = useState(screen.error ?? null);
+  const version = useServiceVersion();
   const elsewhere = screen.elsewhere;
 
   const submit = async (event: FormEvent) => {
@@ -160,12 +176,12 @@ function JoinPage({
           Invite code
         </label>
         <input
+          {...PLAIN_TEXT}
           id="code"
           className="field"
           autoFocus={!code}
           placeholder="7K2M-9QXH-4TPA"
           autoComplete="off"
-          spellCheck={false}
           value={code}
           onChange={(event) => setCode(event.target.value)}
         />
@@ -173,6 +189,7 @@ function JoinPage({
           Your name
         </label>
         <input
+          {...PLAIN_TEXT}
           id="username"
           className="field"
           autoFocus={Boolean(code) && !name}
@@ -198,7 +215,36 @@ function JoinPage({
             Open in the SpecDeck app
           </a>
         )}
+        {version && <p className="field-hint">SpecDeck {version}</p>}
+        {canExport && (
+          <p className="field-hint">
+            Trouble joining? <ExportDiagnosticsLink />
+          </p>
+        )}
       </form>
     </main>
   );
+}
+
+/**
+ * The release of the service that served this page, from its `web-viewer.json` (relative, so a
+ * service under a path prefix works). `null` until it arrives, and for a service that states none
+ * or a failed request; nothing waits for it.
+ */
+function useServiceVersion(): string | null {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    fetch('web-viewer.json')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: unknown) => {
+        const value = (body as { version?: unknown } | null)?.version;
+        if (current && typeof value === 'string' && value) setVersion(value);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, []);
+  return version;
 }

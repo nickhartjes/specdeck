@@ -1,0 +1,25 @@
+{
+  "cwd": "/workspace/project",
+  "duration_ms": 10,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "mcp_server": {
+    "name": "playwright",
+    "source": "dynamic"
+  },
+  "permission_mode": "default",
+  "prompt_id": "f29381f8-1917-4c37-be5c-ca3ba59341b6",
+  "session_id": "9fd341fa-b301-42ec-8fb3-dcdbcd63afad",
+  "tool_input": {},
+  "tool_name": "mcp__playwright__browser_snapshot",
+  "tool_response": [
+    {
+      "text": "### Page\n- Page URL: http://127.0.0.1:5179/\n- Page Title: Sign in\n- Console: 1 errors, 0 warnings\n### Snapshot\n```yaml\n- generic [active] [ref=e1]:\n  - heading \"Sign in\" [level=1] [ref=e2]\n  - generic [ref=e3]:\n    - generic [ref=e4]:\n      - text: Email\n      - textbox \"Email\" [ref=e5]\n    - generic [ref=e6]:\n      - text: Password\n      - textbox \"Password\" [ref=e7]\n    - generic [ref=e8]:\n      - text: Code\n      - textbox \"Code\" [ref=e9]\n    - textbox \"Card number\" [ref=e10]\n    - generic [ref=e11]:\n      - text: Notes\n      - textbox \"Notes\" [ref=e12]\n    - button \"Sign in\" [ref=e13]\n    - button \"âœ•\" [ref=e14]\n  - paragraph\n```",
+      "type": "text"
+    }
+  ],
+  "tool_use_id": "toolu_01R825ZPukKGZpp6p7UjAmx4",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/9fd341fa-b301-42ec-8fb3-dcdbcd63afad.jsonl"
+}

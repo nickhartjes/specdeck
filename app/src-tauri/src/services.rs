@@ -65,10 +65,16 @@ pub async fn web_viewer(service: &str) -> bool {
         if !response.status().is_success() {
             return None;
         }
-        let body: serde_json::Value = serde_json::from_slice(&response.bytes().await.ok()?).ok()?;
-        body.get("protocol")?.as_u64()
+        web_viewer_protocol(&response.bytes().await.ok()?)
     };
     matches!(tokio::time::timeout(WEB_VIEWER_TIMEOUT, check).await, Ok(Some(_)))
+}
+
+/// The session protocol in a service's `/web-viewer.json`. Other fields, such as the service's
+/// `version`, are ignored, so services of any release are read the same way.
+fn web_viewer_protocol(body: &[u8]) -> Option<u64> {
+    let body: serde_json::Value = serde_json::from_slice(body).ok()?;
+    body.get("protocol")?.as_u64()
 }
 
 /// The result of the check in Settings.
@@ -159,6 +165,14 @@ mod tests {
             web_viewer_url("ws://127.0.0.1:18081/signal"),
             "http://127.0.0.1:18081/web-viewer.json"
         );
+    }
+
+    #[test]
+    fn the_protocol_is_read_from_services_of_any_release() {
+        assert_eq!(web_viewer_protocol(br#"{"protocol":2}"#), Some(2));
+        assert_eq!(web_viewer_protocol(br#"{"protocol":2,"version":"1.7.0"}"#), Some(2));
+        assert_eq!(web_viewer_protocol(br#"{"version":"1.7.0"}"#), None);
+        assert_eq!(web_viewer_protocol(b"ok"), None);
     }
 
     async fn service_with(web: Option<specdeck_server::WebViewer>) -> String {

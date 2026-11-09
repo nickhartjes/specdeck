@@ -65,18 +65,73 @@ pub enum Outcome {
     Failed,
 }
 
+/// Why a check or a download failed, as the log records it: a fixed reason and an HTTP status,
+/// never the error's text, which can hold the feed's address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateError {
+    Offline,
+    /// The server answered with an error; its status when it is known.
+    HttpStatus(Option<u16>),
+    /// The download does not match its signature.
+    Signature,
+    Other,
+}
+
+impl UpdateError {
+    pub fn from_updater(error: &tauri_plugin_updater::Error) -> Self {
+        use tauri_plugin_updater::Error;
+        match error {
+            Error::Reqwest(error) => match error.status() {
+                Some(status) => UpdateError::HttpStatus(Some(status.as_u16())),
+                None if error.is_connect() || error.is_timeout() => UpdateError::Offline,
+                None => UpdateError::Other,
+            },
+            // No release in the feed: the plugin drops the status of an answer that failed.
+            Error::ReleaseNotFound => UpdateError::HttpStatus(None),
+            // "Download request failed with status: 404 Not Found": only the number is kept.
+            Error::Network(text) => UpdateError::HttpStatus(
+                text.split_once("status: ").and_then(|(_, rest)| rest.get(..3)?.parse().ok()),
+            ),
+            Error::Minisign(_) | Error::SignatureUtf8(_) | Error::Base64(_) => {
+                UpdateError::Signature
+            }
+            _ => UpdateError::Other,
+        }
+    }
+
+    fn reason(self) -> &'static str {
+        match self {
+            UpdateError::Offline => "offline",
+            UpdateError::HttpStatus(_) => "http_status",
+            UpdateError::Signature => "signature",
+            UpdateError::Other => "other",
+        }
+    }
+
+    /// The HTTP status, 0 when there was none or it is not known.
+    fn status(self) -> u64 {
+        match self {
+            UpdateError::HttpStatus(status) => status.map_or(0, u64::from),
+            _ => 0,
+        }
+    }
+}
+
+/// The running app's version, as the log records it.
+const RUNNING: &str = env!("CARGO_PKG_VERSION");
+
 /// A newer release the feed announced.
 pub trait Release: Send + Sync + 'static {
     fn version(&self) -> String;
     /// The verified update; an error when it cannot be fetched or does not match its signature.
-    fn download(&self) -> impl Future<Output = Result<Vec<u8>, String>> + Send;
+    fn download(&self) -> impl Future<Output = Result<Vec<u8>, UpdateError>> + Send;
 }
 
 /// Where releases are announced.
 pub trait Feed: Send + Sync {
     type Release: Release;
     /// The newest final release if it is newer than the running app.
-    fn latest(&self) -> impl Future<Output = Result<Option<Self::Release>, String>> + Send;
+    fn latest(&self) -> impl Future<Output = Result<Option<Self::Release>, UpdateError>> + Send;
 }
 
 /// The update state and the download that is ready, shared by the background checks, the menu
@@ -134,12 +189,20 @@ impl<R: Release> Updates<R> {
         }
         let found = feed.latest().await;
         match found {
-            Ok(Some(release)) if Some(release.version()) != ready => Ok(release),
+            Ok(Some(release)) if Some(release.version()) != ready => {
+                let offered = release.version();
+                tracing::info!(outcome = "found", running = RUNNING, offered, "update.checked");
+                Ok(release)
+            }
             Ok(_) => {
+                let outcome = if ready.is_some() { "already_ready" } else { "up_to_date" };
+                tracing::info!(outcome, running = RUNNING, "update.checked");
                 self.set(self.settled());
                 Err(ready.map_or(Outcome::UpToDate, Outcome::Ready))
             }
-            Err(_) => {
+            Err(error) => {
+                let (reason, status) = (error.reason(), error.status());
+                tracing::warn!(reason, status, running = RUNNING, "update.check_failed");
                 self.set(self.settled());
                 Err(Outcome::Failed)
             }
@@ -153,11 +216,14 @@ impl<R: Release> Updates<R> {
         self.set(UpdateState::Downloading { version: version.clone() });
         match release.download().await {
             Ok(bytes) => {
+                tracing::info!(version, "update.ready");
                 *self.ready.lock().unwrap() = Some((release, bytes));
                 self.set(UpdateState::Ready { version: version.clone() });
                 Outcome::Ready(version)
             }
-            Err(_) => {
+            Err(error) => {
+                let (reason, status) = (error.reason(), error.status());
+                tracing::warn!(reason, status, offered = version, "update.download_failed");
                 self.set(self.settled());
                 Outcome::Failed
             }
@@ -254,10 +320,10 @@ pub struct GitHubFeed<R: tauri::Runtime>(pub tauri::AppHandle<R>);
 impl<R: tauri::Runtime> Feed for GitHubFeed<R> {
     type Release = tauri_plugin_updater::Update;
 
-    async fn latest(&self) -> Result<Option<Self::Release>, String> {
+    async fn latest(&self) -> Result<Option<Self::Release>, UpdateError> {
         use tauri_plugin_updater::UpdaterExt;
-        let updater = self.0.updater().map_err(|error| error.to_string())?;
-        updater.check().await.map_err(|error| error.to_string())
+        let updater = self.0.updater().map_err(|error| UpdateError::from_updater(&error))?;
+        updater.check().await.map_err(|error| UpdateError::from_updater(&error))
     }
 }
 
@@ -266,10 +332,10 @@ impl Release for tauri_plugin_updater::Update {
         self.version.clone()
     }
 
-    async fn download(&self) -> Result<Vec<u8>, String> {
+    async fn download(&self) -> Result<Vec<u8>, UpdateError> {
         tauri_plugin_updater::Update::download(self, |_, _| {}, || {})
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| UpdateError::from_updater(&error))
     }
 }
 
@@ -292,19 +358,19 @@ mod tests {
             self.version.into()
         }
 
-        async fn download(&self) -> Result<Vec<u8>, String> {
-            self.bytes.map(<[u8]>::to_vec).ok_or_else(|| "signature mismatch".into())
+        async fn download(&self) -> Result<Vec<u8>, UpdateError> {
+            self.bytes.map(<[u8]>::to_vec).ok_or(UpdateError::Signature)
         }
     }
 
     /// Answers each `latest` call with the next of `answers`, then with no newer release.
     struct FakeFeed {
-        answers: Mutex<Vec<Result<Option<FakeRelease>, String>>>,
+        answers: Mutex<Vec<Result<Option<FakeRelease>, UpdateError>>>,
         calls: AtomicUsize,
     }
 
     impl FakeFeed {
-        fn new(mut answers: Vec<Result<Option<FakeRelease>, String>>) -> Self {
+        fn new(mut answers: Vec<Result<Option<FakeRelease>, UpdateError>>) -> Self {
             answers.reverse();
             Self { answers: Mutex::new(answers), calls: AtomicUsize::new(0) }
         }
@@ -313,13 +379,13 @@ mod tests {
     impl Feed for FakeFeed {
         type Release = FakeRelease;
 
-        async fn latest(&self) -> Result<Option<FakeRelease>, String> {
+        async fn latest(&self) -> Result<Option<FakeRelease>, UpdateError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.answers.lock().unwrap().pop().unwrap_or(Ok(None))
         }
     }
 
-    fn release(version: &'static str) -> Result<Option<FakeRelease>, String> {
+    fn release(version: &'static str) -> Result<Option<FakeRelease>, UpdateError> {
         Ok(Some(FakeRelease { version, bytes: Some(b"update") }))
     }
 
@@ -373,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_check_is_silent_and_tried_again() {
         let (updates, seen) = updates();
-        let feed = FakeFeed::new(vec![Err("offline".into()), release("1.2.1")]);
+        let feed = FakeFeed::new(vec![Err(UpdateError::Offline), release("1.2.1")]);
         assert_eq!(updates.check(&feed).await, Outcome::Failed);
         assert_eq!(updates.state(), UpdateState::Idle);
         assert_eq!(updates.check(&feed).await, Outcome::Ready("1.2.1".into()));
@@ -396,7 +462,7 @@ mod tests {
         let feed = FakeFeed::new(vec![
             release("1.2.1"),
             release("1.2.1"),
-            Err("offline".into()),
+            Err(UpdateError::Offline),
             release("1.2.2"),
         ]);
         updates.check(&feed).await;
@@ -484,6 +550,71 @@ mod tests {
         let waited =
             install_after_session(|| false, Duration::from_secs(5), || Ok(started.elapsed()));
         assert!(waited.await.unwrap() < Duration::from_secs(1));
+    }
+
+    /// The app's log of what `run` did.
+    async fn logged(run: impl AsyncFnOnce()) -> Vec<serde_json::Value> {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) =
+            specdeck_diag::Diagnostics::new(dir.path().to_owned(), specdeck_diag::APP_LOG);
+        let _default = tracing::subscriber::set_default(subscriber);
+        run().await;
+        let mut events = diagnostics.recent();
+        events.reverse();
+        events
+    }
+
+    #[tokio::test]
+    async fn checks_and_downloads_are_logged_with_a_fixed_reason() {
+        let events = logged(async || {
+            let (updates, _) = updates();
+            let feed = FakeFeed::new(vec![
+                Err(UpdateError::Offline),
+                Ok(None),
+                Ok(Some(FakeRelease { version: "1.2.1", bytes: None })),
+                release("1.2.2"),
+            ]);
+            for _ in 0..4 {
+                updates.check(&feed).await;
+            }
+        })
+        .await;
+        let names: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "update.check_failed",
+                "update.checked",
+                "update.checked",
+                "update.download_failed",
+                "update.checked",
+                "update.ready"
+            ]
+        );
+        assert_eq!(events[0]["reason"], "offline");
+        assert_eq!(events[0]["running"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(events[1]["outcome"], "up_to_date");
+        assert_eq!(events[2]["outcome"], "found");
+        assert_eq!(events[2]["offered"], "1.2.1");
+        assert_eq!(events[3]["reason"], "signature");
+        assert_eq!(events[3]["offered"], "1.2.1");
+        assert_eq!(events[5]["version"], "1.2.2");
+    }
+
+    #[test]
+    fn updater_errors_become_a_fixed_reason() {
+        use tauri_plugin_updater::Error;
+        let signature = Error::SignatureUtf8("Marker".into());
+        assert_eq!(UpdateError::from_updater(&signature), UpdateError::Signature);
+        assert_eq!(
+            UpdateError::from_updater(&Error::ReleaseNotFound),
+            UpdateError::HttpStatus(None)
+        );
+        let network = Error::Network(
+            "Download request failed with status: 404 Not Found https://marker.example".into(),
+        );
+        assert_eq!(UpdateError::from_updater(&network), UpdateError::HttpStatus(Some(404)));
+        assert_eq!(UpdateError::from_updater(&Error::EmptyEndpoints), UpdateError::Other);
     }
 
     #[test]

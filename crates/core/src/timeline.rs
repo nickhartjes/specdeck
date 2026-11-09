@@ -11,7 +11,7 @@ use specdeck_protocol::timeline::{
     ToolStatus,
 };
 
-use crate::browser_targets::{self, Targets};
+use crate::browser_targets::{self, Acts, Browser, Targets};
 use crate::documents::{self, DocumentText};
 use crate::hooks::HookPayload;
 use crate::screenshots;
@@ -23,7 +23,44 @@ use crate::shell_changes::CommandChanges;
 pub struct HookPayloadError {
     pub event: String,
     pub reason: String,
+    /// The payload's tool, if it names one.
+    pub tool: Option<String>,
+    pub fault: PayloadFault,
 }
+
+/// Why the timeline could not place a payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PayloadFault {
+    /// A hook event [`Payload`] does not know, as when Claude Code renames one.
+    UnknownEvent,
+    /// A known event whose fields are not as expected.
+    BadShape,
+}
+
+impl PayloadFault {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PayloadFault::UnknownEvent => "unknown_event",
+            PayloadFault::BadShape => "bad_shape",
+        }
+    }
+}
+
+/// The hook events [`Payload`] knows; a test keeps the two in step.
+const KNOWN_EVENTS: [&str; 12] = [
+    "UserPromptSubmit",
+    "MessageDisplay",
+    "Stop",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "SessionEnd",
+    "Notification",
+    "SubagentStop",
+    "PermissionRequest",
+    "PreCompact",
+    "PostCompact",
+];
 
 #[derive(Deserialize)]
 #[serde(tag = "hook_event_name")]
@@ -122,6 +159,8 @@ struct OpenCall {
     by_helper: bool,
     /// Kept to match a permission request, which does not name the call.
     input: Map<String, Value>,
+    /// The browser elements it acts on, for the permission notice.
+    acts: Acts,
     /// Claude Code asked the host's permission for it.
     awaiting_permission: bool,
     /// A notice that Claude waits for the host was shown for it.
@@ -212,8 +251,18 @@ impl TimelineBuilder {
     pub fn handle(&mut self, raw: HookPayload) -> Result<Vec<Entry>, HookPayloadError> {
         let event =
             raw.get("hook_event_name").and_then(Value::as_str).unwrap_or("unknown").to_owned();
-        let payload: Payload = serde_json::from_value(Value::Object(raw))
-            .map_err(|e| HookPayloadError { event, reason: e.to_string() })?;
+        let tool = raw.get("tool_name").and_then(Value::as_str).map(str::to_owned);
+        let payload: Payload =
+            serde_json::from_value(Value::Object(raw)).map_err(|e| HookPayloadError {
+                fault: if KNOWN_EVENTS.contains(&event.as_str()) {
+                    PayloadFault::BadShape
+                } else {
+                    PayloadFault::UnknownEvent
+                },
+                event,
+                reason: e.to_string(),
+                tool,
+            })?;
 
         Ok(match payload {
             Payload::UserPromptSubmit { prompt_id, prompt } => {
@@ -228,30 +277,31 @@ impl TimelineBuilder {
                 vec![Entry::Message { prompt_id, message_id, text: delta, r#final }]
             }
             Payload::PreToolUse(call) => {
-                self.targets.before(&call.tool_name);
-                let target = self.targets.of(&call.tool_name, &call.tool_input);
+                let acts = self.targets.call(&call.tool_name, &call.tool_input);
                 self.open_calls.push(OpenCall {
                     tool_use_id: call.tool_use_id.clone(),
                     prompt_id: call.prompt_id.clone(),
                     tool_name: call.tool_name.clone(),
                     by_helper: call.agent_id.is_some(),
                     input: call.tool_input.clone(),
+                    acts: acts.clone(),
                     awaiting_permission: false,
                     noticed: false,
                 });
                 let mut input = self.shared_input(&call.tool_name, call.tool_input);
-                browser_targets::hide_typed(&call.tool_name, &mut input, target.as_ref());
+                browser_targets::hide_typed(&call.tool_name, &mut input, &acts);
                 vec![Entry::ToolCall {
                     prompt_id: call.prompt_id,
                     tool_use_id: call.tool_use_id,
                     tool_name: call.tool_name,
                     input,
-                    target,
+                    target: acts.target,
+                    targets: acts.targets,
                 }]
             }
             Payload::PostToolUse { call, tool_response } => {
                 let permission = self.close_call(&call.tool_use_id);
-                self.targets.after(&call.tool_name, &tool_response);
+                self.targets.after(&call.tool_name, &call.tool_input, &tool_response);
                 let outcome = match call.tool_name.as_str() {
                     QUESTION_TOOL => answers(&tool_response, &call.tool_input),
                     PLAN_TOOL => Some(ToolOutcome::PlanDecision { approved: true }),
@@ -329,7 +379,6 @@ impl TimelineBuilder {
                 }
             }
             Payload::PermissionRequest { tool_name, tool_input } => {
-                let message = self.permission_text(&tool_name, &tool_input);
                 // The call it is for: same tool and input, else the newest of that tool, else
                 // the newest call.
                 let index = self
@@ -340,6 +389,13 @@ impl TimelineBuilder {
                         self.open_calls.iter().rposition(|call| call.tool_name == tool_name)
                     })
                     .or_else(|| self.open_calls.len().checked_sub(1));
+                let acts = index
+                    .map(|index| &self.open_calls[index])
+                    .filter(|call| call.tool_name == tool_name)
+                    .map(|call| call.acts.clone())
+                    // Without its call, from what is known now, leaving that as it is.
+                    .unwrap_or_else(|| self.targets.clone().call(&tool_name, &tool_input));
+                let message = self.permission_text(&tool_name, &tool_input, &acts);
                 if let Some(call) = index.map(|index| &mut self.open_calls[index]) {
                     call.awaiting_permission = !asks_itself(&call.tool_name);
                     if std::mem::replace(&mut call.noticed, true) {
@@ -368,7 +424,7 @@ impl TimelineBuilder {
     }
 
     /// The notice for a permission request: what Claude asks to do, asks, or wants reviewed.
-    fn permission_text(&self, tool_name: &str, input: &Map<String, Value>) -> String {
+    fn permission_text(&self, tool_name: &str, input: &Map<String, Value>, acts: &Acts) -> String {
         match tool_name {
             QUESTION_TOOL => {
                 let questions = input.get("questions").and_then(Value::as_array);
@@ -385,9 +441,9 @@ impl TimelineBuilder {
             }
             PLAN_TOOL => "Claude has a plan for you to review".into(),
             name if name.starts_with(BROWSER_TOOLS) => {
-                let target = self.targets.of(name, input);
-                browser_permission_text(&name[BROWSER_TOOLS.len()..], input, target.as_ref())
+                browser_permission_text(&name[BROWSER_TOOLS.len()..], input, acts.target.as_ref())
             }
+            name if let Some(text) = other_browser_permission_text(name, input, acts) => text,
             _ => {
                 let summary = SUMMARY_FIELDS.iter().find_map(|field| {
                     let value = input.get(*field)?.as_str()?;
@@ -599,6 +655,148 @@ fn browser_permission_text(
         "back" => "Claude wants to go back a page in its browser".into(),
         "console" => "Claude wants to read its browser's console".into(),
         other => format!("Claude wants to use {other} in its browser"),
+    }
+}
+
+/// What Claude wants to do in Playwright MCP or Claude in Chrome, in plain words, for the calls
+/// that open pages, click, type or fill in (`agent-browser`, *Steps in other browsers in plain
+/// words*); `None` for the rest.
+fn other_browser_permission_text(
+    tool_name: &str,
+    input: &Map<String, Value>,
+    acts: &Acts,
+) -> Option<String> {
+    let (browser, tool) = browser_targets::browser_of(tool_name)?;
+    // Worded from the input as viewers get it, so hidden text reads as filled in.
+    let mut input = input.clone();
+    browser_targets::hide_typed(tool_name, &mut input, acts);
+    if browser == Browser::Chrome && tool == "browser_batch" {
+        let targets = acts.targets.as_deref().unwrap_or_default();
+        let actions = input.get("actions").and_then(Value::as_array);
+        let phrases: Vec<String> = (actions.into_iter().flatten().enumerate())
+            .map(|(n, action)| {
+                let name = action.get("name").and_then(Value::as_str).unwrap_or_default();
+                let target = targets.get(n).and_then(Option::as_ref);
+                let input = action.get("input").and_then(Value::as_object);
+                match input.and_then(|input| browser_phrase(browser, name, input, target, &[])) {
+                    Some(Phrase::Verb(phrase) | Phrase::Summary(phrase)) => phrase,
+                    None => format!("use {name}"),
+                }
+            })
+            .collect();
+        return Some(format!("Claude wants to use its browser: {}", phrases.join(", ")));
+    }
+    let targets = acts.targets.as_deref().unwrap_or_default();
+    let phrase = browser_phrase(browser, tool, &input, acts.target.as_ref(), targets)?;
+    Some(match phrase {
+        Phrase::Verb(phrase) => format!("Claude wants to {phrase} in its browser"),
+        Phrase::Summary(summary) => format!("Claude wants to use its browser: {summary}"),
+    })
+}
+
+/// What an action in another browser does, in words.
+enum Phrase {
+    /// A verb and what it acts on: "click “Sign in”".
+    Verb(String),
+    /// Claude in Chrome's own summary of the action: "submits the sign-in form".
+    Summary(String),
+}
+
+/// One action in Playwright MCP or Claude in Chrome as a verb and what it acts on ("click “Sign
+/// in”"), from the input as viewers get it.
+fn browser_phrase(
+    browser: Browser,
+    tool: &str,
+    input: &Map<String, Value>,
+    target: Option<&Target>,
+    targets: &[Option<Target>],
+) -> Option<Phrase> {
+    let field = |key: &str| input.get(key).and_then(Value::as_str).unwrap_or_default();
+    // The element by the page's read, else by Claude's own words.
+    let named = |target: Option<&Target>, words: &str| match target {
+        Some(target) => Some(browser_targets::named(target)),
+        None if !words.trim().is_empty() => Some(cut(words.trim(), 40)),
+        None => None,
+    };
+    let summary = || {
+        let summary = field("action_summary").trim();
+        let mut chars = summary.chars();
+        let first = chars.next()?;
+        Some(Phrase::Summary(format!("{}{}", first.to_lowercase(), chars.as_str())))
+    };
+    let open = || {
+        let url = field("url");
+        let address = url.strip_prefix("https://").or(url.strip_prefix("http://")).unwrap_or(url);
+        let address =
+            if address.is_empty() { "a page".into() } else { cut(address, MAX_SUMMARY_CHARS) };
+        format!("open {address}")
+    };
+    let filled = |what: Option<String>| format!("fill in {}", what.unwrap_or("a field".into()));
+    match (browser, tool) {
+        (Browser::Playwright, "browser_navigate") | (Browser::Chrome, "navigate") => {
+            Some(Phrase::Verb(open()))
+        }
+        (Browser::Playwright, "browser_click") => {
+            let verb = if input.get("doubleClick") == Some(&Value::Bool(true)) {
+                "double-click"
+            } else {
+                "click"
+            };
+            let what = named(target, field("element")).unwrap_or("on the page".into());
+            Some(Phrase::Verb(format!("{verb} {what}")))
+        }
+        (Browser::Playwright, "browser_type") => {
+            Some(Phrase::Verb(filled(named(target, field("element")))))
+        }
+        (Browser::Playwright, "browser_fill_form") => {
+            let fields = input.get("fields").and_then(Value::as_array);
+            let names: Vec<String> = (fields.into_iter().flatten().enumerate())
+                .map(|(n, field)| {
+                    let words = field.get("name").and_then(Value::as_str).unwrap_or_default();
+                    named(targets.get(n).and_then(Option::as_ref), words)
+                        .unwrap_or("a field".into())
+                })
+                .collect();
+            Some(Phrase::Verb(match names.as_slice() {
+                [] => "fill in a form".into(),
+                [one] => format!("fill in {one}"),
+                [one, two] => format!("fill in {one} and {two}"),
+                more => format!("fill in {} fields", more.len()),
+            }))
+        }
+        (Browser::Chrome, "computer") => {
+            let action = field("action");
+            if action == "type" {
+                let what = target.map(browser_targets::named);
+                return Some(Phrase::Verb(if input.contains_key("text") {
+                    format!("type into {}", what.unwrap_or("a field".into()))
+                } else {
+                    filled(what)
+                }));
+            }
+            let verb = match action {
+                "left_click" => "click",
+                "right_click" => "right-click",
+                "double_click" => "double-click",
+                "triple_click" => "triple-click",
+                _ => return None,
+            };
+            match target {
+                Some(target) => {
+                    Some(Phrase::Verb(format!("{verb} {}", browser_targets::named(target))))
+                }
+                None => summary().or(Some(Phrase::Verb(format!("{verb} on the page")))),
+            }
+        }
+        (Browser::Chrome, "form_input") => {
+            let what = target.map(browser_targets::named);
+            match (input.contains_key("value"), what) {
+                (true, Some(what)) => Some(Phrase::Verb(format!("set {what}"))),
+                (false, Some(what)) => Some(Phrase::Verb(filled(Some(what)))),
+                (_, None) => summary().or(Some(Phrase::Verb(filled(None)))),
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1324,6 +1522,194 @@ mod tests {
         );
     }
 
+    /// A builder after a read of the recorded test login page in Playwright MCP and in Claude in
+    /// Chrome (tab 1).
+    fn after_reading_other_browsers() -> TimelineBuilder {
+        use serde_json::json;
+        let fixture = |session: &str, file: &str| -> Value {
+            let path = format!("tests/fixtures/claude-hooks/{session}/{file}");
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        let snapshot = fixture("playwright-steps", "06-PostToolUse.json");
+        let tool = "mcp__playwright__browser_snapshot";
+        builder.handle(call("PreToolUse", tool, "s", json!({}))).unwrap();
+        let response = json!({ "tool_response": snapshot["tool_response"] });
+        builder.handle(call("PostToolUse", tool, "s", response)).unwrap();
+        let read = fixture("chrome-steps", "12-PostToolUse.json");
+        let tool = "mcp__claude-in-chrome__read_page";
+        let extra = json!({ "tool_input": { "tabId": 1 }, "tool_response": read["tool_response"] });
+        builder
+            .handle(call("PreToolUse", tool, "r", json!({ "tool_input": { "tabId": 1 } })))
+            .unwrap();
+        builder.handle(call("PostToolUse", tool, "r", extra)).unwrap();
+        builder
+    }
+
+    fn other_call(builder: &mut TimelineBuilder, tool: &str, input: Value) -> Entry {
+        let extra = serde_json::json!({ "tool_input": input });
+        builder.handle(call("PreToolUse", tool, "t", extra)).unwrap().remove(0)
+    }
+
+    #[test]
+    fn other_browsers_carry_their_elements_and_hide_text_not_known_to_be_ordinary() {
+        use serde_json::json;
+        let mut builder = after_reading_other_browsers();
+        let sent = |entry: &Entry| serde_json::to_string(entry).unwrap();
+
+        // Playwright: the element from the snapshot; the text never.
+        let typed = other_call(
+            &mut builder,
+            "mcp__playwright__browser_type",
+            json!({ "element": "Email field", "target": "e5", "text": "test@example.com" }),
+        );
+        let Entry::ToolCall { target, input, .. } = &typed else { panic!("{typed:?}") };
+        assert_eq!(target.as_ref().unwrap().label.as_deref(), Some("Email"));
+        assert!(!input.contains_key("text"));
+        assert!(!sent(&typed).contains("test@example.com"));
+        let form = other_call(
+            &mut builder,
+            "mcp__playwright__browser_fill_form",
+            json!({ "fields": [
+                { "name": "Card number", "target": "e10", "type": "textbox", "value": "4242424242424242" },
+                { "name": "Remember me", "target": "e99", "type": "checkbox", "value": "true" },
+            ] }),
+        );
+        let Entry::ToolCall { targets, input, .. } = &form else { panic!("{form:?}") };
+        let targets = targets.as_ref().unwrap();
+        assert_eq!(targets[0].as_ref().unwrap().label.as_deref(), Some("Card number"));
+        assert_eq!(targets[1], None);
+        assert!(!sent(&form).contains("4242424242424242"));
+        assert_eq!(input["fields"][1]["value"], "true");
+
+        // Claude in Chrome: an ordinary field it read keeps its text, a password field doesn't.
+        let chrome = "mcp__claude-in-chrome__computer";
+        let click = |builder: &mut TimelineBuilder, reference: &str| {
+            let input = json!({ "action": "left_click", "ref": reference, "tabId": 1 });
+            other_call(builder, chrome, input)
+        };
+        let type_ = |builder: &mut TimelineBuilder, text: &str| {
+            other_call(builder, chrome, json!({ "action": "type", "text": text, "tabId": 1 }))
+        };
+        click(&mut builder, "ref_4");
+        let email = type_(&mut builder, "test@example.com");
+        assert!(sent(&email).contains("test@example.com"));
+        click(&mut builder, "ref_6");
+        let password = type_(&mut builder, "hunter2-test");
+        assert!(!sent(&password).contains("hunter2-test"));
+        let Entry::ToolCall { target, .. } = &password else { panic!() };
+        assert!(target.as_ref().unwrap().sensitive);
+        // Typing without a click on a known field.
+        other_call(
+            &mut builder,
+            chrome,
+            json!({ "action": "left_click", "coordinate": [1, 2], "tabId": 1 }),
+        );
+        let unknown = type_(&mut builder, "who-knows");
+        assert!(!sent(&unknown).contains("who-knows"));
+
+        // The same in a batch.
+        let batch = other_call(
+            &mut builder,
+            "mcp__claude-in-chrome__browser_batch",
+            json!({ "actions": [
+                { "name": "computer", "input": { "action": "left_click", "ref": "ref_4", "tabId": 1 } },
+                { "name": "computer", "input": { "action": "type", "text": "test@example.com", "tabId": 1 } },
+                { "name": "computer", "input": { "action": "left_click", "ref": "ref_6", "tabId": 1 } },
+                { "name": "computer", "input": { "action": "type", "text": "hunter2-test", "tabId": 1 } },
+                { "name": "form_input", "input": { "ref": "ref_8", "value": 123456, "tabId": 1 } },
+            ] }),
+        );
+        assert!(sent(&batch).contains("test@example.com"));
+        assert!(!sent(&batch).contains("hunter2-test"));
+        // The code field reads as `type="text"`, so its value is shown (design, risks).
+        assert!(sent(&batch).contains("123456"));
+        let Entry::ToolCall { targets, .. } = &batch else { panic!() };
+        assert_eq!(targets.as_ref().unwrap().len(), 5);
+
+        // Claude Code's own tools are unchanged.
+        let bash = other_call(&mut builder, "Bash", json!({ "command": "echo hi" }));
+        let Entry::ToolCall { input, target, targets, .. } = &bash else { panic!() };
+        assert_eq!(input["command"], "echo hi");
+        assert_eq!((target, targets), (&None, &None));
+    }
+
+    #[test]
+    fn a_permission_request_in_another_browser_names_the_element() {
+        use serde_json::json;
+        let text = |tool: &str, input: Value| {
+            let mut builder = after_reading_other_browsers();
+            other_call(&mut builder, tool, input.clone());
+            messages(builder.handle(permission_request(tool, input)).unwrap()).remove(0)
+        };
+        let playwright = |tool: &str| format!("mcp__playwright__{tool}");
+        assert_eq!(
+            text(
+                &playwright("browser_click"),
+                json!({ "element": "Sign in button", "target": "e13" })
+            ),
+            "Claude wants to click “Sign in” in its browser"
+        );
+        assert_eq!(
+            text(
+                &playwright("browser_click"),
+                json!({ "element": "Sign in button", "target": "#go" })
+            ),
+            "Claude wants to click Sign in button in its browser"
+        );
+        let password = text(
+            &playwright("browser_type"),
+            json!({ "element": "Password field", "target": "e7", "text": "hunter2-test" }),
+        );
+        assert_eq!(password, "Claude wants to fill in “Password” in its browser");
+        assert_eq!(
+            text(&playwright("browser_navigate"), json!({ "url": "http://127.0.0.1:5179/" })),
+            "Claude wants to open 127.0.0.1:5179/ in its browser"
+        );
+        assert_eq!(
+            text(
+                &playwright("browser_fill_form"),
+                json!({ "fields": [
+                { "name": "Card number", "target": "e10", "type": "textbox", "value": "4242" },
+                { "name": "Notes", "target": "e12", "type": "textbox", "value": "hi" },
+            ] })
+            ),
+            "Claude wants to fill in “Card number” and “Notes” in its browser"
+        );
+        let chrome = "mcp__claude-in-chrome__computer";
+        assert_eq!(
+            text(chrome, json!({ "action": "left_click", "ref": "ref_12", "tabId": 1 })),
+            "Claude wants to click “Sign in” in its browser"
+        );
+        assert_eq!(
+            text(
+                chrome,
+                json!({ "action": "left_click", "coordinate": [1, 2], "tabId": 1,
+                "action_summary": "Submits the sign-in form" })
+            ),
+            "Claude wants to use its browser: submits the sign-in form"
+        );
+        let batch = text(
+            "mcp__claude-in-chrome__browser_batch",
+            json!({ "actions": [
+                { "name": "computer", "input": { "action": "left_click", "ref": "ref_6", "tabId": 1 } },
+                { "name": "computer", "input": { "action": "type", "text": "hunter2-test", "tabId": 1 } },
+                { "name": "computer", "input": { "action": "left_click", "ref": "ref_12", "tabId": 1 } },
+                { "name": "gif_creator", "input": {} },
+            ] }),
+        );
+        assert_eq!(
+            batch,
+            "Claude wants to use its browser: click “Password”, fill in “Password”, click “Sign in”, use gif_creator"
+        );
+        assert!(!password.contains("hunter2") && !batch.contains("hunter2"));
+        // Other calls keep the general notice.
+        assert_eq!(
+            text(&playwright("browser_evaluate"), json!({ "function": "() => 1" })),
+            "Claude wants to use mcp__playwright__browser_evaluate"
+        );
+    }
+
     #[test]
     fn an_mcp_dialog_in_a_browser_asks_for_attention() {
         let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
@@ -1346,5 +1732,34 @@ mod tests {
         assert_eq!(compact("PostCompact", "manual"), Some(false));
         assert_eq!(compact("PreCompact", "auto"), None);
         assert_eq!(compact("Stop", "manual"), None);
+    }
+
+    /// Serde names the variants it expects when it meets an unknown one: they must be exactly
+    /// [`KNOWN_EVENTS`].
+    #[test]
+    fn known_events_are_the_payload_variants() {
+        let payload = serde_json::json!({ "hook_event_name": "Renamed" });
+        let error = serde_json::from_value::<Payload>(payload).err().unwrap().to_string();
+        let expected = error.split("expected one of ").nth(1).unwrap();
+        let mut variants: Vec<&str> =
+            expected.split(", ").map(|name| name.trim_matches(|c| c == '`' || c == ' ')).collect();
+        let mut known = KNOWN_EVENTS.to_vec();
+        variants.sort();
+        known.sort();
+        assert_eq!(variants, known);
+    }
+
+    #[test]
+    fn payloads_that_cannot_be_placed_say_why() {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        let renamed = payload(serde_json::json!({ "hook_event_name": "PromptSent", "x": 1 }));
+        let error = builder.handle(renamed).unwrap_err();
+        assert_eq!(error.fault, PayloadFault::UnknownEvent);
+        assert_eq!(error.event, "PromptSent");
+        let mut odd = call("PreToolUse", "Read", "r", serde_json::json!({}));
+        odd.remove("prompt_id");
+        let error = builder.handle(odd).unwrap_err();
+        assert_eq!(error.fault, PayloadFault::BadShape);
+        assert_eq!(error.tool.as_deref(), Some("Read"));
     }
 }

@@ -14,11 +14,11 @@ use tokio::time::Instant;
 use serde::Serialize;
 use specdeck_protocol::asks::{self as ask, Card, CardSet, ReadTarget, ReadView, VoteView};
 use specdeck_protocol::control::{
-    self, ASKS_PROTOCOL_VERSION, BRAINDUMP_PROTOCOL_VERSION, HostMessage, LINKS_PROTOCOL_VERSION,
-    MAX_LINKS_LISTED, MIN_VIEWER_PROTOCOL_VERSION, Outcome, PROTOCOL_VERSION, Participant,
-    REQUESTS_PROTOCOL_VERSION, RefusalReason, Role, SHARED_FILES_PROTOCOL_VERSION,
-    SUGGESTED_PROTOCOL_VERSION, SentLink, SentLinkState, Suggestion, SuggestionState,
-    ViewerMessage, ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
+    self, ASKS_PROTOCOL_VERSION, BRAINDUMP_PROTOCOL_VERSION, CAUGHT_UP_PROTOCOL_VERSION,
+    HostMessage, LINKS_PROTOCOL_VERSION, MAX_LINKS_LISTED, MIN_VIEWER_PROTOCOL_VERSION, Outcome,
+    PROTOCOL_VERSION, Participant, REQUESTS_PROTOCOL_VERSION, RefusalReason, Role,
+    SHARED_FILES_PROTOCOL_VERSION, SUGGESTED_PROTOCOL_VERSION, SentLink, SentLinkState, Suggestion,
+    SuggestionState, ViewerMessage, ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
 };
 use specdeck_protocol::files::{
     self, Assembled, Assembly, FILE_CHUNK_BYTES, FilesReply, FilesRequest,
@@ -113,6 +113,11 @@ pub enum SharingEvent {
     /// The open read request and vote as the host sees them, on every change; boxed, as it is
     /// much larger than the others.
     Asks(Box<HostAsks>),
+    /// The read request closed, just before the `Asks` without it: by its time running out, or
+    /// the host going on (`host-ask-notifications`).
+    ReadClosed {
+        time_up: bool,
+    },
 }
 
 /// The host's asks as the host's window shows them: the same views viewers get, with every
@@ -401,6 +406,36 @@ struct Admitted {
     fetch: Option<Fetch>,
     /// The file this viewer is sending, one at a time.
     upload: Option<Upload>,
+    /// Sending the history the session had at admission; `None` once it is sent.
+    replay: Option<Replay>,
+}
+
+/// A viewer's replay: what the session had when the viewer was admitted, and what sending it
+/// took so far (`viewer-diagnostics` design decision 5).
+struct Replay {
+    started: Instant,
+    returning: bool,
+    /// The last record and the timeline length at admission.
+    record_target: Option<u64>,
+    event_target: usize,
+    counts: diag::ReplayCounts,
+}
+
+impl Replay {
+    fn new(view: &SessionView, returning: bool) -> Self {
+        Self {
+            started: Instant::now(),
+            returning,
+            record_target: view.log().latest(),
+            event_target: view.timeline_len(),
+            counts: diag::ReplayCounts::default(),
+        }
+    }
+
+    fn reached(&self, admitted: &Admitted) -> bool {
+        self.record_target.is_none_or(|target| admitted.record_cursor > target)
+            && admitted.event_cursor >= self.event_target
+    }
 }
 
 struct Fetch {
@@ -1156,6 +1191,7 @@ impl Host {
                     bytes_sent: 0,
                     fetch: None,
                     upload: None,
+                    replay: Some(Replay::new(&self.view, returning.is_some())),
                 });
                 let _ = slot.peer.send(Channel::Control, &control::encode(&welcome));
                 let allowed =
@@ -1386,6 +1422,7 @@ impl Host {
     fn close_read(&mut self, time_up: bool) -> bool {
         let Ok(entry) = self.asks.close_read(&self.present(), time_up) else { return false };
         self.view.add_entry(entry);
+        let _ = self.events.send(SharingEvent::ReadClosed { time_up });
         self.broadcast_asks();
         true
     }
@@ -1686,6 +1723,9 @@ impl Host {
         if let Some(upload) = slot.admitted.as_ref().and_then(|a| a.upload.as_ref()) {
             self.view.release_upload(upload.id);
         }
+        if let Some(admitted) = &slot.admitted {
+            abandon_replay(admitted);
+        }
         self.record_departure(&slot, reason);
         slot.admitted.is_some()
     }
@@ -1863,6 +1903,11 @@ fn pump(
         admitted.records_sent += count;
         admitted.frames_sent += 1;
         admitted.bytes_sent += frame.len() as u64;
+        if let Some(replay) = &mut admitted.replay {
+            replay.counts.batches += 1;
+            replay.counts.records += count;
+            replay.counts.bytes += frame.len() as u64;
+        }
     }
     for event in view.timeline_from(admitted.event_cursor) {
         if sink.queued() >= HIGH_WATER {
@@ -1893,9 +1938,51 @@ fn pump(
             admitted.events_sent += 1;
             admitted.frames_sent += 1;
             admitted.bytes_sent += frame.len() as u64;
+            if let Some(replay) = &mut admitted.replay {
+                replay.counts.batches += 1;
+                replay.counts.events += 1;
+                replay.counts.bytes += frame.len() as u64;
+            }
         }
         admitted.event_cursor += 1;
     }
+    finish_replay(key, sink, admitted)
+}
+
+/// Records the replay of a viewer that left before it had the history, if it did.
+fn abandon_replay(admitted: &Admitted) {
+    if let Some(replay) = &admitted.replay {
+        let took = replay.started.elapsed();
+        diag::host_replay(admitted.id, replay.returning, &replay.counts, took, false);
+    }
+}
+
+/// Once the viewer has been sent the history it was admitted to, tells a viewer that can read it
+/// so, after that history on the same channel, and records the replay. Until then, counts a
+/// full channel as a wait.
+fn finish_replay(
+    key: &SessionKey,
+    sink: &mut impl StreamSink,
+    admitted: &mut Admitted,
+) -> Result<(), String> {
+    let Some(replay) = &admitted.replay else { return Ok(()) };
+    if !replay.reached(admitted) {
+        if sink.queued() >= HIGH_WATER
+            && let Some(replay) = &mut admitted.replay
+        {
+            replay.counts.waits += 1;
+        }
+        return Ok(());
+    }
+    let replay = admitted.replay.take().expect("checked above");
+    if admitted.protocol >= CAUGHT_UP_PROTOCOL_VERSION {
+        let frame = key.encode(&Frame::CaughtUp { seq: admitted.event_cursor as u64 });
+        sink.send(&frame)?;
+        admitted.frames_sent += 1;
+        admitted.bytes_sent += frame.len() as u64;
+    }
+    let took = replay.started.elapsed();
+    diag::host_replay(admitted.id, replay.returning, &replay.counts, took, true);
     Ok(())
 }
 
@@ -2024,6 +2111,7 @@ mod tests {
             bytes_sent: 0,
             fetch: None,
             upload: None,
+            replay: None,
         }
     }
 
@@ -2039,7 +2127,7 @@ mod tests {
                     batches += 1;
                     seqs.extend(records.iter().map(Record::seq));
                 }
-                Frame::Event { .. } => {}
+                Frame::Event { .. } | Frame::CaughtUp { .. } => {}
             }
         }
         (seqs, batches)
@@ -2093,6 +2181,140 @@ mod tests {
         assert_eq!(batches, 1, "one batch for a late joiner's history");
     }
 
+    /// A session with `records` records of 64 KB of noise and `events` timeline events, and a
+    /// viewer admitted to it at `protocol`.
+    fn replaying(
+        records: usize,
+        events: usize,
+        protocol: u32,
+    ) -> (tempfile::TempDir, Arc<OutputLog>, SessionView, Admitted) {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(OutputLog::create(dir.path()).unwrap());
+        let view = SessionView::from_log(AgentId::OpenCode, log.clone());
+        // Noise, so compressed history batches stay large.
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        for _ in 0..records {
+            let noise: Vec<u8> = (0..64 * 1024)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state as u8
+                })
+                .collect();
+            log.append_output(&noise).unwrap();
+        }
+        for _ in 0..events {
+            view.add_entry(Entry::SessionStarted);
+        }
+        let state = Admitted { protocol, replay: Some(Replay::new(&view, false)), ..admitted() };
+        (dir, log, view, state)
+    }
+
+    fn decoded(frames: &[Vec<u8>], key: &SessionKey) -> Vec<Frame> {
+        let verifier = FrameVerifier::new(&key.public_key()).unwrap();
+        frames.iter().map(|frame| verifier.decode(frame).unwrap()).collect()
+    }
+
+    fn count(event: &crate::capture::Captured, field: &str) -> u64 {
+        event.field(field).unwrap().parse().unwrap()
+    }
+
+    #[test]
+    fn a_replay_is_recorded_once_with_its_waits_and_ends_with_caught_up() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let (_dir, log, view, mut state) = replaying(64, 30, PROTOCOL_VERSION);
+        let key = SessionKey::generate();
+        let mut slow = SlowSink::default();
+        pump(&view, &key, &mut slow, &mut state, log.latest()).unwrap();
+        // Live output and events while the history is on its way do not move its end, but
+        // what goes out before that end is counted, as the viewer counts it.
+        log.append_output(b"live").unwrap();
+        view.add_entry(Entry::SessionStarted);
+        while state.replay.is_some() {
+            slow.drain();
+            pump(&view, &key, &mut slow, &mut state, log.latest()).unwrap();
+        }
+        slow.drain();
+
+        let replays = capture.named("host.replay");
+        assert_eq!(replays.len(), 1, "{replays:?}");
+        let replay = &replays[0];
+        assert_eq!(replay.field("finished"), Some("true"));
+        assert_eq!(replay.field("returning"), Some("false"));
+        assert!(count(replay, "waits") > 0, "the channel was full");
+        // The history and the live record that came before the end of the replay.
+        let frames = decoded(&slow.delivered, &key);
+        let caught_up = frames.iter().position(|f| matches!(f, Frame::CaughtUp { .. })).unwrap();
+        assert_eq!(count(replay, "batches"), caught_up as u64);
+        assert_eq!(count(replay, "events"), 31, "the history's 30 and the live one");
+        assert_eq!(count(replay, "records"), 65, "the history's 64 and the live one");
+        let bytes: usize = slow.delivered[..caught_up].iter().map(Vec::len).sum();
+        assert_eq!(count(replay, "bytes"), bytes as u64);
+        assert_eq!(frames.iter().filter(|f| matches!(f, Frame::CaughtUp { .. })).count(), 1);
+
+        // Nothing more is recorded once it is done.
+        log.append_output(b"later").unwrap();
+        pump(&view, &key, &mut slow, &mut state, log.latest()).unwrap();
+        assert_eq!(capture.named("host.replay").len(), 1);
+    }
+
+    #[test]
+    fn a_viewer_on_the_previous_protocol_gets_no_caught_up() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let (_dir, log, view, mut state) = replaying(3, 3, CAUGHT_UP_PROTOCOL_VERSION - 1);
+        let key = SessionKey::generate();
+        let mut sink = FastSink::default();
+        pump(&view, &key, &mut sink, &mut state, log.latest()).unwrap();
+        assert!(!decoded(&sink.0, &key).iter().any(|f| matches!(f, Frame::CaughtUp { .. })));
+        assert_eq!(capture.named("host.replay").len(), 1, "still recorded on the host");
+    }
+
+    #[test]
+    fn an_empty_session_is_caught_up_at_once() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let (_dir, log, view, mut state) = replaying(0, 0, PROTOCOL_VERSION);
+        let key = SessionKey::generate();
+        let mut sink = FastSink::default();
+        pump(&view, &key, &mut sink, &mut state, log.latest()).unwrap();
+        assert_eq!(decoded(&sink.0, &key), [Frame::CaughtUp { seq: 0 }]);
+        let replay = &capture.named("host.replay")[0];
+        assert_eq!((count(replay, "batches"), count(replay, "waits")), (0, 0));
+    }
+
+    #[test]
+    fn a_viewer_that_leaves_during_the_replay_is_recorded_unfinished() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let (_dir, log, view, mut state) = replaying(64, 0, PROTOCOL_VERSION);
+        let key = SessionKey::generate();
+        let mut slow = SlowSink::default();
+        pump(&view, &key, &mut slow, &mut state, log.latest()).unwrap();
+        abandon_replay(&state);
+        let replays = capture.named("host.replay");
+        assert_eq!(replays.len(), 1);
+        assert_eq!(replays[0].field("finished"), Some("false"));
+        assert_eq!(count(&replays[0], "bytes"), slow.queued() as u64, "what was sent until then");
+
+        // Once caught up, leaving records nothing more.
+        let (_dir, log, view, mut state) = replaying(0, 0, PROTOCOL_VERSION);
+        pump(&view, &key, &mut FastSink::default(), &mut state, log.latest()).unwrap();
+        abandon_replay(&state);
+        assert_eq!(capture.named("host.replay").len(), 2);
+    }
+
+    #[test]
+    fn a_returning_viewer_replays_only_what_it_missed() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let (_dir, log, view, _) = replaying(4, 0, PROTOCOL_VERSION);
+        let key = SessionKey::generate();
+        let mut state =
+            Admitted { record_cursor: 2, replay: Some(Replay::new(&view, true)), ..admitted() };
+        let mut sink = FastSink::default();
+        pump(&view, &key, &mut sink, &mut state, log.latest()).unwrap();
+        let replay = &capture.named("host.replay")[0];
+        assert_eq!(replay.field("returning"), Some("true"));
+        assert_eq!(count(replay, "records"), 2);
+    }
     /// Ten seconds of output as the host's loop sends it: a record every 50 ms, traffic summed
     /// and reported once a second.
     async fn ten_seconds_of_output() {

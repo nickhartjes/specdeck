@@ -1,15 +1,24 @@
 name: CI
 
+# Changes to specs, design docs and the root Markdown files build nothing, so they run no CI. A
+# push or pull request that also touches anything else still runs it all.
 on:
   push:
     branches: [main]
+    paths-ignore: ['openspec/**', 'docs/**', '*.md', LICENSE]
   pull_request:
+    paths-ignore: ['openspec/**', 'docs/**', '*.md', LICENSE]
   # Started by renovate-nix-hash.yml for the commit it pushes, which starts no workflow itself.
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# Line tables are enough for test backtraces; full debug info made the Rust caches 2 GB per
+# platform, close to GitHub's 10 GB for all caches, and slowed linking.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   check:
@@ -44,9 +53,11 @@ jobs:
 
       # session-processes: the app still understands sessions the previous release started, from
       # that release's recorded transcript (app/src-tauri/src/adapter.rs). Part of just check too;
-      # its own step, so a failure says what broke.
+      # its own step, so a failure says what broke. With --workspace, as just check, so it reuses
+      # that build: -p resolves other features and rebuilds the vendored libdatachannel and OpenSSL,
+      # about 9 minutes on Windows.
       - name: Sessions of the previous release
-        run: cargo test -p specdeck-app adapter::tests
+        run: cargo test --workspace adapter::tests
 
       # The web viewer is the same on every platform, and its recipes use bash: once, on Linux.
       - name: Web viewer

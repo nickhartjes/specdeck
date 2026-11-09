@@ -232,6 +232,7 @@ impl ViewerSession {
             admitted: false,
             files_open: false,
             transfers: Transfers::default(),
+            catch_up: None,
         };
         // Boxed where it is made: unboxed, the future is moved across the caller's stack, and
         // in debug builds it is large enough to overflow a 2 MB thread.
@@ -430,6 +431,16 @@ struct Viewer {
     /// Whether the current connection's files channel is open.
     files_open: bool,
     transfers: Transfers,
+    /// The current connection's catch-up, from its welcome until the host says it is done.
+    catch_up: Option<CatchUp>,
+}
+
+/// What a connection received from its welcome until the host said it has caught up.
+struct CatchUp {
+    since: Instant,
+    reconnected: bool,
+    batches: u64,
+    bytes: u64,
 }
 
 /// How one connection attempt ended.
@@ -579,6 +590,7 @@ impl Viewer {
         let mut traffic = diag::traffic_interval();
         self.admitted = false;
         self.files_open = false;
+        self.catch_up = None;
         self.transfers.reconnected();
         // Joining has one deadline across attempts; each reconnection attempt has its own.
         let deadline = if self.state.admitted_once() {
@@ -769,6 +781,8 @@ impl Viewer {
             } => {
                 self.status.send_modify(|status| status.phase = ViewerPhase::Connected);
                 self.admitted = true;
+                self.catch_up =
+                    Some(CatchUp { since: Instant::now(), reconnected, batches: 0, bytes: 0 });
                 ViewerEvent::Welcome {
                     viewer_id,
                     agent,
@@ -940,7 +954,7 @@ impl Viewer {
     fn handle_frame(&mut self, bytes: &[u8]) -> Option<ViewerMessage> {
         let (update, request) = self.state.on_stream(bytes);
         let (records, events) = match &update {
-            StreamUpdate::None => (0, 0),
+            StreamUpdate::None | StreamUpdate::CaughtUp => (0, 0),
             StreamUpdate::Records(records) => (records.len() as u64, 0),
             StreamUpdate::Timeline { .. } => (0, 1),
         };
@@ -950,8 +964,22 @@ impl Viewer {
             status.records_applied += records;
             status.events_applied += events;
         });
+        if let StreamUpdate::CaughtUp = update {
+            if let Some(catch_up) = self.catch_up.take() {
+                let took = catch_up.since.elapsed();
+                diag::viewer_caught_up(
+                    catch_up.reconnected,
+                    catch_up.batches,
+                    catch_up.bytes,
+                    took,
+                );
+            }
+        } else if let Some(catch_up) = &mut self.catch_up {
+            catch_up.batches += 1;
+            catch_up.bytes += bytes.len() as u64;
+        }
         let event = match update {
-            StreamUpdate::None => None,
+            StreamUpdate::None | StreamUpdate::CaughtUp => None,
             StreamUpdate::Records(records) => Some(ViewerEvent::Records(records)),
             StreamUpdate::Timeline { seq, event } => Some(ViewerEvent::Timeline { seq, event }),
         };
@@ -969,9 +997,81 @@ impl Viewer {
 mod tests {
     use super::*;
 
+    use specdeck_protocol::control::{HostMessage, PROTOCOL_VERSION};
+    use specdeck_protocol::frames::{Frame, SessionKey};
+
     #[test]
     fn final_events() {
         assert!(ViewerEvent::Ended.is_final());
         assert!(!ViewerEvent::Reconnecting.is_final());
+    }
+
+    fn viewer() -> Viewer {
+        let (events, _) = mpsc::unbounded_channel();
+        Viewer {
+            config: ViewerConfig {
+                signalling_url: String::new(),
+                username: "v".into(),
+                peer: PeerConfig::default(),
+                connect_timeout: CONNECT_TIMEOUT,
+                protocol_version: PROTOCOL_VERSION,
+            },
+            state: ViewerState::new(InviteCode::generate()),
+            events,
+            joined_at: Instant::now(),
+            attempt: 1,
+            connected_at: None,
+            status: watch::channel(ViewerStatus::default()).0,
+            traffic: diag::Traffic::default(),
+            admitted: false,
+            files_open: false,
+            transfers: Transfers::default(),
+            catch_up: None,
+        }
+    }
+
+    fn welcome(key: &SessionKey) -> Vec<u8> {
+        control::encode(&HostMessage::Welcome {
+            protocol_version: PROTOCOL_VERSION,
+            viewer_id: 1,
+            session_public_key: key.public_key(),
+            cols: 80,
+            rows: 24,
+            resume_token: [7; 32],
+            rejoin_room: "rejoin".into(),
+            agent: AgentId::ClaudeCode,
+            timeline_supported: true,
+        })
+    }
+
+    #[test]
+    fn caught_up_is_recorded_once_per_connection_with_what_came_before_it() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let key = SessionKey::generate();
+        let mut viewer = viewer();
+        viewer.handle_control(&welcome(&key));
+        let frames: Vec<Vec<u8>> = (0..3)
+            .map(|seq| key.encode(&Frame::Record(Record::Output { seq, bytes: vec![b'a'] })))
+            .collect();
+        for frame in &frames {
+            viewer.handle_frame(frame);
+        }
+        viewer.handle_frame(&key.encode(&Frame::CaughtUp { seq: 0 }));
+        viewer.handle_frame(&key.encode(&Frame::CaughtUp { seq: 0 }));
+
+        let caught_up = capture.named("viewer.caught_up");
+        assert_eq!(caught_up.len(), 1, "{caught_up:?}");
+        assert_eq!(caught_up[0].field("reconnected"), Some("false"));
+        assert_eq!(caught_up[0].field("batches"), Some("3"));
+        let bytes: usize = frames.iter().map(Vec::len).sum();
+        assert_eq!(caught_up[0].field("bytes"), Some(bytes.to_string().as_str()));
+
+        // The next connection is welcomed as a reconnect and counts from zero.
+        viewer.catch_up = None;
+        viewer.handle_control(&welcome(&key));
+        viewer.handle_frame(&key.encode(&Frame::CaughtUp { seq: 0 }));
+        let caught_up = capture.named("viewer.caught_up");
+        assert_eq!(caught_up[1].field("reconnected"), Some("true"));
+        assert_eq!(caught_up[1].field("batches"), Some("0"));
     }
 }
