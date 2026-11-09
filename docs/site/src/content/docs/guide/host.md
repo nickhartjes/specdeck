@@ -27,7 +27,7 @@ On macOS, Claude Code can run in the [Docker Sandbox](https://docs.docker.com/ai
 
 The first session in a checkout builds its sandbox, which can take a few minutes; the terminal shows the progress. If the sandbox is not set up, the terminal shows what is missing; end the session, fix it and start again. Your session window shows **Docker Sandbox** next to the folder.
 
-Viewers see the terminal only, without a timeline, diffs, plans or Claude's browser: SpecDeck can't follow Claude's steps inside the sandbox. They are not told the session runs in a sandbox.
+Viewers see the terminal and whether Claude is working or waiting, but no timeline, diffs, plans or Claude's browser: SpecDeck can't follow Claude's steps inside the sandbox. They are not told the session runs in a sandbox.
 
 Ending the session leaves the sandbox, so the next session in that checkout starts quickly in the same one. Remove it with `just sandbox-rm` in the checkout.
 

@@ -53,9 +53,13 @@ The session process's `Event::Snapshot` gets `sandboxed: bool` (`#[serde(default
 
 Without hooks, `Activity` reads Program Status Protocol reports as for other agents. Whether Claude Code sends them in the sandbox is checked in task 3.2; if it does not, the status stays unknown, as in a Terminal session, and the docs say so.
 
+Outcome (checked with a real nma-platform sandbox, 2026-11-09): the status changes between working and waiting in a sandboxed session.
+
 ### 5. Closing the session
 
 Closing a session kills `sbx run` like any agent. The sandbox VM is sbx's to stop and keeps the checkout's state, so the next session in that checkout attaches to the same sandbox; `just sandbox-rm` removes it. SpecDeck does not stop or remove sandboxes.
+
+Confirmed with a real nma-platform sandbox (2026-11-09): a second session in the same checkout reuses its sandbox.
 
 ## Risks / Trade-offs
 
@@ -65,4 +69,4 @@ Closing a session kills `sbx run` like any agent. The sandbox VM is sbx's to sto
 
 ## Open Questions
 
-- Does Claude Code send Program Status Protocol reports (decision 4)? Answered by task 3.2.
+None. Decision 4's question was answered by task 3.2: the status follows Claude in the sandbox.
