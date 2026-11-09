@@ -1,9 +1,13 @@
 name: Nix
 
 # The flake builds SpecDeck from source (design decision 13); a dependency change that breaks the
-# Nix build shows up here rather than for Nix users. The build takes about 14 minutes and cannot
-# use a cache, because any change to the source rebuilds the package. So pull requests run it only
-# when they touch what the Nix build depends on beyond the code itself; every push to main runs it.
+# Nix build shows up here rather than for Nix users. The Rust dependencies are a derivation of their
+# own (nix/package.nix), kept in the Actions cache under their store path, so it changes exactly
+# when they need rebuilding. Only that output is cached, not the whole store, because the Rust caches
+# of ci.yml already fill most of the 10 GB. Saved from main only, like those: pull requests restore
+# main's. A change to Cargo.lock, flake.lock or nix/ still builds everything once, so pull requests
+# run this only when they touch what the Nix build depends on beyond the code itself; every push to
+# main runs it.
 on:
   push:
     branches: [main]
@@ -31,12 +35,54 @@ concurrency:
   group: nix-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  # Deletes main's superseded dependency caches.
+  actions: write
+
 jobs:
   nix:
     runs-on: ubuntu-26.04
+    env:
+      SAVE_DEPS: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
+      - name: Find the dependencies' store path
+        id: deps
+        run: |
+          path=$(nix eval --raw .#specdeck.cargoArtifacts.outPath)
+          hash=$(basename "$path" | cut -d- -f1)
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+          echo "key=nix-deps-x86_64-linux-$hash" >> "$GITHUB_OUTPUT"
+      # No restore-keys: other dependencies are of no use to Cargo here.
+      - uses: actions/cache/restore@v6
+        id: restore
+        with:
+          path: ${{ runner.temp }}/nix-deps
+          key: ${{ steps.deps.outputs.key }}
+      - name: Import the dependencies
+        if: steps.restore.outputs.cache-hit == 'true'
+        # Unsigned, but written only by this workflow on main.
+        run: nix copy --no-check-sigs --from "file://$RUNNER_TEMP/nix-deps" "${{ steps.deps.outputs.path }}"
       - run: nix build .#default -L
       - name: The binary starts
         run: xvfb-run --auto-servernum timeout 15 ./result/bin/specdeck-app || [ $? -eq 124 ]
+      # Already a zstd archive, so no compression of its own.
+      - name: Export the dependencies
+        if: steps.restore.outputs.cache-hit != 'true' && env.SAVE_DEPS == 'true'
+        run: nix copy --to "file://$RUNNER_TEMP/nix-deps?compression=none" "${{ steps.deps.outputs.path }}"
+      - uses: actions/cache/save@v6
+        if: steps.restore.outputs.cache-hit != 'true' && env.SAVE_DEPS == 'true'
+        with:
+          path: ${{ runner.temp }}/nix-deps
+          key: ${{ steps.deps.outputs.key }}
+      - name: Delete superseded dependency caches
+        if: steps.restore.outputs.cache-hit != 'true' && env.SAVE_DEPS == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ steps.deps.outputs.key }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/main --key nix-deps- --json id,key \
+            --jq ".[] | select(.key != \"$KEY\") | .id" |
+            xargs -r -n 1 gh cache delete --repo "$GITHUB_REPOSITORY"

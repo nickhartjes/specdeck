@@ -2,10 +2,16 @@
   description = "SpecDeck: run a coding agent with your team watching along";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  # Builds the Rust dependencies in a derivation of their own, which CI caches (nix/package.nix).
+  inputs.crane.url = "github:ipetkov/crane";
 
   # Linux only: macOS installs through Homebrew (design decision 13).
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      crane,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -15,7 +21,10 @@
     in
     {
       packages = forEachSystem (pkgs: rec {
-        specdeck = pkgs.callPackage ./nix/package.nix { src = self; };
+        specdeck = pkgs.callPackage ./nix/package.nix {
+          src = self;
+          craneLib = crane.mkLib pkgs;
+        };
         default = specdeck;
       });
 
@@ -27,7 +36,10 @@
       });
 
       overlays.default = final: _prev: {
-        specdeck = final.callPackage ./nix/package.nix { src = self; };
+        specdeck = final.callPackage ./nix/package.nix {
+          src = self;
+          craneLib = crane.mkLib final;
+        };
       };
 
       checks = forEachSystem (pkgs: {
