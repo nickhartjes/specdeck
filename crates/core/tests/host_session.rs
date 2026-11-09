@@ -1,6 +1,9 @@
 //! Drives a hosted session end to end with fake agents in a real pty.
 #![cfg(unix)]
 
+#[path = "support/capture.rs"]
+mod capture;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
@@ -297,10 +300,55 @@ read wait"#,
 async fn agent_that_is_not_installed_creates_no_session() {
     let bin = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
+    let (capture, _guard) = capture::Capture::start();
     let result =
         HostSession::start(config(AgentId::Omp, bin.path(), data.path()), &env(bin.path())).await;
     assert!(result.is_err());
     assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 0, "left files behind");
+    let failed = capture.named("agent.start_failed");
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].field("agent"), Some("omp"));
+    assert_eq!(failed[0].field("reason"), Some("not_installed"));
+    assert!(capture.named("agent.started").is_empty());
+}
+
+#[tokio::test]
+async fn a_missing_folder_is_recorded_without_its_name() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    fake_agent(bin.path(), "omp", "exit 0");
+    let folder = bin.path().join("Marker-Gone-Folder");
+    let (capture, _guard) = capture::Capture::start();
+    let result =
+        HostSession::start(config(AgentId::Omp, &folder, data.path()), &env(bin.path())).await;
+    assert!(result.is_err());
+    let failed = capture.named("agent.start_failed");
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].field("reason"), Some("folder_missing"));
+    let all = format!("{:?}", capture.events());
+    assert!(!all.contains("Marker"), "{all}");
+}
+
+#[tokio::test]
+async fn the_agents_start_and_exit_are_recorded() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    fake_agent(bin.path(), "omp", "sleep 0.2; exit 2");
+    let (capture, _guard) = capture::Capture::start();
+    let (session, mut events) =
+        HostSession::start(config(AgentId::Omp, bin.path(), data.path()), &env(bin.path()))
+            .await
+            .unwrap();
+    next_matching(&mut events, |event| matches!(event, SessionEvent::Exited { .. })).await;
+    let started = capture.named("agent.started");
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].field("agent"), Some("omp"));
+    let exited = capture.named("agent.exited");
+    assert_eq!(exited.len(), 1);
+    assert_eq!(exited[0].field("code"), Some("2"));
+    let after: u64 = exited[0].field("after_ms").unwrap().parse().unwrap();
+    assert!((150..10_000).contains(&after), "{after}");
+    session.close();
 }
 
 #[tokio::test]

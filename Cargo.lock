@@ -4786,6 +4786,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "specdeck-diag",
  "specdeck-protocol",
  "specdeck-server",
  "tempfile",

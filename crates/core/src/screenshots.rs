@@ -11,6 +11,8 @@ use image::{DynamicImage, ImageFormat, ImageReader, Limits, codecs::jpeg::JpegEn
 use serde_json::Value;
 use specdeck_protocol::timeline::{Image, LeftOut, ToolOutcome};
 
+use crate::diag;
+
 /// Images whose base64 is at most this long are kept as they came, which covers SpecDeck's own
 /// screenshots (150 KB of JPEG); larger ones are made smaller until they fit.
 pub const MAX_SCREENSHOT_BASE64: usize = 200 * 1024;
@@ -42,7 +44,11 @@ pub fn outcome(tool_name: &str, response: &Value, shown: bool) -> Option<ToolOut
     let (image, left_out) = if shown {
         match fit(media_type, data) {
             Ok(image) => (Some(image), None),
-            Err(left_out) => (None, Some(left_out)),
+            Err(left_out) => {
+                // The size the image had, decoded from base64.
+                diag::screenshot_left_out(left_out, data.len() as u64 / 4 * 3);
+                (None, Some(left_out))
+            }
         }
     } else {
         (None, Some(LeftOut::TurnedOff))
@@ -221,6 +227,21 @@ mod tests {
         assert!(image.data.len() <= MAX_SCREENSHOT_BASE64);
         assert!(image.width <= 1280);
         assert_eq!(image.width * 1000, image.height * 1600);
+    }
+
+    #[test]
+    fn screenshots_left_out_are_recorded_with_their_size() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let data = encoded(&noise(1600, 1000), ImageFormat::Png);
+        outcome(OWN_SCREENSHOT, &response("image/png", &data), true);
+        outcome(OWN_SCREENSHOT, &response("image/png", "not base64!"), true);
+        outcome(OWN_SCREENSHOT, &response("image/png", &data), false);
+        let left_out = capture.named("timeline.screenshot_left_out");
+        assert_eq!(left_out.len(), 2, "turned off is not a failure");
+        assert_eq!(left_out[0].field("reason"), Some("too_large"));
+        let bytes: usize = left_out[0].field("bytes").unwrap().parse().unwrap();
+        assert!(bytes.abs_diff(data.len() / 4 * 3) < 4);
+        assert_eq!(left_out[1].field("reason"), Some("unreadable"));
     }
 
     #[test]
