@@ -1,0 +1,14 @@
+[
+  { "id": "intro", "text": "Viewers don't only watch. You can suggest prompts, share links and files, and add to a braindump for the agent. The host decides what reaches it." },
+  { "id": "prompts", "text": "To suggest a prompt, open the Prompts tab next to the timeline, write it, and select Suggest to the host." },
+  { "id": "only", "text": "It goes to the host, not to the agent. Only the host and you see it, and nothing reaches the agent until the host sends it." },
+  { "id": "mine", "text": "Under Your suggestions, you see what became of each one: waiting, sent, edited and sent, or declined." },
+  { "id": "inbox", "text": "The host finds them in their own Prompts tab, oldest first, with who suggested each." },
+  { "id": "actions", "text": "Send types it into the agent's prompt, as if the host typed it. Edit changes it first, and Decline sends nothing." },
+  { "id": "link", "text": "To share a link, such as a preview deploy, select Send a link. The host sees it first." },
+  { "id": "hostlinks", "text": "The host shares it with everyone, or declines it. Each person opens it in their own browser." },
+  { "id": "add", "text": "When the host allows it, open Files, Shared, and Add files or a note. Choose where it goes: to the braindump for the agent, or shared with everyone." },
+  { "id": "shared", "text": "The braindump collects notes and files from everyone. What is shared with everyone is for people to look at, and never reaches the agent." },
+  { "id": "give", "text": "When the braindump is complete, the host selects Give, edits the prompt if they like, and gives it all to the agent at once." },
+  { "id": "outro", "text": "Whatever you send, the host reads it first and decides what reaches the agent." }
+]

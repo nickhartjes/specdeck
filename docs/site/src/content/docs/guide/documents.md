@@ -3,6 +3,8 @@ title: Documents and plans
 description: Read the Markdown files and OpenSpec plans the agent writes.
 ---
 
+<video class="video" controls preload="none" poster="/specdeck/video/plans.jpg" src="/specdeck/video/plans.mp4" aria-label="Documents and plans: the plan card in the timeline, a document tab linked to the plan's others, the task count following along, New and Changed marks, and the Markdown source (1 minute, narrated, with captions)"></video>
+
 When the agent writes or changes a Markdown file, everyone can read the whole document, not only its diff:
 
 - In **Files**, under **Documents**, select the file. It opens in a tab next to the terminal, so the session goes on while you read.

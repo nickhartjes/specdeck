@@ -1,0 +1,2 @@
+$ curl -sS --cacert caddy-root.crt https://localhost/web-viewer.json
+{"protocol":6,"version":"1.7.0"}

@@ -1,16 +1,16 @@
 [
   { "id": "intro", "text": "When you join a session, you follow the host's coding agent live, at your own pace. Here is what you can see." },
   { "id": "ask", "text": "The first time you join, SpecDeck asks how you want to follow sessions." },
-  { "id": "overview", "text": "Overview shows the conversation and the plan: what was asked, and what the agent did, in plain words." },
+  { "id": "overview", "text": "Overview shows the documents and the timeline: what was asked, and what the agent did, in plain words." },
   { "id": "developer", "text": "Developer shows the host's terminal, next to every tool call, command and diff." },
   { "id": "steps", "text": "In Overview, each step is one line, such as Looked at one file, or Changed two files, marked as done, failed or running." },
   { "id": "asked", "text": "When Claude asks the host a question, you see the options, and which one the host chose." },
   { "id": "allowed", "text": "Permission prompts are marked as allowed or denied by the host." },
   { "id": "now", "text": "A line at the bottom says what the agent is doing right now, and for how long." },
-  { "id": "view", "text": "Change this any time under View: show the terminal, or show every step in full detail. Nobody else's view changes." },
+  { "id": "view", "text": "Change this any time with the layout button at the top: Overview, Developer, or Present for sharing your screen. Plain words or Every step sets how much each step shows. Nobody else's view changes." },
   { "id": "terminal", "text": "The terminal is read-only. New output keeps arriving without moving your view, so you can scroll back at your own pace." },
   { "id": "search", "text": "Command F, or Control F on Windows and Linux, searches the terminal and the timeline together." },
-  { "id": "files", "text": "Files lists every file the agent changed. Select one to see its diffs." },
+  { "id": "files", "text": "Under Code, Files lists every file the agent changed. Select one to open its changes in a tab." },
   { "id": "statusbar", "text": "The bar at the bottom shows the model, the git branch, how full the context is, and the host's usage limits." },
   { "id": "outro", "text": "Everything you scroll, search or open changes only your own view." }
 ]

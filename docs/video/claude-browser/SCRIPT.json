@@ -1,0 +1,9 @@
+[
+  { "id": "intro", "text": "On macOS, a Claude Code session you host gets a browser of its own, to check the web app it is building." },
+  { "id": "plain", "text": "When Claude uses it, everyone in the session sees its steps in the timeline: the page it opened, what it read and what it clicked." },
+  { "id": "every", "text": "With Every step, each browser call is a step of its own, under its tool name." },
+  { "id": "shot", "text": "Its screenshots show on the step, with the page's address. Select one to open it full size in a tab." },
+  { "id": "apart", "text": "It is not your browser. It starts empty, never shows on screen, and the pages it opens can't reach SpecDeck. The terminal shows what Claude types, so use test accounts." },
+  { "id": "settings", "text": "To turn it off, clear Give Claude a browser in Settings. Show screenshots in the timeline keeps the pictures out." },
+  { "id": "outro", "text": "For now, only Claude Code sessions on macOS get it." }
+]

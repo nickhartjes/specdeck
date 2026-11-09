@@ -43,6 +43,9 @@ await shot('viewer-status');
 await page.setViewportSize({ width: 860, height: 600 });
 await go('/?demo=host&window=settings');
 const verbose = page.getByRole('checkbox', { name: 'Diagnostics' });
+// Settings is taller than its window: scroll to the row first, as ticking it would.
+await verbose.scrollIntoViewIfNeeded();
+await page.waitForTimeout(300);
 await box('settings.verbose', verbose.locator('xpath=ancestor::div[contains(@class,"row")]'));
 await shot('settings');
 await verbose.check();

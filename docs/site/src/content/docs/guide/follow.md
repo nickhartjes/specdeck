@@ -3,7 +3,7 @@ title: Follow a session
 description: Choose what you see, scroll back, search and copy.
 ---
 
-<video class="video" controls preload="none" poster="/specdeck/video/following.jpg" src="/specdeck/video/following.mp4" aria-label="Following a session: Overview and Developer, the agent's steps and the host's decisions, the view settings, search, Files and the status bar (1.5 minutes, narrated, with captions; recorded before the window had panels and tabs)"></video>
+<video class="video" controls preload="none" poster="/specdeck/video/following.jpg" src="/specdeck/video/following.mp4" aria-label="Following a session: Overview and Developer, the agent's steps and the host's decisions, the layout menu, search, Files and the status bar (1.5 minutes, narrated, with captions)"></video>
 
 ## The window
 
@@ -118,6 +118,20 @@ The prompts that finished before you joined are folded to the prompt and its out
 To get around, use **Jump to a prompt** in the card, or **Go to the latest prompt** to go to the end of the timeline and follow it again. Jumping to a folded prompt leaves it folded.
 
 Losing the connection and coming back does not count as joining again. In the web viewer, reloading the page does. The host never sees prompts folded.
+
+## Suggest a prompt
+
+<video class="video" controls preload="none" poster="/specdeck/video/taking-part.jpg" src="/specdeck/video/taking-part.mp4" aria-label="Taking part: suggesting a prompt and what became of it, the host's Prompts tab, sending a link, adding a note to the braindump, and the host giving it to the agent (1.5 minutes, narrated, with captions)"></video>
+
+Think of something the agent should do next? Suggest it to the host. Open the **Prompts** tab next to **Timeline**, write the prompt and select **Suggest to** *host*. It works the same in the web viewer.
+
+- **Only the host and you see it.** It goes to the host, not to the agent, and nothing reaches the agent until the host sends it, edited or not (see [Prompt suggestions](/specdeck/guide/host/#prompt-suggestions)). Other viewers never see your suggestions.
+- **Under Your suggestions** you see each one and what became of it: *Waiting for* the host, the host *sent it*, *edited and sent it*, or *declined it*. This stays up to date when you reconnect, and lasts until the session ends.
+- **A suggestion is up to 4096 bytes** of text; the counter below it says how much you used, and a longer one can't be sent. Line breaks stay: the host sends several lines as one prompt.
+- **Three at once, then one every 10 seconds.** Send faster and SpecDeck asks you to wait a moment; your text stays, so you can send it again.
+- **The host can turn suggestions off**, and on again, at any time. While they are off, the tab says so. A suggestion you sent just as the host turned them off is not sent, and SpecDeck tells you.
+
+Sessions where the host shares a plain terminal have no **Prompts** tab, because every line typed into a shell runs. Neither do sessions of a host on an older SpecDeck.
 
 ## Share a file or add to the braindump
 

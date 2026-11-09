@@ -1,0 +1,5 @@
+$ docker compose ps --format "table {{.Service}}\t{{.Image}}\t{{.Status}}"
+SERVICE   IMAGE                                       STATUS
+caddy     caddy:2                                     Up 5 seconds
+coturn    coturn/coturn:4.18                          Up 5 seconds
+server    ghcr.io/nickhartjes/specdeck-server:1.7.0   Up 5 seconds

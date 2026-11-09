@@ -1,6 +1,7 @@
 // The documentation site, published to GitHub Pages by .github/workflows/docs.yml.
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { sidebar } from './sidebar.mjs';
 
 export default defineConfig({
   site: 'https://nickhartjes.github.io',
@@ -15,44 +16,7 @@ export default defineConfig({
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/nickhartjes/specdeck' }],
       editLink: { baseUrl: 'https://github.com/nickhartjes/specdeck/edit/main/docs/site/' },
       lastUpdated: true,
-      sidebar: [
-        { label: 'Start here', items: ['install', 'guide/first-steps'] },
-        {
-          label: 'Use SpecDeck',
-          items: [
-            'guide/host',
-            'guide/join',
-            'guide/follow',
-            'guide/documents',
-            'guide/read-and-estimate',
-            'guide/browser',
-            'guide/settings',
-            'guide/keyboard',
-            'guide/troubleshooting',
-          ],
-        },
-        {
-          label: 'Security and privacy',
-          items: [
-            'security/overview',
-            'security/data',
-            'security/sharing-service',
-            'security/claude-browser',
-            'security/your-computer',
-            'security/known-limits',
-          ],
-        },
-        {
-          label: 'Run your own server',
-          items: [
-            'self-host/overview',
-            'self-host/docker-compose',
-            'self-host/kubernetes',
-            'self-host/configuration',
-            'self-host/connect-apps',
-          ],
-        },
-      ],
+      sidebar,
     }),
   ],
 });

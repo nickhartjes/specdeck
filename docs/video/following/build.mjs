@@ -17,6 +17,11 @@ const cut = (shot, time) => {
   film.fade(`#main-${shot}`, time - 0.2, 1, 0.5);
 };
 
+// The pointer glides to a control and presses it; `w(scene, word)` is when the voice says the word.
+const point = (time, target) => film.point('#main-pointer', time, target);
+const press = (time) => film.press('#main-pointer', time);
+const w = (id, word, opts) => film.word(id, word, opts);
+
 const title = film.title({ kicker: 'SpecDeck', title: 'Following a session', sub: "Read along with the host's agent, at your own pace" }, at('ask'));
 const windowStart = at('ask') - 0.3;
 film.enter('#main', windowStart);
@@ -25,6 +30,8 @@ film.enter('#main', windowStart);
 ring(at('ask', 0.3), box('ask.dialog'));
 camera(at('overview'), main.aim(box('ask.dialog'), 1.5));
 ring(at('overview', 0.05), box('ask.overview', 4));
+point(w('overview', 'Overview', { offset: -0.3 }), box('ask.overview', 0));
+press(w('overview', 'Overview', { offset: 0.2 }));
 ring(at('developer', 0.05), box('ask.developer', 4));
 
 // Overview: steps, a question, a permission and what happens now.
@@ -35,13 +42,17 @@ ring(at('steps', 0.5), box('overview.changed', 4));
 ring(at('asked', 0.05), box('overview.asked', 4));
 camera(at('allowed'), main.aim(box('overview.ran'), 1.6));
 ring(at('allowed', 0.05), box('overview.ran', 4));
-camera(at('now'), main.aim(box('overview.now'), 1.6));
-ring(at('now', 0.05), box('overview.now', 4));
+cut('now', at('now'));
+camera(at('now', 0.05), main.aim(box('now.line'), 1.6));
+ring(at('now', 0.1), box('now.line', 4));
 
-// View, then the terminal.
+// The layout menu and the steps, then the terminal.
 cut('view', at('view'));
 camera(at('view', 0.1), main.aim(box('view.menu'), 1.9));
+point(w('view', 'layout', { offset: -0.4 }), box('view.button', 0));
+press(w('view', 'button'));
 ring(at('view', 0.15), box('view.menu', 4));
+ring(at('view', 0.62), box('view.steps', 4));
 cut('developer', at('terminal'));
 ring(at('terminal', 0.1), box('developer.terminal', 4));
 
@@ -64,7 +75,7 @@ const steps = film.steps(
   {
     heading: 'Follow at your own pace',
     items: [
-      { title: 'Overview', note: 'The conversation, in plain words' },
+      { title: 'Overview', note: 'Documents and the timeline, in plain words' },
       { title: 'Developer', note: 'The terminal and every tool call' },
       { title: '⌘F to search', note: 'The terminal and the timeline' },
     ],
@@ -80,7 +91,7 @@ film.write({
       id: 'main',
       title: 'SpecDeck',
       stage: main,
-      shots: ['ask', 'overview', 'view', 'developer', 'search', 'files', 'files-diff'],
+      shots: ['ask', 'overview', 'now', 'view', 'developer', 'search', 'files', 'files-diff'],
       start: windowStart,
       duration: at('outro') + 0.3 - windowStart,
     }),

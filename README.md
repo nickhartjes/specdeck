@@ -4,7 +4,19 @@
 [![Release](https://img.shields.io/github/v/release/nickhartjes/specdeck)](https://github.com/nickhartjes/specdeck/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-SpecDeck lets one person (the **host**) run a coding agent (Claude Code, OpenCode, omp, Codex, Grok or pi) on their computer while teammates (the **viewers**) follow along from anywhere. Viewers see the terminal and, for Claude Code, a timeline of prompts, answers, tool calls and file diffs. They join with an invite code. Viewers can take part: suggest prompts, share files and links, add notes to a braindump for the agent, confirm they've read something, and estimate together. But only the host types into the agent, on the host's own login, and nothing a viewer sends reaches the agent unless the host passes it on. On macOS, Claude Code also gets a browser of its own to check the app it is building.
+SpecDeck lets one person (the **host**) run a coding agent on their computer while teammates (the **viewers**) follow along from anywhere. Viewers join with an invite code and can take part, but only the host types into the agent, on the host's own login, and nothing a viewer sends reaches the agent unless the host passes it on.
+
+- **Host** Claude Code, OpenCode, omp, Codex, Grok, pi or a plain terminal, and see whether the agent is [working or waiting](https://nickhartjes.github.io/specdeck/guide/host/#while-you-host). [Hosting](https://nickhartjes.github.io/specdeck/guide/host/)
+- **Invite** with a code or a link. Viewers who [join late](https://nickhartjes.github.io/specdeck/guide/follow/#joining-late) get the whole session, and a dropped connection catches up on its own. [Joining](https://nickhartjes.github.io/specdeck/guide/join/)
+- **Follow** the terminal and, for Claude Code, a timeline of prompts, answers, tool calls and file diffs, each at their own pace, with search and the [Overview, Developer and Present layouts](https://nickhartjes.github.io/specdeck/guide/follow/#choose-a-layout). [Following](https://nickhartjes.github.io/specdeck/guide/follow/)
+- **Read** the plans and documents the agent writes, formatted, with what changed since you last read them. [Documents and plans](https://nickhartjes.github.io/specdeck/guide/documents/)
+- **Take part**: [suggest prompts](https://nickhartjes.github.io/specdeck/guide/follow/#suggest-a-prompt), [share files](https://nickhartjes.github.io/specdeck/guide/host/#share-files) and [links](https://nickhartjes.github.io/specdeck/guide/host/#share-a-link), and add notes to a [braindump](https://nickhartjes.github.io/specdeck/guide/host/#the-braindump) for the agent.
+- **Read together and estimate**: the host asks everyone to read something or to vote, and sees who has answered. [Ask to read and estimate](https://nickhartjes.github.io/specdeck/guide/read-and-estimate/)
+- **Get called back** when a plan is ready, a document changed or the agent finished, by [notifications](https://nickhartjes.github.io/specdeck/guide/settings/#notifications) you choose.
+- **Claude's browser**: on macOS, Claude Code gets a browser of its own to check the app it is building. [Claude's browser](https://nickhartjes.github.io/specdeck/guide/browser/)
+- **Watch in a browser**, without installing the app, through the [web viewer](https://nickhartjes.github.io/specdeck/guide/join/#watch-in-a-browser).
+- **A native app** for macOS, Windows and Linux, with menus, a tray icon while you host, [several windows](https://nickhartjes.github.io/specdeck/guide/host/#several-sessions-at-once), your [appearance](https://nickhartjes.github.io/specdeck/guide/settings/#the-window), [keyboard and screen readers](https://nickhartjes.github.io/specdeck/guide/keyboard/), and it [updates itself](https://nickhartjes.github.io/specdeck/install/#update).
+- **Run your own sharing service** with Docker Compose or Kubernetes. [Run your own server](https://nickhartjes.github.io/specdeck/self-host/overview/)
 
 SpecDeck is a native app built on Tauri 2 with a Rust session engine.
 
@@ -17,6 +29,14 @@ Short narrated walkthroughs, with captions; select one to watch it in the docume
 | [![Getting started](docs/site/public/video/getting-started.jpg)](https://nickhartjes.github.io/specdeck/guide/first-steps/) | [![Following a session](docs/site/public/video/following.jpg)](https://nickhartjes.github.io/specdeck/guide/follow/) | [![Diagnostics](docs/site/public/video/diagnostics.jpg)](https://nickhartjes.github.io/specdeck/guide/troubleshooting/#see-what-the-connection-is-doing) |
 |---|---|---|
 | **Getting started** (1 min): host a session, share the code, a teammate joins | **Following a session** (1½ min): Overview or Developer, steps, search and files | **Diagnostics** (1½ min): Connection Status and a file for bug reports |
+
+| [![Taking part](docs/site/public/video/taking-part.jpg)](https://nickhartjes.github.io/specdeck/guide/follow/#suggest-a-prompt) | [![Watch in a browser](docs/site/public/video/web-viewer.jpg)](https://nickhartjes.github.io/specdeck/guide/join/#watch-in-a-browser) | [![Read and estimate](docs/site/public/video/read-and-estimate.jpg)](https://nickhartjes.github.io/specdeck/guide/read-and-estimate/) |
+|---|---|---|
+| **Taking part** (1½ min): suggest prompts, send links, add to the braindump | **Watch in a browser** (1 min): no app needed to follow a session | **Read and estimate** (1 min): make sure everyone has read it, then vote on a task |
+
+| [![Documents and plans](docs/site/public/video/plans.jpg)](https://nickhartjes.github.io/specdeck/guide/documents/) | [![Claude's browser](docs/site/public/video/claude-browser.jpg)](https://nickhartjes.github.io/specdeck/guide/browser/) | [![Run your own sharing service](docs/site/public/video/self-hosting.jpg)](https://nickhartjes.github.io/specdeck/self-host/docker-compose/) |
+|---|---|---|
+| **Documents and plans** (1 min): the plan card, document tabs, and what changed since you read it | **Claude's browser** (1 min): its steps and screenshots in the timeline, on macOS | **Run your own sharing service** (1 min): Docker Compose, from DNS to a running service |
 
 ## Security and privacy
 
@@ -38,7 +58,7 @@ The session goes straight from the host's computer to each viewer, encrypted. Th
 
 With Nix, add it to a system or home configuration through the flake's `packages.<system>.specdeck` or `overlays.default`. The Nix package uses the public sharing service, `wss://specdeck.hartj.es/signal`, like the release builds; override it with `specdeck.override { signallingUrl = "wss://…/signal"; }`, or set `SPECDECK_SIGNALLING_URL` when starting the app.
 
-**Can't install?** Viewers can watch in a browser instead: the sharing service serves a web viewer at its own address (for the built-in service, `https://specdeck.hartj.es/`), and hosts' join links open there. Hosting needs the app.
+**Can't install?** Viewers can [watch in a browser](https://nickhartjes.github.io/specdeck/guide/join/#watch-in-a-browser) instead: the sharing service serves a web viewer at its own address (for the built-in service, `https://specdeck.hartj.es/`), and hosts' join links open there. Hosting needs the app.
 
 **Something not working?** **Help › Connection Status** (⇧⌘D on macOS, Ctrl+Shift+D on Windows and Linux) shows what the connection is doing, and **Help › Export Diagnostics…** saves a file to attach to a bug report. The file holds connection events and timings, never terminal output, names or addresses. See [Troubleshooting](https://nickhartjes.github.io/specdeck/guide/troubleshooting/).
 
@@ -77,6 +97,7 @@ just capacity  # measure how 20 viewers affect the host's terminal (run alone)
 just fmt       # format the Rust code
 just package   # build installers for this platform (target/release/bundle)
 just docs      # documentation site with live reload
+just docs-build # build the documentation site and check its links
 just video     # the how-to videos (docs/video/<name>/renders)
 just check-web # web viewer: WebAssembly core and tests, the page (app/ui/dist-web), the service with it
 ```
@@ -95,6 +116,8 @@ just local-down    # remove the deployment
 `just local-dev` opens two windows, **SpecDeck (host)** and **SpecDeck (viewer)**, each with its own settings (`SPECDECK_PROFILE`, debug builds only). Host a session in one and join with its invite code in the other. To look at the UI without a session, run `pnpm --filter @specdeck/ui dev` and open `http://localhost:5173/?demo=start`, `?demo=host` or `?demo=viewer` in a browser.
 
 See [`deploy/k8s/README.md`](deploy/k8s/README.md) for ports, secrets and the differences from a real cluster.
+
+**A feature is not done until it is documented.** Every user-facing feature (for hosts, viewers, the web viewer or people who run the sharing service) gets a line in the overview above with a link to its documentation page, and a page or section in [`docs/site`](docs/site) that says what it does, who can use it and how, with shortcuts and settings. Features worth showing in motion also get a [video](docs/video), embedded on that page and listed under [Videos](#videos); otherwise the pull request says why none is needed. The [pull request template](.github/pull_request_template.md) asks for each of these, and the rules in [`openspec/config.yaml`](openspec/config.yaml) make every OpenSpec change plan them in its proposal and tasks. `just docs-build` fails on a broken link or anchor in the site, on a page missing from the sidebar ([`docs/site/sidebar.mjs`](docs/site/sidebar.mjs)), and on a README link into the site that does not resolve.
 
 ## CI
 

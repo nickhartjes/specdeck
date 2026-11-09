@@ -1,0 +1,2 @@
+$ curl -sS --cacert caddy-root.crt https://localhost/health
+ok

@@ -3,6 +3,8 @@ title: Claude's browser
 description: A browser of its own for Claude Code, to check the web app it builds.
 ---
 
+<video class="video" controls preload="none" poster="/specdeck/video/claude-browser.jpg" src="/specdeck/video/claude-browser.mp4" aria-label="Claude's browser: Claude's browser steps in the timeline, in plain words and step by step, a screenshot opened full size, and the Settings to turn it off (1 minute, narrated, with captions)"></video>
+
 On macOS, a Claude Code session you host gets a browser of its own. Claude can use it to check the web app it is building: open a page, read it, fill in a form, click a button, take a screenshot and read the console. You don't install or set up anything.
 
 ## What Claude can do

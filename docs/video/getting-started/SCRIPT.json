@@ -7,6 +7,6 @@
   { "id": "join", "text": "A teammate pastes the code under Join a session, and selects Join." },
   { "id": "viewer", "text": "They see your terminal live and, for Claude Code, a timeline of every prompt, tool call and file change." },
   { "id": "readonly", "text": "Viewers are read-only. Only you type, and the agent runs on your own login." },
-  { "id": "people", "text": "People shows who is watching, and lets you remove someone. End session stops it for everyone." },
+  { "id": "people", "text": "The faces at the top show who is watching. Select them to remove someone. End session stops it for everyone." },
   { "id": "outro", "text": "No app? Teammates can also watch in a browser. Hosting needs the app." }
 ]

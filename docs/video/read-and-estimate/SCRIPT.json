@@ -1,0 +1,12 @@
+[
+  { "id": "intro", "text": "Before you go on, make sure everyone has read the plan, and agree together on how big a task is. Nothing anyone answers reaches the agent." },
+  { "id": "ask", "text": "As the host, select Ask to read in your toolbar." },
+  { "id": "pick", "text": "Pick one thing, such as a document, a changed file or a shared file, and a time limit, then Ask to read." },
+  { "id": "viewer", "text": "Each viewer sees what to read and the time left. Open it opens it in a tab; then I'm ready, or I have a question." },
+  { "id": "host", "text": "You see who is reading, who is ready and who has a question. Select Go on when you want to move on." },
+  { "id": "estimate", "text": "To estimate, select Estimate, write the task, or fill it from the plan, and pick story points or t-shirt sizes." },
+  { "id": "vote", "text": "Everyone votes by selecting a card. Everyone sees who has voted, but nobody sees a value until you reveal them." },
+  { "id": "reveal", "text": "Then everyone sees each vote and the spread. Keep a value, or vote again." },
+  { "id": "kept", "text": "The timeline keeps the task, the value and the spread, without names." },
+  { "id": "outro", "text": "Read together, then estimate together, without leaving the session." }
+]
