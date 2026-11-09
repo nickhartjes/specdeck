@@ -60,31 +60,20 @@ const vote = page.getByRole('region', { name: 'How big is it?' });
 await vote.getByRole('group', { name: 'Your vote' }).getByRole('button', { name: '5', exact: true }).click();
 await page.clock.runFor(6000);
 await page.waitForTimeout(400);
-// At 900 px tall the area under the toolbar shows only part of the vote, and scrolls.
-const requests = page.locator('.requests');
-const scroll = async (top) => {
-  await requests.evaluate((e, to) => e.scrollTo({ top: to === 'end' ? e.scrollHeight : 0 }), top);
-  await page.waitForTimeout(300);
-};
 await box('vote.cards', vote.getByRole('group', { name: 'Your vote' }));
 await box('vote.five', vote.getByRole('button', { name: '5', exact: true }));
 await box('vote.who', vote.getByRole('list', { name: 'Who voted' }));
-await shot('vote');
-await scroll('end');
 await box('vote.reveal', vote.getByRole('button', { name: 'Reveal the votes' }));
-await shot('vote-reveal');
+await shot('vote');
 await vote.getByRole('button', { name: 'Reveal the votes' }).click();
 await page.waitForTimeout(500);
 // Revealed, the row is called Votes.
 const votes = page.getByRole('region', { name: 'Votes' });
-await scroll(0);
 await box('revealed.votes', votes.getByRole('list', { name: 'Votes' }));
-await shot('revealed');
-await scroll('end');
 await box('revealed.spread', votes.getByText(/^From |^Everyone agrees/));
 await box('revealed.keep', votes.getByRole('button', { name: /^Keep/ }));
 await box('revealed.again', votes.getByRole('button', { name: 'Vote again' }));
-await shot('revealed-keep');
+await shot('revealed');
 await votes.getByRole('button', { name: /^Keep/ }).click();
 await page.waitForTimeout(600);
 const card = page.getByRole('complementary', { name: 'Timeline' }).getByText(/Show unreachable after three missed heartbeats/).last();
