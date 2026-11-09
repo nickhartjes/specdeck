@@ -259,10 +259,6 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_shell(dir: &Path, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("fake-shell");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
+        crate::test_support::fake_executable(dir, "fake-shell", body)
     }
 }

@@ -4,6 +4,9 @@
 //! Code for the browser.
 #![cfg(unix)]
 
+#[path = "../../core/tests/support/executable.rs"]
+mod executable;
+
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as Process};
 use std::sync::Arc;
@@ -283,13 +286,10 @@ done
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_sent_suggestion_is_typed_as_one_prompt() {
-    use std::os::unix::fs::PermissionsExt;
-
     let url = signalling().await;
     let folder = tempfile::tempdir().unwrap();
     let program = folder.path().join("opencode");
-    std::fs::write(&program, BYTES_AGENT).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(&program, BYTES_AGENT);
     let mut process = Process_::launch(600);
     let mut app = App::connect(&process.socket).await;
     let Command::Start {
@@ -633,8 +633,7 @@ async fn browsing_session(app: &mut App, folder: &Path, url: &str, browser: bool
     let bin = folder.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let claude = bin.join("claude");
-    std::fs::write(&claude, BROWSING_CLAUDE).unwrap();
-    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    executable::write_executable(&claude, BROWSING_CLAUDE);
     let Command::Start { mut environment, .. } = start(folder, url) else { unreachable!() };
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     let mut terminal = String::new();
@@ -718,8 +717,7 @@ async fn whole_code_files_follow_the_hosts_setting() {
     let bin = folder.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let claude = bin.join("claude");
-    std::fs::write(&claude, EDITING_CLAUDE).unwrap();
-    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    executable::write_executable(&claude, EDITING_CLAUDE);
     let Command::Start { mut environment, .. } = start(folder.path(), &url) else { unreachable!() };
     environment.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     let mut process = Process_::launch(600);
@@ -1115,13 +1113,10 @@ async fn started_as(app: &mut App, folder: &Path, url: &str, agent: AgentId) -> 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_braindump_is_given_as_one_prompt_ending_with_its_paths() {
-    use std::os::unix::fs::PermissionsExt;
-
     let url = signalling().await;
     let folder = tempfile::tempdir().unwrap();
     let program = folder.path().join("opencode");
-    std::fs::write(&program, BYTES_AGENT).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(&program, BYTES_AGENT);
     let mut process = Process_::launch(600);
     let mut app = App::connect(&process.socket).await;
     let mut terminal = started_as(&mut app, folder.path(), &url, AgentId::OpenCode).await;
