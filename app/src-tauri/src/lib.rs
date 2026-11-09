@@ -1139,16 +1139,16 @@ async fn host_share_code(
     with_host(&state, &window, |host| host.share_code(whole_files))
 }
 
-/// Sends a waiting suggestion as `text` (edited or not), or declines it when `text` is absent.
+/// Sends a suggestion (edited or not), keeps it for later, or declines it.
 #[tauri::command]
 async fn host_answer_suggestion(
     window: WebviewWindow,
     state: State<'_, AppState>,
     viewer_id: u32,
     id: u32,
-    text: Option<String>,
+    answer: specdeck_session::messages::SuggestionAnswer,
 ) -> Result<(), String> {
-    with_host(&state, &window, |host| host.answer_suggestion(viewer_id, id, text))
+    with_host(&state, &window, |host| host.answer_suggestion(viewer_id, id, answer))
 }
 
 #[tauri::command]

@@ -356,9 +356,34 @@ async fn a_sent_suggestion_is_typed_as_one_prompt() {
     let (viewer_id, id) =
         (suggestion["viewer"].as_u64().unwrap() as u32, suggestion["id"].as_u64().unwrap() as u32);
 
-    // The host edits it into three lines and sends it: one prompt, submitted once.
+    // The host keeps it for later: nothing is typed.
+    app.send(&Command::AnswerSuggestion { viewer_id, id, answer: SuggestionAnswer::Keep }).await;
+    app.until(&mut terminal, |event| {
+        matches!(event, Event::HostEvent { event }
+            if event["type"] == "suggestions" && event["suggestions"][0]["state"] == "Kept")
+    })
+    .await;
+    viewer_until(&mut events, |e| {
+        matches!(e, ViewerEvent::Suggestions(mine)
+            if mine.first().is_some_and(|s| s.state == specdeck_protocol::control::SuggestionState::Kept))
+    })
+    .await;
+    assert!(!terminal.contains("[6f]"), "nothing typed when kept");
+
+    // Then edits it into three lines and sends it: one prompt, submitted once, and marked.
     let answer = SuggestionAnswer::Send { text: "one\ntwo\r\nsix".into() };
     app.send(&Command::AnswerSuggestion { viewer_id, id, answer: answer.clone() }).await;
+    let marked = app
+        .until(&mut terminal, |event| {
+            matches!(event, Event::HostEvent { event }
+                if event["type"] == "timeline" && event["event"]["kind"] == "suggested")
+        })
+        .await;
+    let Event::HostEvent { event: marked } = marked else { unreachable!() };
+    assert_eq!(
+        (&marked["event"]["by"], &marked["event"]["edited"]),
+        (&"anna".into(), &true.into())
+    );
     tokio::time::timeout(WAIT, async {
         while !bytes_read(&terminal).contains("0d") {
             if let Frame::Data(records) = app.recv().await {

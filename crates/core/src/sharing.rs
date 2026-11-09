@@ -17,8 +17,8 @@ use specdeck_protocol::control::{
     self, ASKS_PROTOCOL_VERSION, BRAINDUMP_PROTOCOL_VERSION, CAUGHT_UP_PROTOCOL_VERSION,
     HostMessage, LINKS_PROTOCOL_VERSION, MAX_LINKS_LISTED, MIN_VIEWER_PROTOCOL_VERSION, Outcome,
     PROTOCOL_VERSION, Participant, REQUESTS_PROTOCOL_VERSION, RefusalReason, Role,
-    SHARED_FILES_PROTOCOL_VERSION, SentLink, SentLinkState, Suggestion, SuggestionState,
-    ViewerMessage, ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
+    SHARED_FILES_PROTOCOL_VERSION, SUGGESTED_PROTOCOL_VERSION, SentLink, SentLinkState, Suggestion,
+    SuggestionState, ViewerMessage, ViewerRequest, WHOLE_FILES_PROTOCOL_VERSION,
 };
 use specdeck_protocol::files::{
     self, Assembled, Assembly, FILE_CHUNK_BYTES, FilesReply, FilesRequest,
@@ -183,10 +183,19 @@ pub struct HostSuggestion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {
     /// Sent to the agent as `text`, which the host may have edited.
-    Sent {
-        text: String,
-    },
+    Sent { text: String },
+    /// Kept to send or remove later.
+    Kept,
+    /// Declined while waiting, or removed once kept.
     Declined,
+}
+
+/// A suggestion the host just answered: the viewer's label when suggesting it, and whether a
+/// sent one was edited.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Answered {
+    pub from: String,
+    pub edited: bool,
 }
 
 /// What the host's side of sharing is doing, for the Connection status panel. Times are Unix
@@ -244,7 +253,7 @@ enum Command {
     Remove(u32),
     SetLimit(u8),
     AllowSuggestions(bool),
-    Answer { viewer: u32, id: u32, answer: Answer, done: oneshot::Sender<bool> },
+    Answer { viewer: u32, id: u32, answer: Answer, done: oneshot::Sender<Option<Answered>> },
     AllowLinks(bool),
     AnswerLink { viewer: u32, id: u32, share: bool, done: oneshot::Sender<Option<HostLink>> },
     Ask { command: AskCommand, done: oneshot::Sender<Result<(), AskRefusal>> },
@@ -298,15 +307,16 @@ impl Sharing {
         let _ = self.commands.send(Command::AllowSuggestions(on));
     }
 
-    /// Records the host's answer to a waiting suggestion and tells its viewer. Resolves to
-    /// whether the suggestion was waiting; only then may the caller type a sent one into the
-    /// session, so a double click cannot send it twice. Sharing itself never types anything.
+    /// Records the host's answer to a waiting or kept suggestion and tells its viewer. Resolves
+    /// to the suggestion when it could be answered so; only then may the caller type a sent one
+    /// into the session, so a double click cannot send it twice. Sharing itself never types
+    /// anything.
     pub fn answer_suggestion(
         &self,
         viewer: u32,
         id: u32,
         answer: Answer,
-    ) -> oneshot::Receiver<bool> {
+    ) -> oneshot::Receiver<Option<Answered>> {
         let (done, receiver) = oneshot::channel();
         let _ = self.commands.send(Command::Answer { viewer, id, answer, done });
         receiver
@@ -651,35 +661,51 @@ impl Requests {
             .take(now)
     }
 
-    /// Records the host's answer; false when the suggestion is not waiting.
-    fn answer(&mut self, viewer: u32, id: u32, answer: &Answer) -> bool {
-        let Some(suggestion) = self
-            .suggestions
-            .iter_mut()
-            .find(|s| s.viewer == viewer && s.id == id && s.state == SuggestionState::Waiting)
-        else {
-            return false;
-        };
+    /// Records the host's answer; `None` when the suggestion cannot be answered so. A waiting
+    /// suggestion can be sent, kept or declined, a kept one sent or removed.
+    fn answer(&mut self, viewer: u32, id: u32, answer: &Answer) -> Option<Answered> {
+        let suggestion = self.suggestions.iter_mut().find(|s| s.viewer == viewer && s.id == id)?;
+        let kept = suggestion.state == SuggestionState::Kept;
+        if !(suggestion.state == SuggestionState::Waiting || kept && *answer != Answer::Kept) {
+            return None;
+        }
+        let edited = matches!(answer, Answer::Sent { text } if *text != suggestion.text);
         suggestion.state = match answer {
-            Answer::Sent { text } => {
-                let edited = *text != suggestion.text;
+            Answer::Sent { .. } => {
                 diag::host_suggestion_answered(viewer, "sent", edited);
                 SuggestionState::Sent { edited }
             }
+            Answer::Kept => {
+                diag::host_suggestion_answered(viewer, "kept", false);
+                SuggestionState::Kept
+            }
             Answer::Declined => {
-                diag::host_suggestion_answered(viewer, "declined", false);
+                diag::host_suggestion_answered(
+                    viewer,
+                    if kept { "removed" } else { "declined" },
+                    false,
+                );
                 SuggestionState::Declined
             }
         };
-        true
+        Some(Answered { from: suggestion.from.clone(), edited })
     }
 
-    /// One viewer's suggestions, as that viewer sees them.
-    fn mine(&self, viewer: u32) -> Vec<Suggestion> {
+    /// One viewer's suggestions, as that viewer sees them. A viewer below
+    /// [`SUGGESTED_PROTOCOL_VERSION`] cannot decode `Kept`, and sees a kept one as waiting.
+    fn mine(&self, viewer: u32, protocol: u32) -> Vec<Suggestion> {
         self.suggestions
             .iter()
             .filter(|s| s.viewer == viewer)
-            .map(|s| Suggestion { id: s.id, text: s.text.clone(), state: s.state })
+            .map(|s| {
+                let state = match s.state {
+                    SuggestionState::Kept if protocol < SUGGESTED_PROTOCOL_VERSION => {
+                        SuggestionState::Waiting
+                    }
+                    state => state,
+                };
+                Suggestion { id: s.id, text: s.text.clone(), state }
+            })
             .collect()
     }
 }
@@ -1640,23 +1666,25 @@ impl Host {
         let _ = self.events.send(SharingEvent::Shared { whole_files: on });
     }
 
-    /// Whether the suggestion was waiting; only then is the answer recorded.
-    fn answer(&mut self, viewer: u32, id: u32, answer: Answer) -> bool {
-        if !self.requests.answer(viewer, id, &answer) {
-            return false;
-        }
+    /// The suggestion when it could be answered so; only then is the answer recorded.
+    fn answer(&mut self, viewer: u32, id: u32, answer: Answer) -> Option<Answered> {
+        let answered = self.requests.answer(viewer, id, &answer)?;
         self.send_mine(viewer);
         self.publish_suggestions();
-        true
+        Some(answered)
     }
 
-    /// Sends a viewer its own suggestions, wherever it is connected now.
+    /// Sends a viewer its own suggestions, wherever it is connected now, in the form its
+    /// protocol reads.
     fn send_mine(&mut self, viewer: u32) {
-        let message = HostMessage::Suggestions { mine: self.requests.mine(viewer) };
         for slot in self.slots.values_mut() {
-            if slot.admitted.as_ref().is_some_and(|a| a.id == viewer) {
-                send_newer(slot, REQUESTS_PROTOCOL_VERSION, &message);
-            }
+            let Some(protocol) =
+                slot.admitted.as_ref().filter(|a| a.id == viewer).map(|a| a.protocol)
+            else {
+                continue;
+            };
+            let message = HostMessage::Suggestions { mine: self.requests.mine(viewer, protocol) };
+            send_newer(slot, REQUESTS_PROTOCOL_VERSION, &message);
         }
     }
 
@@ -1885,8 +1913,8 @@ fn pump(
         if sink.queued() >= HIGH_WATER {
             break;
         }
-        // An older viewer cannot decode a code file's text, a shared file's step, a link or an
-        // ask's entry; it sees a gap, which it accepts.
+        // An older viewer cannot decode a code file's text, a shared file's step, a link, an
+        // ask's entry or a suggestion's mark; it sees a gap, which it accepts.
         let newer = match event.entry {
             Entry::FileText { .. } => WHOLE_FILES_PROTOCOL_VERSION,
             Entry::FileShared { .. } => SHARED_FILES_PROTOCOL_VERSION,
@@ -1895,6 +1923,7 @@ fn pump(
             Entry::BraindumpItem { .. } | Entry::BraindumpGiven { .. } => {
                 BRAINDUMP_PROTOCOL_VERSION
             }
+            Entry::Suggested { .. } => SUGGESTED_PROTOCOL_VERSION,
             _ => 0,
         };
         if admitted.protocol < newer {
@@ -2383,7 +2412,7 @@ mod tests {
         );
         // A resent request is answered again, without counting or adding it twice.
         assert_eq!(requests.receive(1, 3, suggest("a"), from(), now), (Outcome::Received, None));
-        assert_eq!(requests.mine(1).len(), 3);
+        assert_eq!(requests.mine(1, PROTOCOL_VERSION).len(), 3);
         // Turned off: waiting suggestions stay.
         assert!(requests.allow_suggestions(false));
         assert_eq!(requests.receive(2, 2, suggest("b"), from(), now), (Outcome::Off, None));
@@ -2464,18 +2493,58 @@ mod tests {
         requests.receive(1, 1, suggest("Add a test"), "anna".into(), now);
         requests.receive(1, 2, suggest("Fix it"), "anna".into(), now);
         let sent = Answer::Sent { text: "Add a test".into() };
-        assert!(requests.answer(1, 1, &sent));
-        assert!(!requests.answer(1, 1, &sent), "already sent");
-        assert!(!requests.answer(2, 1, &sent), "another viewer's id");
-        assert!(requests.answer(1, 2, &Answer::Sent { text: "Fix it, please".into() }));
-        let states: Vec<_> = requests.mine(1).iter().map(|s| s.state).collect();
+        let answered = Answered { from: "anna".into(), edited: false };
+        assert_eq!(requests.answer(1, 1, &sent), Some(answered));
+        assert_eq!(requests.answer(1, 1, &sent), None, "already sent");
+        assert_eq!(requests.answer(2, 1, &sent), None, "another viewer's id");
+        let edited = Answer::Sent { text: "Fix it, please".into() };
+        assert_eq!(
+            requests.answer(1, 2, &edited),
+            Some(Answered { from: "anna".into(), edited: true })
+        );
+        let states: Vec<_> = requests.mine(1, PROTOCOL_VERSION).iter().map(|s| s.state).collect();
         assert_eq!(
             states,
             [SuggestionState::Sent { edited: false }, SuggestionState::Sent { edited: true }]
         );
         requests.receive(1, 3, suggest("Never mind"), "anna".into(), now);
-        assert!(requests.answer(1, 3, &Answer::Declined));
-        assert_eq!(requests.mine(1)[2].state, SuggestionState::Declined);
+        assert!(requests.answer(1, 3, &Answer::Declined).is_some());
+        assert_eq!(requests.mine(1, PROTOCOL_VERSION)[2].state, SuggestionState::Declined);
+    }
+
+    #[test]
+    fn a_kept_suggestion_is_sent_or_removed_later() {
+        let now = Instant::now();
+        let mut requests = Requests::new(AgentId::ClaudeCode);
+        for (id, text) in [(1, "Add a test"), (2, "Write docs")] {
+            requests.receive(1, id, suggest(text), "anna".into(), now);
+        }
+        assert!(requests.answer(1, 1, &Answer::Kept).is_some());
+        assert_eq!(requests.answer(1, 1, &Answer::Kept), None, "kept twice");
+        assert!(requests.answer(1, 2, &Answer::Kept).is_some());
+        // Turned off: kept suggestions stay answerable.
+        assert!(requests.allow_suggestions(false));
+        let edited = Answer::Sent { text: "Add a unit test".into() };
+        assert_eq!(
+            requests.answer(1, 1, &edited),
+            Some(Answered { from: "anna".into(), edited: true })
+        );
+        assert_eq!(requests.answer(1, 1, &edited), None, "sent twice");
+        assert!(requests.answer(1, 2, &Answer::Declined).is_some(), "removed");
+        assert_eq!(requests.answer(1, 2, &Answer::Kept), None, "a removed one is not kept again");
+        let states: Vec<_> = requests.mine(1, PROTOCOL_VERSION).iter().map(|s| s.state).collect();
+        assert_eq!(states, [SuggestionState::Sent { edited: true }, SuggestionState::Declined]);
+    }
+
+    #[test]
+    fn older_viewers_see_a_kept_suggestion_as_waiting() {
+        let now = Instant::now();
+        let mut requests = Requests::new(AgentId::ClaudeCode);
+        requests.receive(1, 1, suggest("Add a test"), "anna".into(), now);
+        requests.answer(1, 1, &Answer::Kept);
+        let state = |protocol| requests.mine(1, protocol)[0].state;
+        assert_eq!(state(SUGGESTED_PROTOCOL_VERSION), SuggestionState::Kept);
+        assert_eq!(state(SUGGESTED_PROTOCOL_VERSION - 1), SuggestionState::Waiting);
     }
 
     #[tokio::test(start_paused = true)]

@@ -21,7 +21,7 @@ SpecDeck keeps a few files for each session in a folder of its own, `sessions/<n
 | `snapshots-…` | In a git repository, copies of files in the session folder before and after Claude's shell commands, to show what a command changed |
 | `hooks-….json`, `mcp-….json`, `statusline-….sh` | The settings SpecDeck gives Claude Code, which name the session's local endpoint. They refer to the session's secret token, but do not contain it |
 
-SpecDeck deletes them when the session ends. If the session's process is killed instead, for example by a crash or a power cut, they can stay behind; see [Known limits](/specdeck/security/known-limits/#leftover-session-files). Shared files and the braindump are kept in memory only, and are written to disk only when you put a file in the session folder or give the braindump yourself.
+SpecDeck deletes them when the session ends. If the session's process is killed instead, for example by a crash or a power cut, they can stay behind; see [Known limits](/specdeck/security/known-limits/#leftover-session-files). Shared files and the braindump are kept in memory only, and are written to disk only when you put a file in the session folder or give the braindump yourself. Prompt suggestions, waiting or kept for later, are kept in memory only and never written to disk.
 
 A session keeps running when SpecDeck restarts to update or crashes, and ends by itself if SpecDeck is not back within 10 minutes (see [When SpecDeck restarts or stops](/specdeck/guide/host/#when-specdeck-restarts-or-stops)).
 
@@ -64,4 +64,4 @@ See [Share files](/specdeck/guide/host/#share-files) and [Share a link](/specdec
 
 ## What reaches the agent
 
-Only the host types into the agent, on their own computer and login. Nothing a viewer's app sends is typed into the session, not even the automatic answers a terminal gives to programs. Prompt suggestions, links and files from viewers wait for the host, who decides what to do with them in their own window.
+Only the host types into the agent, on their own computer and login. Nothing a viewer's app sends is typed into the session, not even the automatic answers a terminal gives to programs. Prompt suggestions, links and files from viewers wait for the host, who decides what to do with them in their own window. A suggestion, waiting or kept for later, is seen only by the host and its author. Once the host sends it, everyone's timeline shows the prompt as suggested by its author.

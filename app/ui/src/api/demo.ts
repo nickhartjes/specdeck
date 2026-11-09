@@ -90,7 +90,8 @@ export const demoParticipants: Participant[] = [
 
 /** Suggestions waiting for the host in the demo, and one already sent. */
 export const demoSuggestions: HostSuggestion[] = [
-  { viewer: 1, id: 1, from: 'Anna de Vries', text: 'Can the health check also report the database latency?', state: { Sent: { edited: false } } },
+  { viewer: 1, id: 1, from: 'Anna de Vries', text: 'Add a test with a stubbed database, please.', state: { Sent: { edited: true } } },
+  { viewer: 2, id: 2, from: 'Bram', text: 'Can the health check also report the database latency?', state: 'Kept' },
   { viewer: 2, id: 1, from: 'Bram', text: 'Add a test for the 503 when the database is down.', state: 'Waiting' },
   { viewer: 1, id: 2, from: 'Anna de Vries', text: 'Please explain the retry policy in the README,\nwith an example.', state: 'Waiting' },
 ];
@@ -202,6 +203,7 @@ export const demoTimeline: TimelineEvent[] = [
     text: 'Added **`GET /health`** in `src/routes/health.ts` and registered it in the router.\n\n- Returns `200` with `{ status: "ok", database: "up" }` when the database answers\n- Returns `503` when it does not\n\nThere are no tests for it yet; want me to add one?',
   },
   { ...at(3), kind: 'usage', tokens: { input: 14, output: 2310, cacheRead: 96400, cacheWrite: 21800 }, contextTokens: 24180, contextWindow: 200_000 },
+  { ...at(4), kind: 'suggested', by: 'Anna de Vries', edited: true },
   { ...at(4), kind: 'prompt', promptId: 'p2', text: 'Yes, add a test with a stubbed database.' },
   { ...at(4), kind: 'message', promptId: 'p2', messageId: 'm2', text: 'Writing a test that stubs `db.ping` for both cases.', final: false },
   { ...at(4), kind: 'tool-call', promptId: 'p2', toolUseId: 't5', toolName: 'Bash', input: { command: 'npm test -- health', description: 'Run the health tests again' } },
@@ -557,10 +559,13 @@ export function demoBridge(screen: string): Bridge {
     hostShareCode: async (wholeFiles) => {
       hostEvents?.({ type: 'shared', wholeFiles });
     },
-    hostAnswerSuggestion: async (viewerId, id, text) => {
+    hostAnswerSuggestion: async (viewerId, id, answer) => {
       hostSuggestions = hostSuggestions.map((suggestion) =>
         suggestion.viewer === viewerId && suggestion.id === id
-          ? { ...suggestion, state: text === null ? 'Declined' : { Sent: { edited: text !== suggestion.text } } }
+          ? {
+              ...suggestion,
+              state: answer.type === 'send' ? { Sent: { edited: answer.text !== suggestion.text } } : answer.type === 'keep' ? 'Kept' : 'Declined',
+            }
           : suggestion,
       );
       hostEvents?.({ type: 'suggestions', suggestions: hostSuggestions });

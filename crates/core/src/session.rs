@@ -784,6 +784,13 @@ impl HostSession {
         Ok(Given { round, files, paths, from })
     }
 
+    /// Marks the next prompt as suggested by the viewer labelled `by`, and whether the host
+    /// edited it first: a `Suggested` entry, in order with the agent's entries. Added after the
+    /// suggestion is typed and before it is submitted, so it comes before the agent's prompt.
+    pub fn suggestion_sent(&self, by: &str, edited: bool) {
+        self.view.add_entry(Entry::Suggested { by: by.into(), edited });
+    }
+
     /// Shares a link with everyone in the session as a timeline entry, in any session, and
     /// returns its id. `by` is the label of whoever shared it. The link must pass
     /// [`links::check_link`] in its normalized form, and a title [`links::valid_title`]; a blank

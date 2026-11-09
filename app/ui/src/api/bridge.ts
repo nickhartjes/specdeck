@@ -23,6 +23,7 @@ import type {
   RunningSession,
   ServiceCheck,
   SharedFileInfo,
+  SuggestionAnswer,
   TerminalSnapshot,
   UpdateState,
   ViewEvent,
@@ -83,7 +84,7 @@ export interface Bridge {
   /** Lets viewers open whole code files the agent changes from now on, or stops it. */
   hostShareCode(wholeFiles: boolean): Promise<void>;
   /** Types `text` (the suggestion, maybe edited) into the agent's prompt and submits it, or declines the suggestion when `text` is null. */
-  hostAnswerSuggestion(viewerId: number, id: number, text: string | null): Promise<void>;
+  hostAnswerSuggestion(viewerId: number, id: number, answer: SuggestionAnswer): Promise<void>;
   /** Lets viewers share files, or stops them; files already shared stay. */
   hostAllowFiles(on: boolean): Promise<void>;
   /** Shares a file the host chose; fails with why it was refused. */

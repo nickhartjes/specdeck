@@ -281,6 +281,8 @@ export type TimelineEvent = Stamp &
       }
     /** The host gave the braindump to the agent: the items, the paths written and whom they came from. */
     | { kind: 'braindump-given'; round: number; files: number[]; paths: string[]; from: string[] }
+    /** The host sent a viewer's suggestion as the next prompt: who suggested it, and whether the host edited it. */
+    | { kind: 'suggested'; by: string; edited: boolean }
     | { kind: 'plan'; change: string; documents: PlanDocument[]; tasks: { done: number; total: number } }
     | { kind: 'timeline-unavailable'; reason: string }
     | { kind: 'timeline-available' }
@@ -367,7 +369,10 @@ export interface HostAsks {
 export type SharingState = 'connecting' | 'ready' | 'unavailable';
 
 /** What became of a suggestion; `SuggestionState` in crates/protocol. */
-export type SuggestionState = 'Waiting' | { Sent: { edited: boolean } } | 'Declined';
+export type SuggestionState = 'Waiting' | { Sent: { edited: boolean } } | 'Declined' | 'Kept';
+
+/** What the host does with a suggestion; `SuggestionAnswer` in crates/session. Declining a kept one removes it. */
+export type SuggestionAnswer = { type: 'send'; text: string } | { type: 'keep' } | { type: 'decline' };
 
 /** A viewer's own suggestion, as that viewer sees it. */
 export interface Suggestion {

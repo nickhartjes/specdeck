@@ -284,6 +284,17 @@ The web viewer SHALL have the same bell and list as the app. Since it has no Set
 - **WHEN** a browser viewer reloads the page
 - **THEN** the list is empty
 
+### Requirement: Kept and sent suggestions in the browser
+The web viewer SHALL show a viewer's suggestion as kept for later when the host keeps it, and SHALL show prompts sent from a suggestion as suggested by their author, as the app does.
+
+#### Scenario: Kept from the browser
+- **WHEN** a browser viewer suggests a prompt and the host keeps it for later
+- **THEN** the browser viewer sees it as kept for later by the host
+
+#### Scenario: Mark in the browser
+- **WHEN** the host sends a suggestion from a viewer in the app
+- **THEN** a browser viewer's timeline shows the prompt as suggested by that viewer
+
 ### Requirement: Diagnostic log in the browser
 The web viewer SHALL keep a diagnostic log of its own connection from the moment the page opens, with the same event names and details as the app's viewer, and the reason a session ended for the page. It SHALL keep the latest 2,000 entries in that browser tab, also across a reload, and forget them when the tab closes. It SHALL record state changes only, never traffic, and SHALL NOT slow or stop a session when it cannot be kept.
 

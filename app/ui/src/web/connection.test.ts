@@ -377,6 +377,19 @@ describe('web viewer connection', () => {
     expect(() => connection.sendLink('http://localhost:3000/', null, false)).toThrow('can’t be shared');
   });
 
+  it('passes on a suggestion the host kept for later', async () => {
+    const core = fakeCore();
+    const mine = [{ id: 1, text: 'Write docs', state: 'Kept' as const }];
+    core.controls.push(welcome, { type: 'suggestions', mine });
+    const { sockets, peers, events } = setup(core);
+    const { peer } = await reachHost(sockets, peers);
+    const control = peer.channel('control');
+    control.open();
+    control.receive([0]);
+    control.receive([0]);
+    expect(events.at(-1)).toEqual({ type: 'suggestions', mine });
+  });
+
   it('passes on the host’s asks and sends answers and votes', async () => {
     const core = fakeCore();
     const open = { id: 1, target: { document: { path: 'design.md' } }, label: 'design.md', limitS: 0, leftMs: null, people: [], mine: 'reading' as const, questions: [] };

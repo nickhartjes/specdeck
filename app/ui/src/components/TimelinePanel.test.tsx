@@ -306,6 +306,33 @@ describe('shared links', () => {
   });
 });
 
+describe('prompts sent from a suggestion', () => {
+  const stamp = (n: number) => ({ outputSeq: n, at: 1_700_000_000_000 + n });
+  const show = (events: TimelineEvent[], extra: Partial<Parameters<typeof TimelinePanel>[0]> = {}) =>
+    render(
+      <BridgeContext.Provider value={fakeBridge('viewer')}>
+        <TimelinePanel model={buildTimeline(events)} timelineSupported agentName="Claude Code" matches={new Set()} current={null} onJump={() => {}} {...extra} />
+      </BridgeContext.Provider>,
+    );
+
+  it('marks the prompt with who suggested it, and that the host edited it', () => {
+    show([
+      { ...stamp(1), kind: 'prompt', promptId: 'p1', text: 'First' },
+      { ...stamp(2), kind: 'suggested', by: 'Sanne', edited: true },
+      { ...stamp(3), kind: 'prompt', promptId: 'p2', text: 'Add a test' },
+    ]);
+    const turns = screen.getAllByRole('article');
+    expect(turns[0]).not.toHaveTextContent('suggested by');
+    expect(turns[1]).toHaveTextContent('Prompt 2 · suggested by Sanne, edited');
+  });
+
+  it('lists sent suggestions below the note of a session without a timeline', () => {
+    show([{ ...stamp(1), kind: 'suggested', by: 'Mo', edited: false }], { timelineSupported: false, agentName: 'OpenCode' });
+    expect(screen.getByText('No timeline for OpenCode')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Sent suggestions' })).getByText(/Sent a prompt suggested by Mo$/)).toBeTruthy();
+  });
+});
+
 describe('joining late', () => {
   const HOUR = 3_600_000;
   const joinedAt = 1_700_000_000_000 + HOUR;

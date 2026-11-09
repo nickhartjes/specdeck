@@ -803,8 +803,11 @@ impl HostRuntime {
             GiveError::Put(error) => format!("The braindump was not given: {error}."),
         })?;
         if let Some(prompt) = prompt {
-            self.submit_prompt(&format!("{}\n\n{}", prompt.trim_end(), given.paths.join("\n")))
-                .await?;
+            self.submit_prompt(
+                &format!("{}\n\n{}", prompt.trim_end(), given.paths.join("\n")),
+                || {},
+            )
+            .await?;
         }
         Ok(given.paths)
     }
@@ -842,31 +845,39 @@ impl HostRuntime {
         })
     }
 
-    /// Declines a waiting suggestion, or types `text` into the agent's prompt and submits it. A
-    /// suggestion that is not waiting, for example one already sent, is not typed again.
+    /// Keeps or declines a suggestion, or types the sent text into the agent's prompt and submits
+    /// it, marked in the timeline as suggested by its viewer. A suggestion that cannot be answered
+    /// so, for example one already sent, is not typed again.
     pub async fn answer_suggestion(
         &self,
         viewer: u32,
         id: u32,
-        text: Option<String>,
+        answer: Answer,
     ) -> Result<(), String> {
-        let answer = match &text {
-            Some(text) => Answer::Sent { text: text.clone() },
-            None => Answer::Declined,
+        let text = match &answer {
+            Answer::Sent { text } => Some(text.clone()),
+            Answer::Kept | Answer::Declined => None,
         };
-        let waiting = self.sharing.answer_suggestion(viewer, id, answer).await.unwrap_or(false);
-        if !waiting {
+        let Some(answered) =
+            self.sharing.answer_suggestion(viewer, id, answer).await.ok().flatten()
+        else {
             return Err("That suggestion has already been answered.".into());
-        }
+        };
         if let Some(text) = text {
-            self.submit_prompt(&text).await?;
+            // Marked after typing, so a failed one leaves no mark, and before submitting, so the
+            // mark comes before the agent's prompt.
+            self.submit_prompt(&text, || {
+                self.session.suggestion_sent(&answered.from, answered.edited)
+            })
+            .await?;
         }
         Ok(())
     }
 
-    /// Types `text` into the agent's prompt, as the host would, and submits it.
-    async fn submit_prompt(&self, text: &str) -> Result<(), String> {
+    /// Types `text` into the agent's prompt, as the host would, calls `typed`, and submits it.
+    async fn submit_prompt(&self, text: &str, typed: impl FnOnce()) -> Result<(), String> {
         self.input(&typed_prompt(text))?;
+        typed();
         // Apart from the text, so an agent that takes fast input as a paste still submits.
         tokio::time::sleep(SUBMIT_DELAY).await;
         self.input("\r")

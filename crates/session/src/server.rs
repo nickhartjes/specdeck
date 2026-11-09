@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use specdeck_core::browser::{BrowserAction, BrowserHandler, BrowserResult};
 use specdeck_core::peer::PeerConfig;
-use specdeck_core::sharing::AskCommand;
+use specdeck_core::sharing::{Answer, AskCommand};
 use specdeck_diag::Diagnostics;
 use specdeck_local::{Compat, Connection, Frame, Frozen, Listener, Protocol, compat};
 use specdeck_protocol::AgentId;
@@ -445,11 +445,12 @@ async fn run(
             Ok(())
         }
         Command::AnswerSuggestion { viewer_id, id, answer } => {
-            let text = match answer {
-                SuggestionAnswer::Send { text } => Some(text),
-                SuggestionAnswer::Decline => None,
+            let answer = match answer {
+                SuggestionAnswer::Send { text } => Answer::Sent { text },
+                SuggestionAnswer::Keep => Answer::Kept,
+                SuggestionAnswer::Decline => Answer::Declined,
             };
-            runtime.answer_suggestion(viewer_id, id, text).await
+            runtime.answer_suggestion(viewer_id, id, answer).await
         }
         Command::ShareLink { url, title, session_only } => {
             runtime.share_link(&url, title.as_deref(), session_only)
