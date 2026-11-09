@@ -8,7 +8,7 @@ What is there today:
 
 - nma-platform's `tools/sandbox/sandbox.sh run [claude args]` (behind `just sandbox`) creates the checkout's sandbox if needed and runs `exec sbx run --name <name> -- <args>`, attached to the terminal it was started in. It works out the repository from its own location, mounts the checkout (and for a worktree the main `.git`), keeps `tools/sandbox`, the justfiles, `mise.toml`, `.claude/settings*.json`, `.mcp.json`, `.git/config` and the git hooks read-only, and runs sbx's deny-all network policy with the kit's allowlist. It is macOS only (Windows untested). Its preconditions are mise, jq, the AWS CLI with the `entrnce` profile, `just sandbox-setup` and a Claude login through `just sandbox-login`; `just sandbox-doctor` checks them.
 - `launcher::launch` starts `agent::program(agent, env)` in a pty in the folder, with the adapter's `extra_args` and `extra_env`.
-- `HostSession::launch` (`crates/core/src/session.rs`) decides on `config.agent.has_timeline()` whether to start the hook endpoint, write the `--settings`, status-line relay and MCP files into `data_dir`, read plans and usage, and allow whole files. `Activity::new(agent)` starts in `Starting` with a timeline and reads Program Status Protocol reports without one.
+- Before this change, `HostSession::launch` (`crates/core/src/session.rs`) decided on `config.agent.has_timeline()` whether to start the hook endpoint, write the `--settings`, status-line relay and MCP files into `data_dir`, read plans and usage, and allow whole files. `Activity::new(agent)` started in `Starting` with a timeline and read Program Status Protocol reports without one.
 - `HostMessage::Welcome` carries `agent` and `timeline_supported` separately; `crates/session/src/runtime.rs` and `crates/core/src/sharing.rs` fill `timeline_supported` from `agent.has_timeline()`. Viewers already show a session without a timeline as terminal only.
 - The start screen starts a session as soon as the host picks a folder (a recent folder or the folder picker), with the agent chosen above.
 
@@ -29,21 +29,23 @@ What is there today:
 
 ### 1. A folder has a sandbox when it is a checkout root with nma-platform's launcher
 
-`sandbox::launcher(folder)` returns `folder/tools/sandbox/sandbox.sh` when `folder/.git` exists (a directory in a main checkout, a file in a worktree), `tools/sandbox/sandbox.sh` is an executable file and `tools/sandbox/sbxenv.yaml` exists. File checks only, no git or sbx call, so the start screen can mark recent folders cheaply.
+`sandbox::launcher(folder)` (`crates/core/src/sandbox.rs`) returns `folder/tools/sandbox/sandbox.sh` on macOS when `folder/.git` exists (a directory in a main checkout, a file in a worktree), `tools/sandbox/sandbox.sh` is an executable file and `tools/sandbox/sbxenv.yaml` exists. File checks only, no git or sbx call, so the start screen can mark recent folders cheaply.
 
 - **Alternative: also accept subfolders of a checkout.** `sandbox.sh` always mounts and starts in the checkout root, so the session would silently run somewhere other than the folder the host chose.
 - **Alternative: check the `origin` remote for `nma-platform`.** Forks, mirrors and renamed remotes would lose the sandbox for no gain; the launcher files are what matters.
 
 ### 2. The sandbox is a session option, not a new agent
 
-`HostConfig` and `Command::Start` get `sandbox: bool` (`#[serde(default)]` on the command, so a session process and app from different releases agree). The session starts sandboxed when `sandbox` is set, the agent is Claude Code and the folder has a launcher (decision 1, checked again in the session process); then the program is the launcher with `run`, and `extra_args` and `extra_env` stay empty. `HostConfig::has_timeline()` (`agent.has_timeline() && !sandboxed`) replaces `config.agent.has_timeline()` in the session, `Activity::new` takes that flag, and the runtime and sharing fill `timeline_supported` and `whole_files_possible` from the session instead of the agent.
+`HostConfig` and `Command::Start` get `sandbox: bool` (`#[serde(default)]` on the command, so a session process and app from different releases agree). Which agents can be sandboxed is decided in one place, `sandbox::runs(agent)` (Claude Code, on macOS), and `sandbox::program(agent, folder)` gives the program to run: the folder's launcher (decision 1, checked again in the session process) with `run`. The session starts sandboxed when `sandbox` is set and that program exists; it goes to the launcher as `LaunchOptions.program`, a general override of the agent's own program, and `extra_args` and `extra_env` stay empty.
+
+`HostSession::launch` works out the session's `has_timeline` once (`agent.has_timeline() && !sandboxed`) and uses it for hooks, plans, usage and `Activity::with_timeline`. `SessionView::has_timeline()` and `HostSession::has_timeline()` / `sandboxed()` expose it, and the runtime and sharing fill `timeline_supported` and `whole_files_possible` from the session instead of the agent. `Activity::new(agent)`, which takes the agent's timeline, is left for tests only.
 
 - **Alternative: a new `AgentId::ClaudeCodeSandbox`.** Viewers would see the sandbox in the agent name, but it needs protocol version 8 (postcard encodes the variant index in `Welcome`), so every older viewer is refused, and it puts a folder-dependent choice into the agent picker.
 - **Alternative: start it as a Terminal session.** Viewers would be told it is a plain shell, which is the situation this change ends.
 
 ### 3. A setting, not a question per session
 
-The start screen starts on folder pick, so the choice is a setting, `claude_sandbox` in `settings.json` (default false), shown under the agent picker when Claude Code is chosen on macOS: "Run Claude Code in a Docker Sandbox when the folder has one". The profile tells the UI, per recent folder, whether it has a launcher; with the setting on and Claude Code chosen, those folders show a "Docker Sandbox" mark. The app sends `sandbox` with every Claude Code start; the session process decides with decision 1.
+The start screen starts on folder pick, so the choice is a setting, `claude_sandbox` in `settings.json` (default false), shown under the agent picker when the chosen agent is `sandboxable` (a per-agent field of the profile, from `sandbox::runs`): "Run Claude Code in a Docker Sandbox when the folder has one". The profile tells the UI, per recent folder, whether it has a launcher; with the setting on and Claude Code chosen, those folders show a "Docker Sandbox" mark. The app sends `sandbox` with every Claude Code start; the session process decides with decision 1.
 
 ### 3a. The host sees the sandbox in the session window
 
