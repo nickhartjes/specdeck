@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BraindumpItemInfo, SharedFileInfo, ViewEvent } from '../api/types';
-import { Connection, refusalReason, type ControlUpdate, type Platform, type ViewerCore } from './connection';
+import type { BraindumpItemInfo, SharedFileInfo, TimelineEvent, ViewEvent } from '../api/types';
+import { Connection, refusalReason, selectedPath, type ControlUpdate, type Platform, type ViewerCore } from './connection';
+import { DiagnosticLog, exportHeader, exportText } from './diagnostics';
 
 /** A WebSocket to the sharing service, driven by the test. */
 class FakeSocket {
@@ -30,13 +31,25 @@ class FakeChannel {
   sent: Uint8Array[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: ArrayBuffer }) => void) | null = null;
+  private listeners: { type: string; listener: () => void }[] = [];
   constructor(readonly label: string) {}
+  addEventListener(type: string, listener: () => void) {
+    this.listeners.push({ type, listener });
+  }
+  private dispatch(type: string) {
+    for (const entry of this.listeners) if (entry.type === type) entry.listener();
+  }
   send(bytes: Uint8Array) {
     this.sent.push(bytes);
   }
   open() {
     this.readyState = 'open';
     this.onopen?.();
+    this.dispatch('open');
+  }
+  close() {
+    this.readyState = 'closed';
+    this.dispatch('close');
   }
   receive(bytes: number[]) {
     this.onmessage?.({ data: new Uint8Array(bytes).buffer });
@@ -52,7 +65,16 @@ class FakePeer {
   closed = false;
   onicecandidate: ((event: { candidate: { candidate: string; sdpMid: string } | null }) => void) | null = null;
   onconnectionstatechange: (() => void) | null = null;
+  /** What `getStats` gives, as browsers report the selected pair. */
+  stats: Record<string, unknown>[] = [];
   constructor(readonly config: RTCConfiguration) {}
+  getStats() {
+    return Promise.resolve(new Map(this.stats.map((report) => [String(report.id), report])) as unknown as RTCStatsReport);
+  }
+  connect() {
+    this.connectionState = 'connected';
+    this.onconnectionstatechange?.();
+  }
   createDataChannel(label: string) {
     const channel = new FakeChannel(label);
     this.channels.push(channel);
@@ -149,7 +171,7 @@ function fakeCore(): FakeCore {
   return core;
 }
 
-function setup(core = fakeCore()) {
+function setup(core = fakeCore(), log = new DiagnosticLog(null)) {
   const sockets: FakeSocket[] = [];
   const peers: FakePeer[] = [];
   const platform = {
@@ -171,10 +193,11 @@ function setup(core = fakeCore()) {
     username: 'anna',
     core,
     platform,
+    log,
     onEvent: (event) => events.push(event),
     onRecords: (bytes) => records.push(bytes),
   });
-  return { core, sockets, peers, events, records, connection };
+  return { core, sockets, peers, events, records, connection, log };
 }
 
 const welcome: ControlUpdate = { type: 'welcome', viewerId: 2, agent: 'claude-code', timelineSupported: true, cols: 80, rows: 24, reconnected: false };
@@ -544,5 +567,206 @@ describe('refusals', () => {
     expect(refusalReason('SessionFull')).toBe('full');
     expect(refusalReason('Removed')).toBe('removed');
     expect(refusalReason('SessionEnded')).toBe('closed');
+  });
+});
+
+describe('the diagnostic log', () => {
+  const events = (log: DiagnosticLog) => log.entries().map((entry) => entry.event);
+
+  it('records a join that times out, and why it ended', async () => {
+    const { sockets, peers, log } = setup();
+    await reachHost(sockets, peers);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(events(log)).toEqual([
+      'viewer.attempt_started',
+      'signalling.connected',
+      'peer.created',
+      'signalling.closed',
+      'viewer.attempt_ended',
+      'viewer.ended',
+    ]);
+    const entries = log.entries();
+    expect(entries.find((e) => e.event === 'peer.created')).toMatchObject({ role: 'offer', turn: true });
+    // As in the app, an attempt that ends the session ends as `final`; the reason follows.
+    expect(entries.find((e) => e.event === 'viewer.attempt_ended')).toMatchObject({ attempt: 1, reason: 'final', connected_ms: 0 });
+    expect(entries.at(-1)).toMatchObject({ level: 'WARN', event: 'viewer.ended', reason: 'network-blocked' });
+    expect(log.session()).toMatchObject({ phase: 'ended', ended: 'network-blocked' });
+  });
+
+  it('records a dropped connection and the next attempt', async () => {
+    const core = fakeCore();
+    core.controls.push(welcome, { ...welcome, reconnected: true });
+    const { sockets, peers, log } = setup(core);
+    const { peer } = await reachHost(sockets, peers);
+    peer.channel('control').open();
+    peer.channel('control').receive([0]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    peer.fail();
+    await vi.advanceTimersByTimeAsync(250);
+    const entries = log.entries();
+    expect(entries.find((e) => e.event === 'peer.state')).toMatchObject({ level: 'WARN', state: 'failed' });
+    expect(entries.find((e) => e.event === 'peer.channel_open')).toMatchObject({ channel: 'control' });
+    const ended = entries.find((e) => e.event === 'viewer.attempt_ended')!;
+    expect(ended).toMatchObject({ attempt: 1, reason: 'peer_failed' });
+    expect(ended.connected_ms).toBeGreaterThanOrEqual(1_000);
+    expect(entries.at(-1)).toMatchObject({ event: 'viewer.attempt_started', attempt: 2 });
+  });
+
+  it('records leaving at once, as the page may go away before the attempt ends', async () => {
+    const { sockets, peers, connection, log } = setup();
+    await reachHost(sockets, peers);
+    connection.leave();
+    expect(log.entries().find((e) => e.event === 'viewer.attempt_ended')).toMatchObject({ attempt: 1, reason: 'left' });
+    connection.leave();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events(log).filter((event) => event === 'viewer.attempt_ended')).toHaveLength(1);
+  });
+
+  it('records requests by kind and size, never their text', async () => {
+    const core = fakeCore();
+    core.controls.push(welcome, { type: 'reply', id: 1, outcome: 'RateLimited' });
+    const { sockets, peers, connection, log } = setup(core);
+    const { peer } = await reachHost(sockets, peers);
+    peer.channel('control').open();
+    peer.channel('control').receive([0]);
+    connection.suggest('Fix it');
+    peer.channel('control').receive([0]);
+    const entries = log.entries();
+    expect(entries.find((e) => e.event === 'viewer.request_sent')).toMatchObject({ kind: 'suggest', bytes: 6 });
+    expect(entries.find((e) => e.event === 'viewer.request_reply')).toMatchObject({ outcome: 'rate_limited' });
+    expect(JSON.stringify(entries)).not.toContain('Fix it');
+  });
+
+  it('records whether the path is relayed, from the selected pair’s candidate types', async () => {
+    const { sockets, peers, log } = setup();
+    const { peer } = await reachHost(sockets, peers);
+    peer.stats = [
+      { id: 'T', type: 'transport', selectedCandidatePairId: 'P' },
+      { id: 'P', type: 'candidate-pair', localCandidateId: 'L', remoteCandidateId: 'R' },
+      { id: 'L', type: 'local-candidate', candidateType: 'relay', address: '203.0.113.5' },
+      { id: 'R', type: 'remote-candidate', candidateType: 'srflx', address: '198.51.100.9' },
+    ];
+    peer.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(log.entries().find((e) => e.event === 'peer.path')).toMatchObject({ local: 'relay', remote: 'srflx', relayed: true });
+    expect(log.session().relayed).toBe(true);
+    expect(JSON.stringify(log.entries())).not.toContain('203.0.113.5');
+  });
+
+  it('reads the selected pair as each browser reports it', () => {
+    const report = (reports: Record<string, unknown>[]) => new Map(reports.map((r) => [String(r.id), r])) as unknown as RTCStatsReport;
+    const candidates = [
+      { id: 'L', type: 'local-candidate', candidateType: 'host' },
+      { id: 'R', type: 'remote-candidate', candidateType: 'host' },
+    ];
+    // Older Firefox marks the pair itself.
+    const marked = report([...candidates, { id: 'P', type: 'candidate-pair', selected: true, localCandidateId: 'L', remoteCandidateId: 'R' }]);
+    expect(selectedPath(marked)).toEqual({ local: 'host', remote: 'host' });
+    expect(selectedPath(report(candidates))).toBeNull();
+    const odd = report([{ id: 'T', type: 'transport', selectedCandidatePairId: 'P' }, { id: 'P', type: 'candidate-pair', localCandidateId: 'L', remoteCandidateId: 'X' }, { id: 'L', candidateType: 'weird' }]);
+    expect(selectedPath(odd)).toEqual({ local: 'unknown', remote: 'unknown' });
+  });
+
+  it('records catching up with what arrived since the welcome, once per connection', async () => {
+    const core = fakeCore();
+    let messages = 0;
+    core.onStream = () => (++messages === 4 ? { caughtUp: true } : { records: new Uint8Array([7]), ...(messages === 2 ? { resend: [1], resendFrom: 5 } : {}) });
+    core.controls.push(welcome, { ...welcome, reconnected: true });
+    const { sockets, peers, log } = setup(core);
+    const { peer } = await reachHost(sockets, peers);
+    peer.channel('control').open();
+    peer.channel('control').receive([0]);
+    for (let i = 0; i < 3; i++) peer.channel('stream').receive([1, 2]);
+    await vi.advanceTimersByTimeAsync(40);
+    peer.channel('stream').receive([0]);
+    peer.channel('stream').receive([1, 2]);
+    const caughtUp = log.entries().filter((e) => e.event === 'viewer.caught_up');
+    expect(caughtUp).toHaveLength(1);
+    expect(caughtUp[0]).toMatchObject({ reconnected: false, batches: 3, bytes: 6 });
+    expect(caughtUp[0]!.took_ms).toBeGreaterThanOrEqual(40);
+    expect(log.entries().find((e) => e.event === 'viewer.resend')).toMatchObject({ from: 5 });
+
+    // A reconnect counts from its own welcome.
+    peer.fail();
+    await vi.advanceTimersByTimeAsync(250);
+    const second = await reachHost(sockets, peers);
+    second.peer.channel('control').open();
+    second.peer.channel('control').receive([0]);
+    messages = 3;
+    second.peer.channel('stream').receive([0]);
+    expect(log.entries().filter((e) => e.event === 'viewer.caught_up').at(-1)).toMatchObject({ reconnected: true, batches: 0 });
+  });
+
+  it('holds none of the session’s content, names, secrets or addresses in its export', async () => {
+    const markers = {
+      name: 'Marker-Viewer-Name',
+      room: 'Marker-Room-Id',
+      turnUser: 'Marker-Turn-User',
+      turnSecret: 'Marker-Turn-Secret',
+      connection: 'Marker-Connection-Id',
+      sdp: 'Marker-Answer-Sdp',
+      output: 'Marker-Terminal-Output',
+      timeline: 'Marker-Timeline-Text',
+      file: 'Marker-Shared-Name',
+      suggestion: 'Marker-Suggestion-Text',
+      link: 'marker-link-site.example',
+    };
+    const addresses = ['203.0.113.7', '198.51.100.8', '2001:db8::7'];
+    const core = fakeCore();
+    core.startAttempt = () => markers.room;
+    const file: SharedFileInfo = { file: 7, name: markers.file, kind: 'text', mediaType: 'text/plain', size: 1, sha256: [], by: 0, byLabel: markers.name, atMs: 1 };
+    core.controls.push(welcome, { type: 'files', files: [file] }, { type: 'reply', id: 1, outcome: 'Received' });
+    core.onStream = () => ({
+      records: new TextEncoder().encode(markers.output),
+      timeline: { outputSeq: 0, at: 1, entry: { kind: 'prompt', text: markers.timeline } } as unknown as TimelineEvent,
+    });
+    const log = new DiagnosticLog(null);
+    const sockets: FakeSocket[] = [];
+    const peers: FakePeer[] = [];
+    const connection = new Connection({
+      url: 'wss://specdeck.example.com/signal',
+      username: markers.name,
+      core,
+      log,
+      platform: {
+        socket: () => (sockets.push(new FakeSocket()), sockets.at(-1) as unknown as WebSocket),
+        peer: (config) => (peers.push(new FakePeer(config)), peers.at(-1) as unknown as RTCPeerConnection),
+      },
+      onEvent: () => {},
+      onRecords: () => {},
+    });
+    const socket = sockets[0]!;
+    socket.open();
+    socket.receive({ type: 'joined', connection: markers.connection });
+    socket.receive({ type: 'turn-credentials', urls: [`turn:${addresses[0]}:3478`], username: markers.turnUser, credential: markers.turnSecret });
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive({ type: 'signal', connection: markers.connection, payload: { type: 'description', kind: 'answer', sdp: `${markers.sdp} ${addresses[1]}`, mac: 'm' } });
+    socket.receive({ type: 'signal', connection: markers.connection, payload: { type: 'candidate', candidate: `candidate:1 1 UDP 1 ${addresses[2]} 5000 typ host`, mid: '0' } });
+    await vi.advanceTimersByTimeAsync(0);
+    const peer = peers[0]!;
+    peer.stats = [
+      { id: 'T', type: 'transport', selectedCandidatePairId: 'P' },
+      { id: 'P', type: 'candidate-pair', localCandidateId: 'L', remoteCandidateId: 'R' },
+      { id: 'L', type: 'local-candidate', candidateType: 'relay', address: addresses[0] },
+      { id: 'R', type: 'remote-candidate', candidateType: 'host', address: addresses[2] },
+    ];
+    peer.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    peer.channel('control').open();
+    peer.channel('files').open();
+    peer.channel('control').receive([0]);
+    peer.channel('control').receive([0]);
+    peer.channel('stream').receive([1]);
+    connection.suggest(markers.suggestion);
+    connection.sendLink(`https://${markers.link}/page`, markers.link, false);
+    peer.channel('control').receive([0]);
+    void connection.shareFile(markers.file, new TextEncoder().encode(markers.output));
+    connection.leave();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const text = exportText(exportHeader({ appVersion: '1.8.0', userAgent: 'Mozilla/5.0 Firefox/132.0', service: 'wss://specdeck.example.com/signal', session: log.session() }), log.entries());
+    expect(log.entries().length).toBeGreaterThan(10);
+    for (const secret of [...Object.values(markers), ...addresses, 'specdeck.example.com']) expect(text, secret).not.toContain(secret);
+    expect(text).not.toMatch(/\b\d{1,3}(\.\d{1,3}){3}\b/);
   });
 });

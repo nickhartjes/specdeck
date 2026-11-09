@@ -4891,6 +4891,7 @@ dependencies = [
 name = "specdeck-web"
 version = "1.7.0"
 dependencies = [
+ "ed25519-dalek",
  "serde",
  "serde-wasm-bindgen",
  "specdeck-protocol",

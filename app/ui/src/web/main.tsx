@@ -14,6 +14,7 @@ import '../notifications.css';
 import '../catch-up.css';
 import { storedAppearance, webBridge } from './bridge';
 import type { ControlUpdate, FetchUpdate, Request, StreamUpdate, ViewerCore } from './connection';
+import { DiagnosticLog } from './diagnostics';
 import { WebApp, takeHashCode } from './WebApp';
 import { checkLink } from '../model/links';
 
@@ -73,18 +74,30 @@ function storage(): Storage | null {
   }
 }
 
+/** This tab's own storage: the diagnostic log survives a reload, not a closed tab. */
+function tabStorage(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 const initialCode = takeHashCode();
 document.documentElement.dataset.platform = 'web';
 // Before anything renders, so the page does not switch after loading.
 applyAppearance(storedAppearance(storage()));
+// One log for the page, from before the first join until the tab closes.
+const log = new DiagnosticLog(tabStorage());
+window.addEventListener('pagehide', () => log.flush());
 void init().then(() => {
   const service = ownService();
-  const bridge = webBridge({ service, core, parseJoinLink, openableLink, storage: storage() });
+  const bridge = webBridge({ service, core, parseJoinLink, openableLink, storage: storage(), log, appVersion: __SPECDECK_VERSION__ });
   bridge.onAppearance(applyAppearance);
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <BridgeContext.Provider value={bridge}>
-        <WebApp service={service} initialCode={initialCode} />
+        <WebApp service={service} initialCode={initialCode} diagnostics={log} />
       </BridgeContext.Provider>
     </StrictMode>,
   );

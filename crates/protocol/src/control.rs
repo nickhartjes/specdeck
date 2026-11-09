@@ -17,8 +17,9 @@ use crate::{AgentId, AgentStatus};
 /// 5 shared links (the `Link` and `LinkRemoved` entries, `ShareLink`, `LinksAllowed` and `Links`);
 /// version 6 the host's asks (the `ReadDone` and `Estimated` entries, `Answer`, `ReadRequest` and
 /// `Vote`) and the braindump (the `BraindumpItem` and `BraindumpGiven` entries, `AddToBraindump`,
-/// `AddNote`, `ReplaceNote`, `AlreadyGiven` and `Braindump`).
-pub const PROTOCOL_VERSION: u32 = 6;
+/// `AddNote`, `ReplaceNote`, `AlreadyGiven` and `Braindump`); version 7 the caught-up frame
+/// (`Frame::CaughtUp`).
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// The oldest viewer protocol a host admits. Older viewers watch only: the host never sends them
 /// a message their version cannot read.
@@ -48,6 +49,10 @@ pub const ASKS_PROTOCOL_VERSION: u32 = 6;
 /// entries, `Braindump`, `AlreadyGiven`, and the `AddToBraindump`, `AddNote` and `ReplaceNote`
 /// requests.
 pub const BRAINDUMP_PROTOCOL_VERSION: u32 = 6;
+
+/// The first protocol version that reads `Frame::CaughtUp`, sent once a viewer has the history
+/// the session had when it was admitted.
+pub const CAUGHT_UP_PROTOCOL_VERSION: u32 = 7;
 
 /// Longest note in the braindump, in bytes of UTF-8.
 pub const MAX_NOTE_BYTES: u64 = 32 * 1024;
@@ -911,9 +916,15 @@ mod tests {
         assert_eq!(check_version(5, 6, 4), Err(RefusalReason::ViewerOutdated));
         assert_eq!(check_version(5, 6, 7), Err(RefusalReason::HostOutdated));
         assert_eq!(
-            check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 5),
+            check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 6),
             Ok(()),
             "the previous release's viewers are admitted"
+        );
+        assert_eq!(check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 5), Ok(()));
+        assert_eq!(
+            check_version(MIN_VIEWER_PROTOCOL_VERSION, 6, PROTOCOL_VERSION),
+            Err(RefusalReason::HostOutdated),
+            "this release's viewers are refused by the previous release's hosts"
         );
         assert_eq!(
             check_version(MIN_VIEWER_PROTOCOL_VERSION, PROTOCOL_VERSION, 4),

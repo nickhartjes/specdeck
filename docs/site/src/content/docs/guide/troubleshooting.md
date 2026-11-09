@@ -64,6 +64,10 @@ It never holds terminal output, the timeline, what the agent was asked or did, i
 
 If the window stops responding, so the panel does not open, choose **Help › Export Diagnostics…** from the menu bar instead: it works without the window. The log then also says when the window stopped responding and for how long.
 
+#### From a browser
+
+The web viewer keeps its own diagnostic log for as long as the tab is open, also across a reload, and forgets it when you close the tab. Choose **Export diagnostics…** in the layout menu while watching, or below the message when a session ended or a join failed. The browser downloads a file in the same format, with your browser, its version and your operating system's family in place of the app's version and system. It holds the same kind of events and never more.
+
 ### The log
 
 SpecDeck keeps this log all the time, a few lines a minute: `specdeck.log.<date>` for the app, and `specdeck-session-<number>.log.<date>` for each session you host, which [runs on its own](/specdeck/guide/host/#when-specdeck-restarts-or-stops). Files older than 7 days are removed, and the oldest go first when the logs together pass 50 MB. Only your user account can read the folder:
@@ -73,6 +77,8 @@ SpecDeck keeps this log all the time, a few lines a minute: `specdeck.log.<date>
 | macOS | `~/Library/Logs/nl.nickhartjes.specdeck` |
 | Windows | `%LOCALAPPDATA%\nl.nickhartjes.specdeck\logs` |
 | Linux | `~/.local/share/nl.nickhartjes.specdeck/logs` |
+
+When someone joins, the host's log says how long sending them the session so far took, how much it was and how often their connection made the host wait (`host.replay`), and the viewer's log says when they had all of it (`viewer.caught_up`). Together they tell a long session from a slow connection when joining takes a while.
 
 You can delete the folder at any time. **Verbose logging** in [Settings](/specdeck/guide/settings/) also records how much each connection sends, summed per second, for problems that only show under load. Turn it off again when you are done.
 

@@ -151,3 +151,56 @@ fn js_sys_get(object: &JsValue, key: &str) -> JsValue {
     }
     reflect_get(object, &JsValue::from_str(key))
 }
+
+/// A stream frame of `kind` signed with `key`, as the host's `SessionKey` encodes one.
+fn signed_frame(key: &ed25519_dalek::SigningKey, kind: u8, seq: u64, payload: &[u8]) -> Vec<u8> {
+    use ed25519_dalek::Signer;
+    let mut bytes = vec![kind];
+    bytes.extend_from_slice(&seq.to_be_bytes());
+    bytes.extend_from_slice(payload);
+    let signature = key.sign(&bytes);
+    bytes.extend_from_slice(&signature.to_bytes());
+    bytes
+}
+
+/// A viewer welcomed by a host whose frames `key` signs.
+fn welcomed(key: &ed25519_dalek::SigningKey) -> WebViewer {
+    use specdeck_protocol::control::{self, HostMessage, PROTOCOL_VERSION};
+    let mut viewer = WebViewer::new(CODE).unwrap();
+    let welcome = control::encode(&HostMessage::Welcome {
+        protocol_version: PROTOCOL_VERSION,
+        viewer_id: 1,
+        session_public_key: key.verifying_key().to_bytes(),
+        cols: 80,
+        rows: 24,
+        resume_token: [7; 32],
+        rejoin_room: "rejoin".into(),
+        agent: specdeck_protocol::AgentId::ClaudeCode,
+        timeline_supported: true,
+    });
+    let update = viewer.on_control(&welcome);
+    assert_eq!(js_sys_get(&update, "type").as_string().as_deref(), Some("welcome"));
+    viewer
+}
+
+#[wasm_bindgen_test]
+fn caught_up_and_resends_are_passed_on_for_the_log() {
+    const OUTPUT: u8 = 1;
+    const CAUGHT_UP: u8 = 5;
+    let key = ed25519_dalek::SigningKey::from_bytes(&[3; 32]);
+    let mut viewer = welcomed(&key);
+
+    let first = viewer.on_stream(&signed_frame(&key, OUTPUT, 0, b"a"));
+    assert!(!js_sys_get(&first, "records").is_undefined());
+    assert!(js_sys_get(&first, "caughtUp").is_undefined());
+    assert!(js_sys_get(&first, "resendFrom").is_undefined());
+
+    // Record 1 got lost: 2 is dropped and asked for from 1.
+    let gap = viewer.on_stream(&signed_frame(&key, OUTPUT, 2, b"c"));
+    assert!(!js_sys_get(&gap, "resend").is_undefined());
+    assert_eq!(js_sys_get(&gap, "resendFrom").as_f64(), Some(1.0));
+
+    let caught_up = viewer.on_stream(&signed_frame(&key, CAUGHT_UP, 0, b""));
+    assert_eq!(js_sys_get(&caught_up, "caughtUp").as_bool(), Some(true));
+    assert!(js_sys_get(&caught_up, "records").is_undefined());
+}

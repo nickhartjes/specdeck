@@ -349,6 +349,8 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "signalling.connect_failed",
         "host.turn_credentials",
         "host.viewer_admitted",
+        "host.replay",
+        "viewer.caught_up",
         "peer.path",
         "viewer.attempt_ended",
         "host.viewer_left",
