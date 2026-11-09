@@ -4,8 +4,9 @@
 
 #[path = "support/capture.rs"]
 mod capture;
+#[path = "support/executable.rs"]
+mod executable;
 
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -88,8 +89,7 @@ async fn host_agent(
     let bin = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let program = bin.path().join(command);
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write_executable(&program, script);
     let env: Environment =
         [("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))].into_iter().collect();
     let config = HostConfig {
