@@ -41,5 +41,5 @@ COPY --from=build /src/target/release/specdeck-server /usr/local/bin/specdeck-se
 # Numeric, so Kubernetes can check runAsNonRoot.
 USER 10001
 EXPOSE 8080
-ENV SPECDECK_LISTEN=0.0.0.0:8080 RUST_LOG=info
+ENV SPECDECK_LISTEN=0.0.0.0:8080
 ENTRYPOINT ["specdeck-server"]

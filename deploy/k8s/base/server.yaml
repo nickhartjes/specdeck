@@ -32,7 +32,9 @@ spec:
               valueFrom: { configMapKeyRef: { name: specdeck-network, key: TURN_URLS } }
             - name: SPECDECK_TURN_SECRET
               valueFrom: { secretKeyRef: { name: specdeck-turn, key: TURN_SECRET } }
-            - { name: RUST_LOG, value: info }
+            # JSON lines, for the cluster's log collector.
+            - { name: SPECDECK_LOG_LEVEL, value: info }
+            - { name: SPECDECK_LOG_FORMAT, value: json }
           readinessProbe:
             httpGet: { path: /health, port: http }
           livenessProbe:

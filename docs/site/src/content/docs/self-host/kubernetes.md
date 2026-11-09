@@ -43,6 +43,21 @@ kubectl apply -k deploy/k8s/base     # or your overlay
 - Both pods meet the `restricted` Pod Security Standard.
 - To try it on your own machine, `just local-up` deploys the `local` overlay to Colima's k3s.
 
+## Logs
+
+The server logs JSON lines at `info` (`SPECDECK_LOG_FORMAT=json`, `SPECDECK_LOG_LEVEL=info` in the manifest), so a log collector can read their fields:
+
+```sh
+kubectl logs deploy/specdeck-server -f
+kubectl logs deploy/specdeck-server | jq -c 'select(.event == "peer.refused")'
+```
+
+```json
+{"event":"peer.joined","level":"INFO","peer":7,"room":3,"time":"2026-11-09T10:00:00.123456Z","viewers_on_host":2}
+```
+
+The log says when rooms open and close, when viewers join, leave or are turned away and why, which limits were reached, and the load every 5 minutes. It never holds room ids, codes or client addresses. See [Logs](/specdeck/self-host/configuration/#logs) for every event.
+
 ## Which version runs
 
 From 1.7 on, the server states the release it runs. After a rollout, check it through your Ingress:

@@ -39,6 +39,12 @@ The relay logs each connection it relays, with the IP addresses of both ends. Ho
 
 **What you can do:** run your own sharing service and choose your own log retention.
 
+### The server logs when sessions happen
+
+The server's log records when each room opens and closes, how many viewers join it, and joins it turned away. It names rooms and viewers only by numbers it counts from 1, never by room id, code or address, but it does show when sessions take place and how big they are. How long the built-in service keeps this log is not stated yet.
+
+**What you can do:** run your own sharing service, and set `SPECDECK_LOG_LEVEL=warn` if you want it to log only limits and errors.
+
 ### Relay credentials last 12 hours and are not tied to a session
 
 The server gives relay credentials to anyone who hosts or joins a session, and anyone can host one. The credentials work for 12 hours, also after the session ends, for relaying to any public address, within the relay's quotas.

@@ -42,7 +42,11 @@ A fix is planned: the apps will agree on a key with a password-authenticated key
 - how many viewers join each session, and when;
 - the messages that set up each connection, which list the network addresses each app can be reached at. From the app these include addresses in your local network; browsers usually hide those.
 
-It never sees names, the invite code, or anything of the session itself. It keeps everything in memory only, and loses it when it restarts. Its log holds only that it started and, at most once a minute, which of its limits was reached, without addresses.
+It never sees names, the invite code, or anything of the session itself. It keeps rooms and connections in memory only, and loses them when it restarts.
+
+Its log records what it does, one line per event: when rooms open and close and how many viewers joined each, when viewers join and leave, joins it turned away and why (such as a wrong code), connections that failed, which of its limits were reached, and every 5 minutes how many connections, rooms and viewers are open. Rooms and viewers appear only as numbers it counts up from 1 each time it starts. So the log shows when sessions happen and how many people watch them, but not which session or who.
+
+The log never holds room ids, invite codes, connection ids, the messages that set up a connection, relay credentials or IP addresses, at any level, and there is no setting to add them. How long the built-in service keeps its log is not stated yet. See [Logs](/specdeck/self-host/configuration/#logs) for every event.
 
 **The relay** forwards the encrypted traffic of relayed connections and cannot read it. It sees the IP addresses of both ends and how much traffic passes. It writes a log line for each connection it relays, with the addresses of both ends. How long the built-in service keeps those logs is not stated yet.
 
@@ -65,7 +69,7 @@ People who watch in a browser load the web viewer's code from the sharing servic
 
 Running your own sharing service puts all of this in your team's hands:
 
-- who sees IP addresses and when sessions happen, and how long logs are kept;
+- who sees IP addresses and when sessions happen, how much the server logs, and how long logs are kept;
 - the web viewer's code, built from the repository or from the signed image;
 - who could attempt the offline guessing above;
 - uptime and limits.
