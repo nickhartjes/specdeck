@@ -67,8 +67,20 @@ impl Environment {
         probe_login_shell(Path::new(&shell), timeout).unwrap_or(process)
     }
 
+    /// The value of `name`. On Windows names are compared without case, as Windows does: its
+    /// environment usually holds `Path`, which `get("PATH")` must find.
     pub fn get(&self, name: &str) -> Option<OsString> {
-        self.vars.get(&OsString::from(name)).cloned()
+        if let Some(value) = self.vars.get(&OsString::from(name)) {
+            return Some(value.clone());
+        }
+        if cfg!(windows) {
+            return self
+                .vars
+                .iter()
+                .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.clone());
+        }
+        None
     }
 
     pub fn set(&mut self, name: impl Into<OsString>, value: impl Into<OsString>) {
@@ -165,6 +177,21 @@ mod tests {
         env.set("RAW", <OsString as std::os::unix::ffi::OsStringExt>::from_vec(vec![0x66, 0xff]));
         let json = serde_json::to_string(&env).unwrap();
         assert_eq!(serde_json::from_str::<Environment>(&json).unwrap(), env);
+    }
+
+    #[test]
+    fn names_are_compared_without_case_only_on_windows() {
+        let env: Environment = [("Path", r"C:\Windows")].into_iter().collect();
+        assert_eq!(env.get("Path").unwrap(), r"C:\Windows");
+        assert_eq!(env.get("PATH").is_some(), cfg!(windows));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn programs_are_found_through_windows_path() {
+        // The test process's own environment, as the app has it: Windows spells it `Path`.
+        let env = Environment::from_process();
+        assert!(env.find_executable("cmd").is_some());
     }
 
     #[test]
