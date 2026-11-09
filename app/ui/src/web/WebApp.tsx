@@ -124,6 +124,7 @@ function JoinPage({
   const [code, setCode] = useState(screen.code);
   const [name, setName] = useState(profile.username ?? '');
   const [error, setError] = useState(screen.error ?? null);
+  const version = useServiceVersion();
   const elsewhere = screen.elsewhere;
 
   const submit = async (event: FormEvent) => {
@@ -200,7 +201,31 @@ function JoinPage({
             Open in the SpecDeck app
           </a>
         )}
+        {version && <p className="field-hint">SpecDeck {version}</p>}
       </form>
     </main>
   );
+}
+
+/**
+ * The release of the service that served this page, from its `web-viewer.json` (relative, so a
+ * service under a path prefix works). `null` until it arrives, and for a service that states none
+ * or a failed request; nothing waits for it.
+ */
+function useServiceVersion(): string | null {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    fetch('web-viewer.json')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: unknown) => {
+        const value = (body as { version?: unknown } | null)?.version;
+        if (current && typeof value === 'string' && value) setVersion(value);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, []);
+  return version;
 }

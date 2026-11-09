@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDefaultSchedule, type Schedule } from '../model/viewQueue';
 import { renderWith } from '../test/helpers';
 import { TerminalViewStub } from '../test/terminal-stub';
@@ -39,8 +39,22 @@ function setup(initialCode = '') {
   return { bridge, joinSession };
 }
 
+/** The page's own service answers `web-viewer.json` with `body`, or fails without one. */
+function serviceAnswers(body?: unknown) {
+  const fetch = vi.fn(() =>
+    body === undefined ? Promise.reject(new TypeError('Failed to fetch')) : Promise.resolve(new Response(JSON.stringify(body))),
+  );
+  vi.stubGlobal('fetch', fetch);
+  return fetch;
+}
+
+beforeEach(() => {
+  serviceAnswers({ protocol: 6 });
+});
+
 afterEach(() => {
   history.replaceState(null, '', '/');
+  vi.unstubAllGlobals();
 });
 
 describe('web viewer page', () => {
@@ -57,6 +71,26 @@ describe('web viewer page', () => {
     await userEvent.type(screen.getByLabelText('Your name'), 'anna');
     await userEvent.click(screen.getByRole('button', { name: 'Watch in this browser' }));
     await waitFor(() => expect(joinSession).toHaveBeenCalledWith('7K2M-9QXH-4TPA', null, expect.any(Function), expect.any(Function)));
+  });
+
+  it('shows the release of the service that served it', async () => {
+    const fetch = serviceAnswers({ protocol: 6, version: '1.7.0' });
+    setup();
+    expect(await screen.findByText('SpecDeck 1.7.0')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith('web-viewer.json');
+  });
+
+  it('shows no release for a service that states none, or when asking fails, and still joins', async () => {
+    for (const body of [{ protocol: 2 }, undefined]) {
+      const fetch = serviceAnswers(body);
+      const { joinSession } = setup('7K2M-9QXH-4TPA');
+      await waitFor(() => expect(fetch).toHaveBeenCalled());
+      await userEvent.type(screen.getByLabelText('Your name'), 'anna');
+      await userEvent.click(screen.getByRole('button', { name: 'Watch in this browser' }));
+      await waitFor(() => expect(joinSession).toHaveBeenCalled());
+      expect(screen.queryByText(/^SpecDeck \d/)).not.toBeInTheDocument();
+      cleanup();
+    }
   });
 
   it('offers the app, with this service', async () => {
