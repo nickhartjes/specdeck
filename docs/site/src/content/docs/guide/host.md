@@ -17,6 +17,20 @@ With **Terminal**, viewers see all output, including anything secret a command p
 
 The link also names your sharing service, so it works for viewers whose SpecDeck uses another one. When you and your viewers use [different sharing services](/specdeck/guide/join/#through-another-sharing-service), share the link rather than the bare code.
 
+## Claude Code in a Docker Sandbox
+
+On macOS, Claude Code can run in the [Docker Sandbox](https://docs.docker.com/ai/sandboxes/) of an nma-platform checkout, the same one `just sandbox` starts. SpecDeck runs the checkout's own `tools/sandbox/sandbox.sh run` and keeps none of the sandbox's setup itself.
+
+1. Clone nma-platform and set up its sandbox once, as its `tools/sandbox/README.md` describes: `just sandbox-setup`, then `just sandbox-login` if `just sandbox-doctor` reports no Claude login.
+2. Under **Host a session**, choose **Claude Code** and turn on **Run Claude Code in a Docker Sandbox when the folder has one**. SpecDeck remembers it.
+3. Start in the root of an nma-platform checkout or worktree. Recent folders where Claude Code will run in the sandbox are marked **Docker Sandbox**. In any other folder, and in a subfolder of a checkout, Claude Code runs on your computer as usual. To work on a new branch, create its worktree first (`just sandbox-new <branch>` or `git worktree add`), then start in that folder.
+
+The first session in a checkout builds its sandbox, which can take a few minutes; the terminal shows the progress. If the sandbox is not set up, the terminal shows what is missing; end the session, fix it and start again. Your session window shows **Docker Sandbox** next to the folder.
+
+Viewers see the terminal only, without a timeline, diffs, plans or Claude's browser: SpecDeck can't follow Claude's steps inside the sandbox. They are not told the session runs in a sandbox.
+
+Ending the session leaves the sandbox, so the next session in that checkout starts quickly in the same one. Remove it with `just sandbox-rm` in the checkout.
+
 ## Several sessions at once
 
 Each window shows one session. To host another agent or folder, or to watch a teammate while you host, open another window with **File › New Window** (**⇧⌘N** on macOS). **Host a Session…** and **Join a Session…** open a new window by themselves when the one in front already shows a session. Each session has its own invite code and viewers, and ending one leaves the others running.

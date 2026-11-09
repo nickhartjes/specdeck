@@ -303,6 +303,20 @@ describe('host screen', () => {
     act(() => emit({ ...snapshot(), agent: 'terminal', suggestionsPossible: false }));
     expect(screen.queryByRole('tab', { name: /Prompts/ })).toBeNull();
   });
+
+  it('shows when Claude Code runs in the Docker Sandbox', async () => {
+    await setup();
+    const banner = screen.getByRole('banner');
+    act(() => emit(snapshot()));
+    expect(within(banner).queryByText('Docker Sandbox')).toBeNull();
+    act(() => emit({ ...snapshot(), sandboxed: true, timelineSupported: false }));
+    expect(within(banner).getByText('Docker Sandbox')).toBeInTheDocument();
+    // A session of the previous release says nothing: it runs on the host.
+    const older: HostEvent = { ...snapshot() };
+    delete older.sandboxed;
+    act(() => emit(older));
+    expect(within(banner).queryByText('Docker Sandbox')).toBeNull();
+  });
 });
 
 describe('shared links on the host screen', () => {
@@ -542,6 +556,7 @@ function snapshot(): Extract<HostEvent, { type: 'snapshot' }> {
     agent: 'claude-code',
     folder: '/Users/nick/projects/webshop',
     timelineSupported: true,
+    sandboxed: false,
     sharing: 'ready',
     code: '7K2M9QXH4TPA',
     service: 'wss://specdeck.hartj.es/signal',

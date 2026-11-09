@@ -16,7 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentInfo, Profile, RunningSession } from '../api/types';
+import type { AgentId, AgentInfo, Profile, RecentFolder, RunningSession } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { initials } from '../components/PeoplePanel';
 import { PLAIN_TEXT } from '../components/fields';
@@ -286,6 +286,8 @@ function HostCard({
   const missing = profile.agents.filter((info) => !info.installed && info.installPage);
   // Terminal is always there; the coding agents may all be missing.
   const noCodingAgents = profile.agents.every((a) => a.id === 'terminal' || !a.installed);
+  const sandboxOffered = installed.some((info) => info.id === agent && info.sandboxable);
+  const startsInSandbox = (folder: RecentFolder) => sandboxOffered && profile.claudeSandbox && folder.hasSandbox;
 
   const start = async (folder: string | null) => {
     if (!folder || !agent) return;
@@ -354,6 +356,7 @@ function HostCard({
         {noCodingAgents && (
           <span className="field-hint">No coding agent is installed. Install Claude Code, OpenCode, omp, Codex, Grok or pi to share an agent; you can still share a terminal.</span>
         )}
+        {sandboxOffered && <SandboxSetting profile={profile} onProfile={onProfile} />}
       </div>
       {profile.recentFolders.length > 0 && (
         <div style={{ display: 'grid', gap: 6 }}>
@@ -369,7 +372,10 @@ function HostCard({
                   aria-label={`Start a session in ${folder.name}`}
                 >
                   {starting === folder.path ? <span className="spinner" aria-label="Starting" /> : <Folder aria-hidden />}
-                  <span className="name">{folder.name}</span>
+                  <span className="name">
+                    {folder.name}
+                    {startsInSandbox(folder) && <span className="sandbox-mark">Docker Sandbox</span>}
+                  </span>
                   <span className="path">{folder.path}</span>
                 </button>
                 <button
@@ -395,6 +401,28 @@ function HostCard({
         {profile.recentFolders.length > 0 ? 'Choose another folder…' : 'Choose a folder and start…'}
       </button>
     </section>
+  );
+}
+
+/** Claude Code in the folder's Docker Sandbox (`claude-in-nma-sandbox`), for nma-platform checkouts. */
+function SandboxSetting({ profile, onProfile }: { profile: Profile; onProfile: (p: Profile) => void }) {
+  const bridge = useBridge();
+  return (
+    <div style={{ display: 'grid', gap: 2 }}>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={profile.claudeSandbox}
+          aria-describedby="sandbox-hint"
+          onChange={async (event) => onProfile(await bridge.setClaudeSandbox(event.target.checked))}
+        />
+        Run Claude Code in a Docker Sandbox when the folder has one
+      </label>
+      <span id="sandbox-hint" className="field-hint">
+        For the root of an nma-platform checkout or worktree, after <code>just sandbox-setup</code>. Viewers see the terminal,
+        without a timeline.
+      </span>
+    </div>
   );
 }
 

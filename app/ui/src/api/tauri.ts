@@ -59,6 +59,7 @@ export const tauriBridge: Bridge = {
     return () => void stop.then((unlisten) => unlisten());
   },
   setScreenshots: (enabled) => invoke<Profile>('set_screenshots', { enabled }),
+  setClaudeSandbox: (enabled) => invoke<Profile>('set_claude_sandbox', { enabled }),
   updateStatus: () => invoke<UpdateState>('update_status'),
   onUpdate: (handler) => {
     const stop = listen<UpdateState>('update-changed', (event) => handler(event.payload));

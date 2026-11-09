@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use specdeck_protocol::AgentId;
 
-use crate::agent::{self, Prerequisite};
+use crate::agent::{self, Prerequisite, Program};
 use crate::environment::Environment;
 
 #[derive(Debug, thiserror::Error)]
@@ -51,6 +51,8 @@ pub struct LaunchOptions {
     pub extra_args: Vec<OsString>,
     /// Variables added to the environment, for example the hook token.
     pub extra_env: Vec<(OsString, OsString)>,
+    /// Runs this instead of the agent's own program, for example the Docker Sandbox's launcher.
+    pub program: Option<Program>,
 }
 
 /// A running agent in a pseudo-terminal.
@@ -65,10 +67,7 @@ pub struct AgentProcess {
 
 /// Checks the agent can start, then starts it in a pty.
 pub fn launch(options: &LaunchOptions, env: &Environment) -> Result<AgentProcess, LaunchError> {
-    let program = agent::program(options.agent, env).ok_or(match options.agent {
-        AgentId::Terminal => LaunchError::NoShell,
-        agent => LaunchError::NotInstalled(agent),
-    })?;
+    let program = program_for(options, env)?;
     if let Some(prerequisite) = agent::missing_prerequisite(options.agent, env) {
         return Err(LaunchError::MissingPrerequisite { agent: options.agent, prerequisite });
     }
@@ -85,6 +84,17 @@ pub fn launch(options: &LaunchOptions, env: &Environment) -> Result<AgentProcess
         })
         .map_err(|e| LaunchError::Pty(e.to_string()))?;
 
+    let command = command(&program, options, env);
+    let child = pty.slave.spawn_command(command).map_err(|e| LaunchError::Pty(e.to_string()))?;
+    // The child holds its own handle to the slave side; keeping ours would hide its exit.
+    drop(pty.slave);
+    let reader = pty.master.try_clone_reader().map_err(|e| LaunchError::Pty(e.to_string()))?;
+    let writer = pty.master.take_writer().map_err(|e| LaunchError::Pty(e.to_string()))?;
+    Ok(AgentProcess { master: pty.master, child, reader, writer })
+}
+
+/// `program` in the folder, with the adapter's additions and the login shell's environment.
+fn command(program: &Program, options: &LaunchOptions, env: &Environment) -> CommandBuilder {
     let mut command = command_for(&program.executable);
     command.args(&program.args);
     command.args(&options.extra_args);
@@ -98,13 +108,18 @@ pub fn launch(options: &LaunchOptions, env: &Environment) -> Result<AgentProcess
     for (name, value) in &options.extra_env {
         command.env(name, value);
     }
+    command
+}
 
-    let child = pty.slave.spawn_command(command).map_err(|e| LaunchError::Pty(e.to_string()))?;
-    // The child holds its own handle to the slave side; keeping ours would hide its exit.
-    drop(pty.slave);
-    let reader = pty.master.try_clone_reader().map_err(|e| LaunchError::Pty(e.to_string()))?;
-    let writer = pty.master.take_writer().map_err(|e| LaunchError::Pty(e.to_string()))?;
-    Ok(AgentProcess { master: pty.master, child, reader, writer })
+/// The program the options name, or else the agent's own.
+fn program_for(options: &LaunchOptions, env: &Environment) -> Result<Program, LaunchError> {
+    if let Some(program) = &options.program {
+        return Ok(program.clone());
+    }
+    agent::program(options.agent, env).ok_or(match options.agent {
+        AgentId::Terminal => LaunchError::NoShell,
+        agent => LaunchError::NotInstalled(agent),
+    })
 }
 
 /// Variables a running Claude Code session sets for the processes it starts. When SpecDeck itself
@@ -157,6 +172,7 @@ mod tests {
             rows: 24,
             extra_args: vec!["--flag".into()],
             extra_env: vec![("SPECDECK_TEST".into(), "yes".into())],
+            program: None,
         }
     }
 

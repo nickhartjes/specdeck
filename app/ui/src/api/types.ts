@@ -8,6 +8,8 @@ export interface AgentInfo {
   name: string;
   installed: boolean;
   hasTimeline: boolean;
+  /** It can run in a folder's Docker Sandbox, so the start screen offers the setting. */
+  sandboxable: boolean;
   /** Reports whether it is working or waiting. */
   reportsStatus: boolean;
   /** The executable, or for Terminal the shell it starts. */
@@ -25,6 +27,8 @@ export interface AgentVersion {
 export interface RecentFolder {
   path: string;
   name: string;
+  /** The folder has a Docker Sandbox for Claude Code: the root of an nma-platform checkout, on macOS. */
+  hasSandbox: boolean;
 }
 
 /** A `specdeck://join/…` link that opened the app: its code, or why it does not work. */
@@ -135,6 +139,8 @@ export interface Profile {
   appearance: Appearance;
   /** New sessions show screenshots in the timeline. */
   screenshots: boolean;
+  /** Claude Code runs in the folder's Docker Sandbox when it has one. */
+  claudeSandbox: boolean;
 }
 
 /** The app's appearance; `system` follows the OS, or the browser in the web viewer. */
@@ -453,6 +459,8 @@ export type HostEvent =
       agent: AgentId;
       folder: string;
       timelineSupported: boolean;
+      /** Claude Code runs in the folder's Docker Sandbox; missing from a session of the previous release. */
+      sandboxed?: boolean;
       sharing: SharingState;
       code: string | null;
       /** The sharing service the session uses, which join links name. */

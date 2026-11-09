@@ -325,6 +325,11 @@ button { font: inherit; color: inherit; }
 .recent .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent .path { color: var(--text-faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent .remove { opacity: 0; }
+.recent .sandbox-mark, .sandbox-badge {
+  border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); font-size: 11px; font-weight: 500;
+}
+.recent .sandbox-mark { margin-left: 6px; padding: 0 6px; }
+.sandbox-badge { flex: none; padding: 1px 8px; }
 .recent li:hover .remove, .recent .remove:focus-visible { opacity: 1; }
 /* Running sessions on the start screen: the row itself is not a button, Open and End are. */
 .running .open { cursor: default; }

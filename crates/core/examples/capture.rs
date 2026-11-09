@@ -38,6 +38,7 @@ fn main() {
         rows,
         extra_args: vec![],
         extra_env: vec![],
+        program: None,
     };
     let mut process = launch(&options, &Environment::detect(PROBE_TIMEOUT)).expect("launch");
     let mut reader = process.reader;

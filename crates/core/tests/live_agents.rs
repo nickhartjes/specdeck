@@ -203,6 +203,7 @@ impl Live {
             rows: 40,
             data_dir: data.path().to_owned(),
             screenshots: true,
+            sandbox: false,
         };
         let (session, _events) = HostSession::start(config, &env).await.unwrap();
         let (sharing, mut events) = Sharing::start(

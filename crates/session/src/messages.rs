@@ -41,6 +41,10 @@ pub enum Command {
         /// the timeline*); on when the app does not say.
         #[serde(default = "on")]
         screenshots: bool,
+        /// Runs Claude Code in the folder's Docker Sandbox when it has one
+        /// (`claude-in-nma-sandbox`); off when the app does not say.
+        #[serde(default)]
+        sandbox: bool,
     },
     /// Shows the session in the app's window: a snapshot, then the terminal from the start.
     Attach,
@@ -281,6 +285,7 @@ mod tests {
             verbose: false,
             browser: true,
             screenshots: false,
+            sandbox: true,
         };
         let json = serde_json::to_string(&start).unwrap();
         assert!(json.starts_with(r#"{"type":"start","agent":"#), "{json}");
@@ -458,10 +463,10 @@ mod tests {
         assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), answer);
     }
 
-    /// A previous release's app sends `start` without the fields: it offers no browser, and
-    /// screenshots are shown as the setting's default.
+    /// A previous release's app sends `start` without the fields: it offers no browser,
+    /// screenshots are shown as the setting's default, and Claude Code runs on the host.
     #[test]
-    fn start_without_browser_or_screenshots() {
+    fn start_without_browser_screenshots_or_sandbox() {
         let mut json = serde_json::to_value(Command::Start {
             agent: AgentId::Terminal,
             folder: "/tmp".into(),
@@ -474,16 +479,19 @@ mod tests {
             verbose: false,
             browser: true,
             screenshots: false,
+            sandbox: true,
         })
         .unwrap();
         json.as_object_mut().unwrap().remove("browser");
         json.as_object_mut().unwrap().remove("screenshots");
-        let Command::Start { browser, screenshots, .. } =
+        json.as_object_mut().unwrap().remove("sandbox");
+        let Command::Start { browser, screenshots, sandbox, .. } =
             serde_json::from_value::<Command>(json).unwrap()
         else {
             panic!("not a start");
         };
         assert!(!browser);
         assert!(screenshots);
+        assert!(!sandbox);
     }
 }

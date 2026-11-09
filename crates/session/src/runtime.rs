@@ -57,6 +57,8 @@ pub enum HostEvent {
         agent: AgentId,
         folder: PathBuf,
         timeline_supported: bool,
+        /// Claude Code runs in the folder's Docker Sandbox.
+        sandboxed: bool,
         sharing: SharingState,
         code: Option<String>,
         /// The sharing service the session uses, which join links name.
@@ -394,6 +396,8 @@ pub struct StartOptions {
     /// Runs the agent's browser actions (`agent-browser`); `None` gives the agent no browser.
     pub browser: Option<BrowserHandler>,
     pub screenshots: bool,
+    /// Runs Claude Code in the folder's Docker Sandbox when it has one.
+    pub sandbox: bool,
 }
 
 impl HostRuntime {
@@ -409,6 +413,7 @@ impl HostRuntime {
             rows: options.rows,
             data_dir: options.data_dir,
             screenshots: options.screenshots,
+            sandbox: options.sandbox,
         };
         let (session, mut session_events) =
             HostSession::start_with_browser(config, env, options.browser)
@@ -613,7 +618,8 @@ impl HostRuntime {
             let snapshot = HostEvent::Snapshot {
                 agent: self.agent,
                 folder: self.folder.clone(),
-                timeline_supported: self.agent.has_timeline(),
+                timeline_supported: self.session.has_timeline(),
+                sandboxed: self.session.sandboxed(),
                 sharing: ui.sharing,
                 code: ui.code.clone(),
                 service: self.service.clone(),
@@ -626,7 +632,7 @@ impl HostRuntime {
                 suggestions_possible: self.agent != AgentId::Terminal,
                 suggestions_allowed: ui.suggestions_allowed,
                 suggestions: ui.suggestions.clone(),
-                whole_files_possible: self.agent.has_timeline(),
+                whole_files_possible: self.session.has_timeline(),
                 whole_files: self.session.whole_files(),
                 shared_files_possible: true,
                 files_allowed: view.files_allowed(),

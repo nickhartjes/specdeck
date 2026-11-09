@@ -259,6 +259,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     browser: false,
     appearance,
     screenshots: false,
+    claudeSandbox: false,
   });
 
   const readJoinLink = (link: string): JoinLink => {
@@ -323,6 +324,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       return () => void appearanceHandlers.delete(handler);
     },
     setScreenshots: () => Promise.resolve(profile()),
+    setClaudeSandbox: () => Promise.resolve(profile()),
     updateStatus: () => Promise.resolve({ state: 'disabled' }),
     onUpdate: () => () => {},
     restartToUpdate: notInTheWebViewer,

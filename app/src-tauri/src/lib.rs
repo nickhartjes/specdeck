@@ -27,6 +27,7 @@ use serde::Serialize;
 use specdeck_core::agent;
 use specdeck_core::environment::{Environment, PROBE_TIMEOUT};
 use specdeck_core::peer::PeerConfig;
+use specdeck_core::sandbox;
 
 use specdeck_protocol::invite::InviteCode;
 use specdeck_protocol::service;
@@ -120,6 +121,8 @@ struct AgentInfo {
     installed: bool,
     has_timeline: bool,
     reports_status: bool,
+    /// It can run in a folder's Docker Sandbox, so the start screen offers the setting.
+    sandboxable: bool,
     /// The executable, or for Terminal the shell it starts.
     path: Option<PathBuf>,
     /// Where to read how to install it.
@@ -131,6 +134,8 @@ struct AgentInfo {
 struct RecentFolder {
     path: PathBuf,
     name: String,
+    /// The folder has a Docker Sandbox for Claude Code (`claude-in-nma-sandbox`).
+    has_sandbox: bool,
 }
 
 #[derive(Serialize)]
@@ -177,6 +182,8 @@ struct Profile {
     appearance: Appearance,
     /// New sessions show screenshots in the timeline.
     screenshots: bool,
+    /// Claude Code runs in the folder's Docker Sandbox when it has one.
+    claude_sandbox: bool,
 }
 
 /// The agents to choose from, in display order: the coding agents, then Terminal.
@@ -189,10 +196,22 @@ fn agent_infos(env: &Environment) -> Vec<AgentInfo> {
             installed: found.executable.is_some(),
             has_timeline: found.agent.has_timeline(),
             reports_status: found.agent.reports_status(),
+            sandboxable: sandbox::runs(found.agent),
             path: found.executable,
             install_page: agent::install_page(found.agent),
         })
         .collect()
+}
+
+fn recent_folder(path: PathBuf) -> RecentFolder {
+    RecentFolder {
+        name: path.file_name().map_or_else(
+            || path.to_string_lossy().into_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
+        has_sandbox: sandbox::launcher(&path).is_some(),
+        path,
+    }
 }
 
 /// The profile as `window` sees it.
@@ -206,17 +225,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
     let in_session = hosted_sessions + watched_sessions > 0;
     Profile {
         username: settings.username.clone(),
-        recent_folders: settings
-            .existing_recent()
-            .into_iter()
-            .map(|path| RecentFolder {
-                name: path.file_name().map_or_else(
-                    || path.to_string_lossy().into_owned(),
-                    |name| name.to_string_lossy().into_owned(),
-                ),
-                path,
-            })
-            .collect(),
+        recent_folders: settings.existing_recent().into_iter().map(recent_folder).collect(),
         last_agent: settings.last_agent,
         agents,
         hosting,
@@ -241,6 +250,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
         browser: settings.browser,
         appearance: settings.appearance,
         screenshots: settings.screenshots,
+        claude_sandbox: settings.claude_sandbox,
     }
 }
 
@@ -509,6 +519,24 @@ async fn set_browser(
     {
         let mut settings = state.settings.lock().unwrap();
         settings.browser = enabled;
+        state.save(&settings);
+    }
+    settings_changed(&app);
+    Ok(profile(&state, window.label()))
+}
+
+/// Runs new Claude Code sessions in the folder's Docker Sandbox when it has one, or on the host;
+/// running sessions keep where they started.
+#[tauri::command]
+async fn set_claude_sandbox(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<Profile, String> {
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.claude_sandbox = enabled;
         state.save(&settings);
     }
     settings_changed(&app);
@@ -888,10 +916,11 @@ async fn start_hosting(
     if !state.sessions.lock().unwrap().is_free(window.label()) {
         return Err("This window already shows a session. Open a new window for another.".into());
     }
-    let (username, verbose, browser, screenshots) = {
+    let (username, verbose, browser, screenshots, sandbox) = {
         let settings = state.settings.lock().unwrap();
         let username = settings.username.clone().ok_or("Set your name first.")?;
-        (username, settings.verbose_logging, settings.browser, settings.screenshots)
+        let sandbox = settings.claude_sandbox;
+        (username, settings.verbose_logging, settings.browser, settings.screenshots, sandbox)
     };
     let id = state.sessions.lock().unwrap().next_id();
     let launch = client::Launch {
@@ -905,6 +934,7 @@ async fn start_hosting(
         verbose,
         browser: browser::offered(agent, browser).then(|| browser::runner(&app, id)).flatten(),
         screenshots,
+        sandbox,
     };
     let name = folder_name(&folder);
     // The menu-bar or tray icon shows the session from the start, and follows it.
@@ -2605,6 +2635,7 @@ pub fn run() {
             set_verbose_logging,
             set_browser,
             set_screenshots,
+            set_claude_sandbox,
             diagnostics_status,
             diagnostics_report_terminal,
             reconnect_viewer,
@@ -2696,6 +2727,24 @@ mod tests {
         assert_eq!(percent_decode("ci%20failure%20%C3%A9.log"), "ci failure é.log");
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("a%zz"), "a%zz");
+    }
+
+    /// An nma-platform checkout's root has a Docker Sandbox on macOS; other folders never do.
+    #[cfg(unix)]
+    #[test]
+    fn recent_folders_say_whether_they_have_a_sandbox() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let checkout = tempfile::tempdir().unwrap();
+        std::fs::create_dir(checkout.path().join(".git")).unwrap();
+        let launcher = checkout.path().join(sandbox::LAUNCHER);
+        std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+        std::fs::write(&launcher, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(checkout.path().join(sandbox::SANDBOX_CONFIG), "").unwrap();
+
+        assert_eq!(recent_folder(checkout.path().to_owned()).has_sandbox, sandbox::SUPPORTED);
+        assert!(!recent_folder(launcher.parent().unwrap().to_owned()).has_sandbox);
     }
 
     #[test]

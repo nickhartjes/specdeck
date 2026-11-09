@@ -50,6 +50,9 @@ pub struct Settings {
     pub browser: bool,
     /// New sessions keep images from MCP tools, such as screenshots, in the timeline.
     pub screenshots: bool,
+    /// Claude Code runs in the folder's Docker Sandbox when it has one (`claude-in-nma-sandbox`);
+    /// only on macOS.
+    pub claude_sandbox: bool,
     /// Light, dark or the OS's appearance; the terminal stays dark in each.
     pub appearance: Appearance,
 }
@@ -243,6 +246,7 @@ impl Default for Settings {
             browser: true,
             appearance: Appearance::System,
             screenshots: true,
+            claude_sandbox: false,
         }
     }
 }
@@ -362,6 +366,18 @@ mod tests {
         let settings = Settings { screenshots: false, ..Settings::load(&path) };
         settings.save(&path).unwrap();
         assert!(!Settings::load(&path).screenshots);
+    }
+
+    #[test]
+    fn claude_runs_on_the_host_until_the_sandbox_is_turned_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Settings saved before the sandbox setting existed still load, with it off.
+        std::fs::write(&path, r#"{"username":"nick"}"#).unwrap();
+        assert!(!Settings::load(&path).claude_sandbox);
+        let settings = Settings { claude_sandbox: true, ..Settings::load(&path) };
+        settings.save(&path).unwrap();
+        assert!(Settings::load(&path).claude_sandbox);
     }
 
     #[test]

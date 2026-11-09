@@ -37,6 +37,7 @@ fn config(agent: AgentId, folder: &Path, data: &Path) -> HostConfig {
         rows: 24,
         data_dir: data.to_owned(),
         screenshots: true,
+        sandbox: false,
     }
 }
 
@@ -196,6 +197,57 @@ exit 3"#,
     session.close();
 }
 
+/// An nma-platform checkout whose sandbox launcher prints its arguments, and a `claude` and
+/// `opencode` that say they ran on the host.
+fn checkout_with_sandbox(root: &Path, bin: &Path) {
+    std::fs::create_dir(root.join(".git")).unwrap();
+    let sandbox = root.join("tools/sandbox");
+    std::fs::create_dir_all(&sandbox).unwrap();
+    fake_agent(&sandbox, "sandbox.sh", r#"echo "sandbox args=[$*] end""#);
+    std::fs::write(sandbox.join("sbxenv.yaml"), "schemaVersion: \"1\"\n").unwrap();
+    fake_agent(bin, "claude", r#"echo "host claude end""#);
+    fake_agent(bin, "opencode", r#"echo "host opencode end""#);
+}
+
+async fn start_in_checkout(agent: AgentId, sandbox: bool) -> (HostSession, String) {
+    let root = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    checkout_with_sandbox(root.path(), bin.path());
+    let config = HostConfig { sandbox, ..config(agent, root.path(), data.path()) };
+    let (session, mut events) = HostSession::start(config, &env(bin.path())).await.unwrap();
+    wait_for_output(&session, &mut events, "end").await;
+    let output = output_text(&session);
+    (session, output)
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn claude_code_runs_in_the_folders_docker_sandbox_without_a_timeline() {
+    let (session, output) = start_in_checkout(AgentId::ClaudeCode, true).await;
+    // `run` only: no hook settings, MCP config or other additions for Claude Code.
+    assert!(output.contains("sandbox args=[run] end"), "{output}");
+    assert!(session.sandboxed());
+    assert!(!session.has_timeline());
+    assert!(!session.view().has_timeline());
+    assert_eq!(session.status(), AgentStatus::Unknown);
+    session.close();
+}
+
+#[tokio::test]
+async fn without_the_setting_or_for_other_agents_the_agent_runs_on_the_host() {
+    let (session, output) = start_in_checkout(AgentId::ClaudeCode, false).await;
+    assert!(output.contains("host claude end"), "{output}");
+    assert!(!session.sandboxed());
+    assert!(session.has_timeline());
+    session.close();
+
+    let (session, output) = start_in_checkout(AgentId::OpenCode, true).await;
+    assert!(output.contains("host opencode end"), "{output}");
+    assert!(!session.sandboxed());
+    session.close();
+}
+
 #[tokio::test]
 async fn usage_follows_claude_codes_transcript() {
     let bin = tempfile::tempdir().unwrap();
@@ -342,6 +394,7 @@ async fn the_agents_start_and_exit_are_recorded() {
     let started = capture.named("agent.started");
     assert_eq!(started.len(), 1);
     assert_eq!(started[0].field("agent"), Some("omp"));
+    assert_eq!(started[0].field("sandboxed"), Some("false"));
     let exited = capture.named("agent.exited");
     assert_eq!(exited.len(), 1);
     assert_eq!(exited[0].field("code"), Some("2"));

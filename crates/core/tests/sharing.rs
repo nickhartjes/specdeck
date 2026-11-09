@@ -99,6 +99,7 @@ async fn host_agent(
         rows: 24,
         data_dir: data.path().to_owned(),
         screenshots: true,
+        sandbox: false,
     };
     let (session, _session_events) = HostSession::start(config, &env).await.unwrap();
     let (sharing, events) = Sharing::start(

@@ -21,6 +21,7 @@ use tempfile::NamedTempFile;
 use tokio::sync::{mpsc, watch};
 
 use crate::activity::{Activity, Change};
+use crate::agent::Program;
 use crate::browser::BrowserHandler;
 use crate::code_files::CodeFiles;
 use crate::diag;
@@ -32,6 +33,7 @@ use crate::mirror::{Colors, Mirror, Responder};
 use crate::output_log::{Batcher, OutputLog};
 use crate::plans::{self, ChangeRef, Plans};
 use crate::program_status::{self, Scanner, Signal};
+use crate::sandbox;
 use crate::session_folder::SessionFolder;
 use crate::shared_files::{
     self, BRAINDUMP_FOLDER, Group, Purpose, PutError, Refusal, SharedFile, Sharer, Store,
@@ -51,6 +53,16 @@ pub struct HostConfig {
     pub data_dir: PathBuf,
     /// Images from MCP tools go into the timeline.
     pub screenshots: bool,
+    /// Runs Claude Code in the folder's Docker Sandbox, when it has one (`claude-in-nma-sandbox`).
+    pub sandbox: bool,
+}
+
+impl HostConfig {
+    /// What to run instead of the agent: its Docker Sandbox, when the host asked for one and the
+    /// agent and folder have it.
+    fn sandbox_program(&self) -> Option<Program> {
+        if self.sandbox { sandbox::program(self.agent, &self.folder) } else { None }
+    }
 }
 
 /// Something participants need to hear about.
@@ -111,6 +123,8 @@ enum Command {
 #[derive(Clone)]
 pub struct SessionView {
     agent: AgentId,
+    /// False for agents without events, and for Claude Code in a Docker Sandbox.
+    has_timeline: bool,
     log: Arc<OutputLog>,
     timeline: Arc<RwLock<Vec<TimelineEvent>>>,
     status: Arc<Mutex<AgentStatus>>,
@@ -139,6 +153,10 @@ struct SharedFiles {
 impl SessionView {
     pub fn agent(&self) -> AgentId {
         self.agent
+    }
+
+    pub fn has_timeline(&self) -> bool {
+        self.has_timeline
     }
 
     pub fn log(&self) -> &Arc<OutputLog> {
@@ -389,6 +407,7 @@ impl SessionView {
     pub fn from_log(agent: AgentId, log: Arc<OutputLog>) -> Self {
         Self {
             agent,
+            has_timeline: agent.has_timeline(),
             log,
             timeline: Arc::default(),
             status: Arc::new(Mutex::new(AgentStatus::Unknown)),
@@ -430,6 +449,8 @@ pub enum GiveError {
 
 pub struct HostSession {
     agent: AgentId,
+    /// Claude Code runs in the folder's Docker Sandbox.
+    sandboxed: bool,
     log: Arc<OutputLog>,
     view: SessionView,
     timeline: Arc<RwLock<Vec<TimelineEvent>>>,
@@ -468,7 +489,7 @@ impl HostSession {
         let agent = config.agent;
         let started = Self::launch(config, env, browser).await;
         match &started {
-            Ok(_) => diag::agent_started(agent),
+            Ok((session, _)) => diag::agent_started(agent, session.sandboxed()),
             Err(error) => {
                 let (reason, prerequisite) = error.reason();
                 diag::agent_start_failed(agent, reason, prerequisite);
@@ -486,6 +507,10 @@ impl HostSession {
         let whole_files = Arc::new(AtomicBool::new(false));
         let io_error = |e: std::io::Error| LaunchError::Pty(e.to_string());
 
+        // Claude Code in a Docker Sandbox can't reach the hooks, so it has no timeline.
+        let sandbox = config.sandbox_program();
+        let sandboxed = sandbox.is_some();
+        let has_timeline = config.agent.has_timeline() && !sandboxed;
         // Claude Code reports its events through HTTP hooks registered with an extra settings file.
         let mut options = LaunchOptions {
             agent: config.agent,
@@ -494,8 +519,9 @@ impl HostSession {
             rows: config.rows,
             extra_args: Vec::new(),
             extra_env: Vec::new(),
+            program: sandbox,
         };
-        let hooks = if config.agent.has_timeline() {
+        let hooks = if has_timeline {
             let endpoint_serves_browser = browser.is_some();
             std::fs::create_dir_all(&config.data_dir).map_err(io_error)?;
             let sender = commands.clone();
@@ -557,17 +583,17 @@ impl HostSession {
         spawn_reader(process.reader, commands.clone());
         spawn_exit_watcher(config.agent, process.child, commands.clone());
         spawn_git_watcher(config.folder.clone(), env.clone(), commands.clone());
-        let plans = config
-            .agent
-            .has_timeline()
-            .then(|| spawn_plan_reader(&config.folder, env, commands.clone()));
+        let plans = has_timeline.then(|| spawn_plan_reader(&config.folder, env, commands.clone()));
 
         let (events, event_rx) = mpsc::unbounded_channel();
         let view = SessionView {
             agent: config.agent,
+            has_timeline,
             log: log.clone(),
             timeline: Arc::default(),
-            status: Arc::new(Mutex::new(Activity::new(config.agent).status())),
+            status: Arc::new(Mutex::new(
+                Activity::with_timeline(config.agent, has_timeline).status(),
+            )),
             size: Arc::new(Mutex::new((config.cols, config.rows))),
             whole_files: whole_files.clone(),
             changes: Arc::new(watch::channel(0).0),
@@ -576,6 +602,7 @@ impl HostSession {
         };
         let session = Self {
             agent: config.agent,
+            sandboxed,
             log: log.clone(),
             timeline: view.timeline.clone(),
             status: view.status.clone(),
@@ -597,11 +624,11 @@ impl HostSession {
             batcher: Batcher::default(),
             responder: Responder::Mirror,
             writer: session.writer.clone(),
-            activity: Activity::new(config.agent),
+            activity: Activity::with_timeline(config.agent, has_timeline),
             unplaced: diag::Unplaced::default(),
             builder: TimelineBuilder::new(SessionFolder::from_environment(&config.folder, env))
                 .with_screenshots(config.screenshots),
-            usage: config.agent.has_timeline().then(|| UsageReader::new(usage::projects_dir(env))),
+            usage: has_timeline.then(|| UsageReader::new(usage::projects_dir(env))),
             status_line: StatusLineReader::default(),
             git: None,
             plans,
@@ -621,6 +648,16 @@ impl HostSession {
 
     pub fn agent(&self) -> AgentId {
         self.agent
+    }
+
+    /// Whether Claude Code runs in the folder's Docker Sandbox.
+    pub fn sandboxed(&self) -> bool {
+        self.sandboxed
+    }
+
+    /// Whether the session builds a timeline: not for agents without events, nor in a sandbox.
+    pub fn has_timeline(&self) -> bool {
+        self.view.has_timeline()
     }
 
     /// What participants see of this session, for sharing it.
@@ -651,7 +688,7 @@ impl HostSession {
     /// What was already sent stays with the participants who received it. A session without a
     /// timeline never shares them: it has no file changes to go with.
     pub fn share_whole_files(&self, on: bool) {
-        let on = on && self.agent.has_timeline();
+        let on = on && self.view.has_timeline();
         if self.view.whole_files.swap(on, Ordering::SeqCst) != on {
             self.view.changed();
         }

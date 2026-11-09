@@ -30,9 +30,9 @@ const t0 = Date.UTC(2026, 9, 31, 13, 2);
 export const demoProfile: Profile = {
   username: 'Nick',
   recentFolders: [
-    { path: '/Users/nick/projects/webshop', name: 'webshop' },
-    { path: '/Users/nick/projects/specshare', name: 'specshare' },
-    { path: '/Users/nick/work/billing-api', name: 'billing-api' },
+    { path: '/Users/nick/projects/webshop', name: 'webshop', hasSandbox: false },
+    { path: '/Users/nick/projects/specshare', name: 'specshare', hasSandbox: false },
+    { path: '/Users/nick/work/billing-api', name: 'billing-api', hasSandbox: true },
   ],
   lastAgent: 'claude-code',
   notifications: true,
@@ -47,6 +47,7 @@ export const demoProfile: Profile = {
       name: 'Claude Code',
       installed: true,
       hasTimeline: true,
+      sandboxable: true,
       reportsStatus: true,
       path: '/Users/nick/.local/bin/claude',
       installPage: 'https://code.claude.com/docs/en/setup',
@@ -56,12 +57,13 @@ export const demoProfile: Profile = {
       name: 'OpenCode',
       installed: true,
       hasTimeline: false,
+      sandboxable: false,
       reportsStatus: false,
       path: '/opt/homebrew/bin/opencode',
       installPage: 'https://opencode.ai/docs/',
     },
-    { id: 'omp', name: 'omp', installed: false, hasTimeline: false, reportsStatus: true, path: null, installPage: 'https://omp.sh' },
-    { id: 'terminal', name: 'Terminal', installed: true, hasTimeline: false, reportsStatus: false, path: '/bin/zsh', installPage: null },
+    { id: 'omp', name: 'omp', installed: false, hasTimeline: false, sandboxable: false, reportsStatus: true, path: null, installPage: 'https://omp.sh' },
+    { id: 'terminal', name: 'Terminal', installed: true, hasTimeline: false, sandboxable: false, reportsStatus: false, path: '/bin/zsh', installPage: null },
   ],
   hosting: false,
   hostedSessions: 0,
@@ -79,6 +81,7 @@ export const demoProfile: Profile = {
   verboseLogging: false,
   browser: true,
   screenshots: true,
+  claudeSandbox: false,
 };
 
 export const demoParticipants: Participant[] = [
@@ -497,6 +500,7 @@ export function demoBridge(screen: string): Bridge {
     },
     onAppearance: () => () => {},
     setScreenshots: async (screenshots) => ({ ...profile, screenshots }),
+    setClaudeSandbox: async (claudeSandbox) => ({ ...profile, claudeSandbox }),
     // The start screen shows an update that is ready to install.
     updateStatus: async () => (screen === 'start' ? { state: 'ready', version: '1.2.1' } : { state: 'idle' }),
     onUpdate: () => () => {},

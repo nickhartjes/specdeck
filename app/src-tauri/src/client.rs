@@ -535,6 +535,8 @@ pub struct Launch {
     pub browser: Option<BrowserHandler>,
     /// Images from MCP tools go into the timeline.
     pub screenshots: bool,
+    /// Runs Claude Code in the folder's Docker Sandbox when it has one.
+    pub sandbox: bool,
 }
 
 /// Starts session `id` as a process of its own and starts its agent.
@@ -595,6 +597,7 @@ pub async fn launch(
             verbose: launch.verbose,
             browser,
             screenshots: launch.screenshots,
+            sandbox: launch.sandbox,
         })
         .await?;
     Ok(client)

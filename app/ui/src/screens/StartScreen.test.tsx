@@ -66,9 +66,9 @@ describe('start screen', () => {
     const terminal = demoProfile.agents.find((agent) => agent.id === 'terminal')!;
     const others = demoProfile.agents.filter((agent) => agent.id !== 'terminal');
     const added = [
-      { id: 'codex', name: 'Codex', installed: true, hasTimeline: false, reportsStatus: true, path: '/opt/homebrew/bin/codex', installPage: 'https://developers.openai.com/codex/cli' },
-      { id: 'grok', name: 'Grok', installed: false, hasTimeline: false, reportsStatus: true, path: null, installPage: 'https://x.ai/cli' },
-      { id: 'pi', name: 'pi', installed: false, hasTimeline: false, reportsStatus: true, path: null, installPage: 'https://github.com/earendil-works/pi' },
+      { id: 'codex', name: 'Codex', installed: true, hasTimeline: false, sandboxable: false, reportsStatus: true, path: '/opt/homebrew/bin/codex', installPage: 'https://developers.openai.com/codex/cli' },
+      { id: 'grok', name: 'Grok', installed: false, hasTimeline: false, sandboxable: false, reportsStatus: true, path: null, installPage: 'https://x.ai/cli' },
+      { id: 'pi', name: 'pi', installed: false, hasTimeline: false, sandboxable: false, reportsStatus: true, path: null, installPage: 'https://github.com/earendil-works/pi' },
     ] satisfies Profile['agents'];
     setup({ agents: [...others, ...added, terminal] }, { agentVersions: async () => [] });
     expect(screen.getAllByRole('radio').map((a) => a.textContent)).toEqual([
@@ -121,6 +121,41 @@ describe('start screen', () => {
     expect(bridge.chooseFolder).not.toHaveBeenCalled();
     expect(bridge.startHosting).toHaveBeenCalledWith('claude-code', '/Users/nick/projects/webshop', expect.any(Number), expect.any(Number));
     await waitFor(() => expect(onHosting).toHaveBeenCalled());
+  });
+
+  it('offers the Docker Sandbox for Claude Code where the platform has it', async () => {
+    const { bridge, onProfile } = setup();
+    const setting = screen.getByRole('checkbox', { name: 'Run Claude Code in a Docker Sandbox when the folder has one' });
+    expect(setting).not.toBeChecked();
+    await userEvent.click(setting);
+    expect(bridge.setClaudeSandbox).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(onProfile).toHaveBeenCalledWith(expect.objectContaining({ claudeSandbox: true })));
+
+    await userEvent.click(screen.getByRole('radio', { name: /OpenCode/ }));
+    expect(screen.queryByRole('checkbox', { name: /Docker Sandbox/ })).toBeNull();
+  });
+
+  it('does not offer the Docker Sandbox on other platforms', () => {
+    // The app says no agent is sandboxable where Docker Sandboxes don't run.
+    setup({ agents: demoProfile.agents.map((agent) => ({ ...agent, sandboxable: false })), claudeSandbox: true });
+    expect(screen.queryByRole('checkbox', { name: /Docker Sandbox/ })).toBeNull();
+    expect(screen.queryByText('Docker Sandbox')).toBeNull();
+  });
+
+  it('marks the recent folders that start in their Docker Sandbox', async () => {
+    const mark = (name: string) =>
+      within(screen.getByRole('button', { name: `Start a session in ${name}` })).queryByText('Docker Sandbox');
+    setup({ claudeSandbox: true });
+    expect(mark('billing-api')).toBeInTheDocument();
+    expect(mark('webshop')).toBeNull();
+    // Only Claude Code runs in it.
+    await userEvent.click(screen.getByRole('radio', { name: /OpenCode/ }));
+    expect(mark('billing-api')).toBeNull();
+  });
+
+  it('marks no folders while the Docker Sandbox is off', () => {
+    setup({ claudeSandbox: false });
+    expect(within(screen.getByRole('button', { name: 'Start a session in billing-api' })).queryByText('Docker Sandbox')).toBeNull();
   });
 
   it('starts in a chosen folder', async () => {

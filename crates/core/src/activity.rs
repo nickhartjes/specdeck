@@ -54,8 +54,16 @@ pub struct Activity {
 }
 
 impl Activity {
+    /// For tests: a session's timeline can differ from its agent's, so sessions use
+    /// [`with_timeline`](Self::with_timeline).
+    #[cfg(test)]
     pub fn new(agent: AgentId) -> Self {
-        let has_timeline = agent.has_timeline();
+        Self::with_timeline(agent, agent.has_timeline())
+    }
+
+    /// The activity of a session with or without a timeline: Claude Code in a Docker Sandbox has
+    /// none, although its agent does.
+    pub fn with_timeline(agent: AgentId, has_timeline: bool) -> Self {
         let status = if has_timeline { AgentStatus::Starting } else { AgentStatus::Unknown };
         Self {
             agent,

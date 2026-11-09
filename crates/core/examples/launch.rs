@@ -32,8 +32,15 @@ fn main() {
         println!("{:<12} {:?}", found.agent.display_name(), found.executable);
     }
 
-    let options =
-        LaunchOptions { agent, folder, cols: 100, rows: 30, extra_args: vec![], extra_env: vec![] };
+    let options = LaunchOptions {
+        agent,
+        folder,
+        cols: 100,
+        rows: 30,
+        extra_args: vec![],
+        extra_env: vec![],
+        program: None,
+    };
     let mut process = match launch(&options, &env) {
         Ok(process) => process,
         Err(error) => return println!("launch failed: {error}"),

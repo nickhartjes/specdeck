@@ -714,8 +714,8 @@ fn agent_str(agent: AgentId) -> &'static str {
     }
 }
 
-pub fn agent_started(agent: AgentId) {
-    info!(agent = agent_str(agent), "agent.started");
+pub fn agent_started(agent: AgentId, sandboxed: bool) {
+    info!(agent = agent_str(agent), sandboxed, "agent.started");
 }
 
 /// The agent could not start: a fixed reason, and the missing prerequisite's id if that is why.

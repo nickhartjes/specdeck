@@ -40,6 +40,8 @@ interface State {
   agent: AgentId | null;
   folder: string;
   timelineSupported: boolean;
+  /** Claude Code runs in the folder's Docker Sandbox; false for sessions of the previous release. */
+  sandboxed: boolean;
   sharing: SharingState;
   code: string | null;
   /** The sharing service, which join links name. */
@@ -92,6 +94,7 @@ const initial: State = {
   agent: null,
   folder: '',
   timelineSupported: false,
+  sandboxed: false,
   sharing: 'connecting',
   code: null,
   service: '',
@@ -135,6 +138,7 @@ export function hostReducer(state: State, event: HostEvent | { type: 'limit'; li
         suggestionsAllowed: event.suggestionsAllowed ?? false,
         suggestions: event.suggestions ?? [],
         wholeFilesPossible: event.wholeFilesPossible ?? false,
+        sandboxed: event.sandboxed ?? false,
         wholeFiles: event.wholeFiles ?? false,
         sharedFilesPossible: event.sharedFilesPossible ?? false,
         filesAllowed: event.filesAllowed ?? false,
@@ -378,6 +382,11 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
             {agentName} · {state.folder}
           </span>
         </div>
+        {state.sandboxed && (
+          <span className="sandbox-badge" title="Runs in this checkout's Docker Sandbox. Viewers see the terminal, without a timeline.">
+            Docker Sandbox
+          </span>
+        )}
         <StatusPill status={state.status} agentName={agentName} terminal={terminal} request={state.timelineSupported ? null : state.request} />
         <div className="spacer" />
         {update}

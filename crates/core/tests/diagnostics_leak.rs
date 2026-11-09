@@ -130,6 +130,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         rows: 24,
         data_dir: data.path().to_owned(),
         screenshots: true,
+        sandbox: false,
     };
     // An agent that cannot start, in a folder whose name is a marker.
     let missing = HostConfig { folder: bin.path().join(MISSING_FOLDER_MARKER), ..config.clone() };

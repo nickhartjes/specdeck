@@ -1172,7 +1172,7 @@ impl Host {
                     resume_token: token,
                     rejoin_room: self.rejoin_room.clone(),
                     agent: self.view.agent(),
-                    timeline_supported: self.view.agent().has_timeline(),
+                    timeline_supported: self.view.has_timeline(),
                 };
                 let Some(slot) = self.slots.get_mut(connection) else { return };
                 let stream_open = slot.peer.buffered_amount(Channel::Stream) != usize::MAX;
