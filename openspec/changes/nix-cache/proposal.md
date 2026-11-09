@@ -26,6 +26,6 @@ None: this changes how the Nix package is built and checked in CI, not what it c
 
 - `nix/package.nix`, `flake.nix`, `flake.lock`, `.github/workflows/nix.yml`, `README.md` (the CI paragraph).
 - New flake input `github:ipetkov/crane`. `nix/package.nix` is no longer a plain nixpkgs-style package, which matters only if it is ever sent to nixpkgs.
-- One more GitHub Actions cache entry, about 1-1.5 GB (to be measured), next to the Rust caches, which already fill 9.96 of the 10 GB. GitHub evicts the least recently used entries.
+- One more GitHub Actions cache entry, 640 MB (measured), next to the Rust caches, which already fill 9.96 of the 10 GB. GitHub evicts the least recently used entries.
 - A `Cargo.lock`, `flake.lock` or `nix/package.nix` change, and so each release's version bump, still pays the full build once on main.
-- No change for Nix users: `nix run github:nickhartjes/specdeck` still builds from source, on x86_64 and aarch64 Linux.
+- No change for Nix users, apart from a run-time closure about 330 MB smaller (it no longer pulls in GCC and binutils): `nix run github:nickhartjes/specdeck` still builds from source, on x86_64 and aarch64 Linux.

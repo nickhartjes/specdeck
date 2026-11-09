@@ -18,11 +18,11 @@
 
 ## 4. Check in CI (after approval to push the branch)
 
-- [ ] 4.1 Ask before pushing `nickhartjes/nix-cache`; then add temporary verification steps (build main's flake as `result-old`, compare file lists, sizes, `.desktop`, icons, `bin/` wrappers and `nix store diff-closures`; let this branch save the cache) and run `nix.yml` by `workflow_dispatch`; verify the outputs differ only in store hashes and the binary starts
-- [ ] 4.2 Run `nix.yml` a second time on the branch; verify the cache is restored, the log has no `Compiling` lines for crates outside the workspace, and note the time and the entry's size (`gh cache list`); fix the dependency build's flags if crates rebuild
-- [ ] 4.3 Check the pnpm hash workflow's path on the branch: `nix build .#specdeck.pnpmDeps --no-link` succeeds, and with a temporary wrong hash it fails with a `got: sha256-…` line that `renovate-nix-hash.yml`'s `sed` extracts; verify both in the run log, then revert the wrong hash
-- [ ] 4.4 Verify `nix eval .#packages.aarch64-linux.specdeck.drvPath` evaluates in the run
-- [ ] 4.5 Remove the temporary steps and the branch's save permission, delete the branch's cache entry (`gh cache delete`), and verify `nix.yml` matches design decision 2 and `actionlint` passes
+- [x] 4.1 Ask before pushing `nickhartjes/nix-cache`; then add temporary verification steps (build main's flake as `result-old`, compare file lists, sizes, `.desktop`, icons, `bin/` wrappers and `nix store diff-closures`; let this branch save the cache) and run `nix.yml` by `workflow_dispatch`; verify the outputs differ only in store hashes and the binary starts (run 42594374806: same files, text files equal after masking hashes; binaries +1%; the run-time closure lost GCC, binutils, glibc-dev and linux-headers, about 330 MB)
+- [x] 4.2 Run `nix.yml` a second time on the branch; verify the cache is restored, the log has no `Compiling` lines for crates outside the workspace, and note the time and the entry's size (`gh cache list`); fix the dependency build's flags if crates rebuild (run 42599880066: restored in 6 s, only the workspace crates and the vendored `datachannel` compiled, build 4 min 48 s, job 5 min 35 s; entry 640 MB)
+- [x] 4.3 Check the pnpm hash workflow's path on the branch: `nix build .#specdeck.pnpmDeps --no-link` succeeds, and with a temporary wrong hash it fails with a `got: sha256-…` line that `renovate-nix-hash.yml`'s `sed` extracts; verify both in the run log, then revert the wrong hash
+- [x] 4.4 Verify `nix eval .#packages.aarch64-linux.specdeck.drvPath` evaluates in the run
+- [x] 4.5 Remove the temporary steps and the branch's save permission, delete the branch's cache entry (`gh cache delete`), and verify `nix.yml` matches design decision 2 and `actionlint` passes
 
 ## 5. After merge
 

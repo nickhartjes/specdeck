@@ -25,7 +25,7 @@ Nix is not installed on the development machine. Docker and Colima are, so a `ni
 
 ### 1. crane, with the dependencies in `buildDepsOnly`
 
-`flake.nix` gets `inputs.crane.url = "github:ipetkov/crane"`. crane has no flake inputs of its own, so nothing needs `follows`. `nix/package.nix` takes `craneLib` as an argument, and the flake passes `crane.mkLib pkgs`, or `crane.mkLib final` in the overlay. Both are built from the same `commonArgs`: `src`, `strictDeps`, the native and build inputs, `dontUseCmakeConfigure`, `env`, `CARGO_PROFILE = "release"` and `CARGO_BUILD_TARGET = <host triple>`. The two are:
+`flake.nix` gets `inputs.crane.url = "github:ipetkov/crane"`. crane has no flake inputs of its own, so nothing needs `follows`. `nix/package.nix` takes `craneLib` as an argument, and the flake passes `crane.mkLib pkgs`, or `crane.mkLib final` in the overlay. Both are built from the same `commonArgs`: `src`, `strictDeps`, the vendored crates, all build tools except `pnpmConfigHook` (also the Tauri hook, Node, pnpm and `wrapGAppsHook3`, because they reorder `PKG_CONFIG_PATH` and the C flags, which the `*-sys` crates and bindgen track), the libraries, `dontUseCmakeConfigure`, `CARGO_PROFILE_RELEASE_STRIP=false` (as the Tauri hook sets it), and a `preBuild` that drops stdenv's per-derivation `-frandom-seed` from `BINDGEN_EXTRA_CLANG_ARGS`. Both build with `--target <host triple>` and the release profile. The two are:
 
 - `cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { … })`. crane replaces the workspace sources with dummies, keeps only the manifests and `Cargo.lock`, and so stays the same store path across code changes. Its build command runs the same two Cargo builds the package does, so feature unification matches: the app crate with Tauri's release features (`-p specdeck-app --features tauri/custom-protocol`, the features `cargo tauri build` adds; to be confirmed from the build log), and `-p specdeck-session`. Both use `--release --target <triple> --locked`. The heavy parts, the vendored libdatachannel and OpenSSL, are built here.
 - The package is `craneLib.mkCargoDerivation (commonArgs // { inherit cargoArtifacts pnpmDeps; … })`. crane unpacks the artifacts into `target/`, and the build runs `cargo tauri build` as the hook does. crane sets its own `buildPhase` and `installPhase`, so the hook's phases do not run on their own. The build and install commands are the hook's, written out in `nix/package.nix` (`cargo tauri build --bundles deb --target <triple>` with `-- --profile release --offline`, then the deb bundle's `usr/` into `$out`); the hook stays for its fixup, which adds GStreamer settings to the wrapper. The package uses `buildPackage`, so crane also strips references to the vendored crate sources from the binaries. Either way the result must pass the comparison in decision 5.
@@ -72,8 +72,7 @@ There is no local Nix, so everything is checked on a branch in CI, after you app
 ## Risks / Trade-offs
 
 - [The dependency build and the package build use different flags or features, so Cargo rebuilds dependencies anyway] → Same `commonArgs`, profile and target, and the same two `-p` builds. The warm-run log check in decision 5 shows any rebuilt crate; adjust the deps command until there are none.
-- [The new entry (~1-1.5 GB) pushes the Actions cache over 10 GB and GitHub evicts an entry: probably the least recently used, `release.yml`'s Rust caches, which are used only at releases] → One entry kept at a time, no double compression, size measured on the branch. If eviction of `ci.yml`'s entries shows up, revisit (for example, trimming `target/` in the deps output) before merging.
-- [The tauri hook's functions don't fit crane's phases] → Write the build and install commands out in `nix/package.nix`; the comparison in decision 5 guards the result.
+- [The new entry (640 MB measured) pushes the Actions cache over 10 GB and GitHub evicts an entry: probably the least recently used, `release.yml`'s Rust caches, which are used only at releases] → One entry kept at a time, no double compression, size measured on the branch. If eviction of `ci.yml`'s entries shows up, revisit (for example, trimming `target/` in the deps output) before merging.
 - [crane's dummy source still changes on each release, through the version bump in `Cargo.toml` and `Cargo.lock`] → Accepted: one full build per release.
 - [A cache entry from a broken build] → It's keyed by its own store path and only saved after the whole job succeeds on main. If needed, delete it with `gh cache delete`.
 - [`nix/package.nix` is no longer a nixpkgs-style package] → Accepted. A nixpkgs submission would rewrite it with `buildRustPackage` anyway.
@@ -84,7 +83,3 @@ There is no local Nix, so everything is checked on a branch in CI, after you app
 2. Remove the temporary verification steps and open the pull request. Its own Nix run builds in full, since nothing is saved for it.
 3. After merge, the first push to main builds the dependencies and saves the entry, and the next push should take a few minutes.
 4. Rollback: revert the commit. The leftover `nix-deps-` entry ages out or is deleted with `gh cache delete`.
-
-## Open Questions
-
-- The exact Tauri feature flags `cargo tauri build` passes, and the size of the dependency output. Both are read from the first branch run and don't change the approach.
