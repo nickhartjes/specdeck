@@ -76,16 +76,13 @@ ring(w('vote', 'card', { offset: -0.3 }), box('vote.cards', 6));
 point(w('vote', 'card', { offset: -0.4 }), box('vote.five', 0));
 press(w('vote', 'card', { offset: 0.1 }));
 ring(w('vote', 'sees', { offset: -0.2 }), box('vote.who', 6));
-cut('vote-reveal', w('vote', 'reveal', { offset: -0.6 }));
-camera(w('vote', 'reveal', { offset: -0.6 }), main.aim(union(box('vote.who'), box('vote.reveal')), 1.5));
+camera(w('vote', 'reveal', { offset: -0.6 }), main.aim(union(box('vote.cards'), box('vote.reveal')), 1.5));
 ring(w('vote', 'reveal', { offset: -0.3 }), box('vote.reveal', 6));
 point(w('vote', 'reveal', { offset: -0.4 }), box('vote.reveal', 0));
 press(w('vote', 'reveal', { offset: 0.2 }));
 cut('revealed', at('reveal'));
-camera(at('reveal', 0.02), main.aim(box('revealed.votes'), 2));
+camera(at('reveal', 0.02), main.aim(union(box('revealed.votes'), box('revealed.again')), 1.8));
 ring(w('reveal', 'each', { offset: -0.2 }), box('revealed.votes', 6));
-cut('revealed-keep', w('reveal', 'spread', { offset: -0.5 }));
-camera(w('reveal', 'spread', { offset: -0.5 }), main.aim(union(box('revealed.spread'), box('revealed.again')), 2));
 ring(w('reveal', 'spread', { offset: -0.2 }), box('revealed.spread', 6));
 ring(w('reveal', 'Keep', { offset: -0.2 }), box('revealed.keep', 6));
 point(w('reveal', 'Keep', { offset: -0.3 }), box('revealed.keep', 0));
@@ -118,7 +115,7 @@ film.write({
       id: 'main',
       title: 'SpecDeck',
       stage: main,
-      shots: ['host', 'ask', 'viewer-read', 'host-read', 'estimate', 'vote', 'vote-reveal', 'revealed', 'revealed-keep', 'kept'],
+      shots: ['host', 'ask', 'viewer-read', 'host-read', 'estimate', 'vote', 'revealed', 'kept'],
       start: windowStart,
       duration: at('outro') + 0.3 - windowStart,
       top: 80,

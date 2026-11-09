@@ -26,7 +26,7 @@ export function SuggestionsInbox({ agentName, suggestions, allowed, onAnswer }: 
       <h3 className="suggest-heading">Waiting for you</h3>
       {waiting.length === 0 ? (
         <p className="empty-note">
-          {allowed ? 'No suggestions waiting.' : 'Viewers cannot suggest prompts. Turn it on in People.'}
+          {allowed ? 'No suggestions waiting.' : 'Viewers cannot suggest prompts. Turn it on in Sharing settings.'}
         </p>
       ) : (
         <ul className="suggestions" aria-label="Suggestions waiting">
