@@ -70,12 +70,12 @@ package:
 docs:
     cd docs/site && pnpm install && pnpm dev
 
-# Build the documentation site (docs/site/dist)
+# Build the documentation site (docs/site/dist) and check its links, sidebar and the README's links into it
 docs-build:
-    cd docs/site && pnpm install --frozen-lockfile && pnpm build
+    cd docs/site && pnpm install --frozen-lockfile && pnpm build && pnpm check-links
 
 # Make the how-to videos, or the ones named (docs/video/<name>/renders/); needs Chrome, Python 3 and ffmpeg
-video *names="getting-started following diagnostics":
+video *names="getting-started following diagnostics taking-part web-viewer read-and-estimate plans claude-browser self-hosting":
     #!/usr/bin/env bash
     set -euo pipefail
     cd docs/video
@@ -87,6 +87,7 @@ video *names="getting-started following diagnostics":
             cd "$name"
             node capture.mjs
             ../.venv/bin/python ../lib/speak.py .
+            node ../lib/words.mjs .
             node build.mjs
             pnpm exec hyperframes render --output "renders/specdeck-$name.mp4"
             # For the docs site: a smaller copy, and its title card as the poster, with the caption

@@ -3,6 +3,8 @@ title: Docker Compose
 description: Run the sharing service and the TURN relay on one server.
 ---
 
+<video class="video" controls preload="none" poster="/specdeck/video/self-hosting.jpg" src="/specdeck/video/self-hosting.mp4" aria-label="Running your own sharing service: DNS, firewall and .env from this page, a real docker compose run with its check and log, and the app's Sharing service setting (1 minute, narrated, with captions)"></video>
+
 The repository's [`deploy/compose`](https://github.com/nickhartjes/specdeck/tree/main/deploy/compose) runs the whole sharing service on one Linux server with Docker:
 
 | Service | What it does |

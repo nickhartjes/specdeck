@@ -1,0 +1,10 @@
+[
+  { "id": "intro", "text": "When the agent writes a plan, everyone can read the whole of it, not only its diff, while the session goes on." },
+  { "id": "card", "text": "When the agent works on an OpenSpec change, a plan card appears at the top of the timeline: its title, a button for each document, and how many tasks are done." },
+  { "id": "reader", "text": "Each document opens in a tab next to the terminal. Its top links the plan's other documents, so you can go from the proposal to the design." },
+  { "id": "docs", "text": "Every Markdown file the agent writes is in Files, under Documents, too." },
+  { "id": "updated", "text": "The task count follows along live. When the agent changes a document you read, its button says changed." },
+  { "id": "changed", "text": "Open it again, and the parts that changed since you last read it are marked New or Changed. Turn Highlight changes off to read without the marks." },
+  { "id": "source", "text": "Switch to Source to see the Markdown as written, with line numbers, and the same parts marked line by line." },
+  { "id": "outro", "text": "Read the plan while the agent works, and see what changed since you last looked." }
+]

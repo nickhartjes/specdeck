@@ -11,6 +11,11 @@ const box = (name, pad) => main.box(name, pad);
 const camera = (time, target, duration) => film.camera('#main-camera', time, target, duration);
 const ring = (time, target, duration) => film.ring('#main-ring', time, target, duration);
 
+// The pointer glides to a control and presses it; `w(scene, word)` is when the voice says the word.
+const point = (time, target) => film.point('#main-pointer', time, target);
+const press = (time) => film.press('#main-pointer', time);
+const w = (id, word, opts) => film.word(id, word, opts);
+
 const title = film.title({ kicker: 'SpecDeck', title: 'Diagnostics', sub: 'Connection status, and a file for your bug report' }, at('open'));
 film.enter('#main', at('open') - 0.3);
 
@@ -34,6 +39,8 @@ ring(at('terminal', 0.05), box('host.terminal'));
 // Export, its toast, and what the file holds.
 camera(at('export'), main.aim(union(box('host.export'), box('host.hint')), 1.6));
 ring(at('export', 0.05), box('host.export', 6));
+point(w('export', 'Export', { offset: -0.4 }), box('host.export', 0));
+press(w('export', 'Export', { offset: 0.2 }));
 film.fade('#main-host-exported', at('export', 0.62), 1, 0.3);
 camera(at('privacy'), main.aim(box('host.hint'), 1.7));
 ring(at('privacy', 0.05), box('host.hint'));
@@ -47,6 +54,8 @@ ring(at('viewer', 0.32), box('viewer.connection'));
 ring(at('viewer', 0.62), box('viewer.previous', 4));
 camera(at('reconnect'), main.aim(union(box('viewer.reconnect'), box('viewer.previous')), 1.3));
 ring(at('reconnect', 0.05), box('viewer.reconnect', 6));
+point(w('reconnect', 'Reconnect', { offset: -0.4 }), box('viewer.reconnect', 0));
+press(w('reconnect', 'Reconnect', { offset: 0.2 }));
 
 // Settings: Verbose logging.
 film.fade('#main', at('verbose') - 0.2, 0, 0.5);

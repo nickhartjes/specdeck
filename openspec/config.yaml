@@ -18,6 +18,11 @@ schema: spec-driven
 #       - Always state what is out of scope
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - "A feature is not done until it is documented. Impact names the documentation: the README overview line (linked to its docs page), the docs/site page or section, and the video in docs/video or why none is needed. A change that is not user-facing says so and why."
+  tasks:
+    - "A feature is not done until it is documented. In the task group of each user-facing feature, add tasks for its README overview line with a link to its docs page, its docs/site page or section (what it does; who can use it: host, viewer, web viewer; how, with shortcuts and settings; listed in docs/site/sidebar.mjs), and its video in docs/video or why none is needed. Verify them with `just docs-build`."
 
 # Per-operation guidance (optional)
 # Add advisory guidance for how apply and archive work should be conducted.

@@ -40,6 +40,8 @@ Your answer sets up your window, and SpecDeck remembers it for every session you
 
 ## Watch in a browser
 
+<video class="video" controls preload="none" poster="/specdeck/video/web-viewer.jpg" src="/specdeck/video/web-viewer.mp4" aria-label="Watch in a browser: opening the web link, typing the invite code and your name, the session in the browser, the menu and the keyboard shortcuts (1 minute, narrated, with captions)"></video>
+
 If you cannot install SpecDeck, for example on a company laptop, you can watch in a browser: current Chrome, Edge, Firefox and Safari. Hosting still needs the app.
 
 - **Open the web link** the host shared, or go to the sharing service's address (`https://specdeck.hartj.es/` for the built-in one) and type the code.

@@ -1,13 +1,13 @@
 name: Docs
 
-# Builds the documentation site (docs/site) on pull requests, and publishes it to GitHub Pages
-# from main. Pages must be set to deploy from GitHub Actions (Settings > Pages > Source).
+# Builds the documentation site (docs/site) and checks its links on pull requests, and publishes it
+# to GitHub Pages from main. Pages must be set to deploy from GitHub Actions (Settings > Pages > Source).
 on:
   push:
     branches: [main]
-    paths: ['docs/site/**', '.github/workflows/docs.yml']
+    paths: ['docs/site/**', 'README.md', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['docs/site/**', '.github/workflows/docs.yml']
+    paths: ['docs/site/**', 'README.md', '.github/workflows/docs.yml']
   workflow_dispatch:
 
 concurrency:
@@ -32,6 +32,10 @@ jobs:
         working-directory: docs/site
 
       - run: pnpm build
+        working-directory: docs/site
+
+      # Links and anchors in the site, the sidebar, and the README's links into the site.
+      - run: pnpm check-links
         working-directory: docs/site
 
       - uses: actions/upload-pages-artifact@v5

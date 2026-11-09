@@ -4,3 +4,5 @@
 */index.html
 */renders/
 */.hyperframes/
+# record.sh's temporary copy of deploy/compose, if a recording was stopped halfway
+*/.work.*/

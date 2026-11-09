@@ -3,6 +3,8 @@ title: Ask to read and estimate
 description: Ask everyone to read something before you go on, and estimate a task together with hidden votes.
 ---
 
+<video class="video" controls preload="none" poster="/specdeck/video/read-and-estimate.jpg" src="/specdeck/video/read-and-estimate.mp4" aria-label="Read and estimate: the host asks everyone to read a file with a time limit, viewers answer, then everyone votes on a task and the host keeps a value (1 minute, narrated, with captions)"></video>
+
 As the host you can ask everyone in the session for two things: to read something before you go on, and to estimate how big a task is. Both show in a row above the panels, for you and for every viewer, and the row is gone again once they close. Nothing anyone answers is typed into the session or reaches the agent.
 
 Both buttons are in your toolbar: **Ask to read** and **Estimate**. Viewers don't have them. A read request and a vote can be open at the same time, but only one of each.

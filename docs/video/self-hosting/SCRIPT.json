@@ -1,0 +1,13 @@
+[
+  { "id": "intro", "text": "You can run the sharing service yourself, on one Linux server with Docker Compose: the service, Caddy for the certificate, and a TURN relay." },
+  { "id": "dns", "text": "First, point two DNS names at the server: one for the service, one for TURN." },
+  { "id": "firewall", "text": "Open ports 80 and 443 for Caddy, 3478 UDP for TURN, and the relay range." },
+  { "id": "env", "text": "Copy the example settings to a file called dot env, and fill in the release, both domains, the server's address and a random TURN secret." },
+  { "id": "local", "text": "This is a real run on a laptop, so both domains point at this machine here." },
+  { "id": "up", "text": "Docker compose up pulls the release image and starts all three." },
+  { "id": "ps", "text": "Docker compose ps shows them running." },
+  { "id": "check", "text": "Check that it answers: health says ok, and web viewer dot json says which release runs." },
+  { "id": "logs", "text": "The server's log has one line per event, such as a viewer joining or a wrong code." },
+  { "id": "apps", "text": "Last, everyone enters your domain under Sharing service, in SpecDeck's Settings." },
+  { "id": "outro", "text": "Your own sharing service, in a few commands." }
+]

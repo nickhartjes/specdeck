@@ -7,6 +7,8 @@ const { page, go, box, shot, close } = await capture(new URL('./', import.meta.u
 // The start screen, and hosting from a recent folder.
 await go('/?demo=start');
 await box('start.agents', page.locator('.agents'));
+await box('start.claude', page.getByRole('radio', { name: /^Claude Code/ }));
+await box('start.webshop', page.getByRole('button', { name: 'Start a session in webshop' }));
 await box('start.folders', page.locator('ul.recent').locator('xpath=..'));
 await box('start.join', page.locator('section.card').nth(1));
 await shot('start');
@@ -14,28 +16,30 @@ await page.getByRole('button', { name: /webshop/ }).first().click();
 await page.waitForTimeout(1200);
 await box('host.terminal', page.locator('.terminal-pane'));
 await box('host.invite', page.locator('div.invite'));
+await box('host.copy', page.getByRole('button', { name: 'Copy', exact: true }));
 await shot('host');
 
 // A teammate joins with the code and follows as a developer.
 await go('/?demo=start');
 await page.locator('#invite-code').fill('7k2m9qxh4tpa');
 await box('typed.join', page.locator('section.card').nth(1));
+await box('typed.button', page.getByRole('button', { name: 'Join', exact: true }));
 await shot('start-typed');
 await page.getByRole('button', { name: 'Join' }).click();
-await page.getByRole('button', { name: /^Developer/ }).click();
+await page.locator('.first-join').getByRole('button', { name: /^Developer/ }).click();
 await page.waitForTimeout(800);
 await box('viewer.terminal', page.locator('.terminal-pane'));
-await box('viewer.side', page.locator('aside.side'));
+await box('viewer.side', page.getByRole('complementary', { name: 'Timeline' }));
 await box('viewer.readonly', page.locator('.pill.readonly'));
 await shot('viewer');
 
-// Back on the host: People, with Remove showing, and End session.
+// Back on the host: the people in the session, with Remove showing, and End session.
 await go('/?demo=host');
-await page.getByRole('tab', { name: /People/ }).click();
+await page.getByRole('button', { name: /^People/ }).click();
 await page.waitForTimeout(400);
-await box('people.list', page.locator('#panel-people'));
+await box('people.list', page.getByRole('dialog', { name: 'People in this session' }));
 await box('people.end', page.getByRole('button', { name: 'End session' }));
-await page.getByText('Anna de Vries').first().hover();
+await page.getByRole('dialog', { name: 'People in this session' }).getByText('Anna de Vries').first().hover();
 await page.waitForTimeout(300);
 await box('people.remove', page.getByRole('button', { name: 'Remove' }).first());
 // shot() moves the pointer away, which hides Remove, so this one is taken as is.

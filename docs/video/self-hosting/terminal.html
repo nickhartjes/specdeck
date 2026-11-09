@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- A plain terminal for the self-hosting video: capture.mjs calls show() with the saved steps of
+     run/, and the screen keeps to the bottom like a real one. -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #12201e; }
+      pre {
+        box-sizing: border-box;
+        height: 100%;
+        margin: 0;
+        padding: 28px 36px;
+        overflow: hidden;
+        color: #d8e0dc;
+        font: 19px/1.5 "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        white-space: pre-wrap;
+      }
+      .cmd { color: #fff; font-weight: 700; }
+      .cmd::before { content: "$ "; color: #e0896b; }
+      .ok { color: #8fd19e; }
+      .cursor::after { content: "$ "; color: #e0896b; }
+    </style>
+  </head>
+  <body>
+    <pre id="screen"></pre>
+    <script>
+      const screen = document.getElementById('screen');
+      // Each line that starts with "$ " is a command; the rest is its output, as saved.
+      window.show = (text) => {
+        screen.replaceChildren();
+        for (const line of text.replace(/\n+$/, '').split('\n')) {
+          // The text in a span of its own, so a highlight fits the text, not the whole row.
+          const row = document.createElement('div');
+          const text = row.appendChild(document.createElement('span'));
+          if (line.startsWith('$ ')) {
+            text.className = 'cmd';
+            text.textContent = line.slice(2);
+          } else {
+            text.textContent = line || ' ';
+            if (/^(ok|\{"protocol")|Started|Up \d/.test(line)) text.classList.add('ok');
+          }
+          screen.append(row);
+        }
+        const prompt = document.createElement('div');
+        prompt.className = 'cursor';
+        screen.append(prompt);
+        screen.scrollTop = screen.scrollHeight;
+      };
+    </script>
+  </body>
+</html>

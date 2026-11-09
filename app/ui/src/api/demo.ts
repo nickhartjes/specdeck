@@ -11,6 +11,7 @@ import type {
   HostLink,
   HostSuggestion,
   Participant,
+  PlanDocument,
   Profile,
   ReadState,
   ReadView,
@@ -24,6 +25,7 @@ import type {
 import { spreadOf } from '../model/asks';
 import { formatCode } from '../model/code';
 import { applyAppearance } from '../appearance';
+import browserShot from './demo-browser.png?inline';
 
 const t0 = Date.UTC(2026, 9, 31, 13, 2);
 
@@ -208,6 +210,111 @@ export const demoTimeline: TimelineEvent[] = [
   { ...at(4), kind: 'message', promptId: 'p2', messageId: 'm2', text: 'Writing a test that stubs `db.ping` for both cases.', final: false },
   { ...at(4), kind: 'tool-call', promptId: 'p2', toolUseId: 't5', toolName: 'Bash', input: { command: 'npm test -- health', description: 'Run the health tests again' } },
   { ...at(4), kind: 'usage', tokens: { input: 19, output: 2890, cacheRead: 148200, cacheWrite: 26500 }, contextTokens: 151320, contextWindow: 200_000 },
+];
+
+// ?scene=plans: after the timeline above, the agent plans an OpenSpec change, and later changes
+// its design and works through two of its tasks.
+const HEARTBEAT = 'openspec/changes/heartbeat';
+const heartbeatDocuments: PlanDocument[] = [
+  { id: 'proposal', name: 'Proposal', paths: [`${HEARTBEAT}/proposal.md`], exists: true },
+  { id: 'specs', name: 'Specs', paths: [`${HEARTBEAT}/specs/session-heartbeat/spec.md`], exists: true },
+  { id: 'design', name: 'Design', paths: [`${HEARTBEAT}/design.md`], exists: true },
+  { id: 'tasks', name: 'Tasks', paths: [`${HEARTBEAT}/tasks.md`], exists: true },
+];
+const heartbeatTasks = (done: number) => {
+  let task = 0;
+  return [
+    '## 1. Heartbeat',
+    '',
+    '- [ ] 1.1 Send a heartbeat from the host every 2 seconds.',
+    '- [ ] 1.2 Count missed heartbeats on each viewer.',
+    '- [ ] 1.3 Show *Reconnecting* after one missed heartbeat.',
+    '',
+    '## 2. Unreachable',
+    '',
+    '- [ ] 2.1 Show *Unreachable* after three missed heartbeats.',
+    '- [ ] 2.2 Say how long the host has been gone.',
+    '- [ ] 2.3 Test both with a stopped host.',
+  ]
+    .map((line) => (line.startsWith('- [ ]') && task++ < done ? line.replace('- [ ]', '- [x]') : line))
+    .join('\n');
+};
+const heartbeatDesign = (version: number) =>
+  [
+    '# Design',
+    '',
+    '## Context',
+    '',
+    'A viewer cannot tell a host that went away from one that is only quiet. Today the terminal just stops.',
+    '',
+    '## Decisions',
+    '',
+    '### 1. The host sends a heartbeat every 2 seconds',
+    '',
+    'A small message on the data channel, so it costs nothing next to the terminal stream.',
+    '',
+    version === 0
+      ? '### 2. Two missed heartbeats mean unreachable\n\nAfter 4 seconds without one, the viewer shows *Unreachable*.'
+      : '### 2. Three missed heartbeats mean unreachable\n\nAfter 6 seconds without one, the viewer shows *Unreachable*. Two was too eager on a busy Wi-Fi network: one late heartbeat and a dropped one already made it.',
+    '',
+    ...(version === 0 ? [] : ['### 3. Say how long the host has been gone', '', '*Unreachable for 2 minutes* tells a viewer whether to wait or to ask the host.', '']),
+    '## Risks',
+    '',
+    '- A laptop that sleeps stops its heartbeat too; the viewer then says the host is unreachable, which is true.',
+  ].join('\n');
+const heartbeatTexts: [string, string][] = [
+  [`${HEARTBEAT}/proposal.md`, '# Tell viewers when the host is unreachable\n\n## Why\n\nWhen the host closes their laptop, viewers see a frozen terminal and no reason.\n\n## What changes\n\n- The host sends a heartbeat.\n- Viewers show *Reconnecting*, then *Unreachable*, and for how long.\n'],
+  [`${HEARTBEAT}/specs/session-heartbeat/spec.md`, '## ADDED Requirements\n\n### Requirement: Viewers see when the host is unreachable\n\nA viewer SHALL show *Unreachable* after it misses the host\'s heartbeats.\n\n#### Scenario: The host closes their laptop\n\n- **WHEN** no heartbeat arrives for 6 seconds\n- **THEN** the viewer shows *Unreachable* and how long ago the host was last seen\n'],
+  [`${HEARTBEAT}/design.md`, heartbeatDesign(0)],
+  [`${HEARTBEAT}/tasks.md`, heartbeatTasks(0)],
+];
+const planned = (promptId: string, written: [string, string][], change: 'created' | 'edited') =>
+  written.flatMap(([path, text], i): TimelineEvent[] => {
+    const toolUseId = `${promptId}-w${i}`;
+    return [
+      { ...at(4), kind: 'tool-call', promptId, toolUseId, toolName: change === 'created' ? 'Write' : 'Edit', input: { file_path: path } },
+      { ...at(4), kind: 'tool-result', promptId, toolUseId, status: 'succeeded' },
+      { ...at(4), kind: 'file-change', promptId, toolUseId, path, change, hunks: [] },
+      { ...at(4), kind: 'document', promptId, toolUseId, path, text },
+    ];
+  });
+export const demoPlanTimeline: TimelineEvent[] = [
+  { ...at(4), kind: 'prompt', promptId: 'p3', text: 'Plan how viewers see that the host is unreachable, as an OpenSpec change.' },
+  ...planned('p3', heartbeatTexts, 'created'),
+  { ...at(4), kind: 'plan', change: 'heartbeat', documents: heartbeatDocuments, tasks: { done: 0, total: 6 } },
+  { ...at(4), kind: 'response', promptId: 'p3', text: 'Wrote the plan in `openspec/changes/heartbeat`: a proposal, one spec, the design and six tasks.' },
+];
+/** What the agent does to the plan a while after you join. */
+export const demoPlanUpdate: TimelineEvent[] = [
+  { ...at(4), kind: 'prompt', promptId: 'p4', text: 'Make it three missed heartbeats, and start on the tasks.' },
+  ...planned('p4', [[`${HEARTBEAT}/design.md`, heartbeatDesign(1)], [`${HEARTBEAT}/tasks.md`, heartbeatTasks(2)]], 'edited'),
+  { ...at(4), kind: 'plan', change: 'heartbeat', documents: heartbeatDocuments, tasks: { done: 2, total: 6 } },
+];
+
+// ?scene=browser: after the timeline above, Claude checks the shop's status page in its browser
+// and takes a screenshot (demo-browser.png, 1280 × 800).
+const browsed = (toolUseId: string, tool: string, input: Record<string, unknown>, extra: Partial<Extract<TimelineEvent, { kind: 'tool-call' }>> = {}, outcome?: Extract<TimelineEvent, { kind: 'tool-result' }>['outcome']): TimelineEvent[] => [
+  { ...at(4), kind: 'tool-call', promptId: 'p3', toolUseId, toolName: `mcp__specdeck__${tool}`, input, ...extra },
+  { ...at(4), kind: 'tool-result', promptId: 'p3', toolUseId, status: 'succeeded', ...(outcome && { outcome }) },
+];
+export const demoBrowserTimeline: TimelineEvent[] = [
+  { ...at(4), kind: 'prompt', promptId: 'p3', text: "Open the shop's status page in your browser and check that it shows the database." },
+  { ...at(4), kind: 'message', promptId: 'p3', messageId: 'm3', text: "I'll open the status page in my browser.", final: true },
+  ...browsed('b1', 'navigate', { url: 'http://localhost:3000/admin/status' }),
+  ...browsed('b2', 'read_page', {}),
+  ...browsed('b3', 'click', { element: 7 }, { target: { kind: 'button', label: 'Check again', sensitive: false } }),
+  ...browsed('b4', 'screenshot', {}, {}, {
+    kind: 'screenshot',
+    image: { mediaType: 'image/png', data: browserShot.slice(browserShot.indexOf(',') + 1), width: 1280, height: 800 },
+    address: 'localhost:3000/admin/status',
+  }),
+  ...browsed('b5', 'console', {}),
+  {
+    ...at(4),
+    kind: 'response',
+    promptId: 'p3',
+    text: 'The status page shows **Database: up** and the API answering `200 OK` in 14 ms, after **Check again** too. The console has no errors.',
+  },
 ];
 
 const encoder = new TextEncoder();
@@ -441,7 +548,7 @@ export function demoBridge(screen: string): Bridge {
   let viewerVote: VoteView | null = null;
   let nextLink = 1;
   const shareLink = (url: string, title: string | null, by: string, sessionOnly: boolean) => {
-    const event: TimelineEvent = { ...at(9), kind: 'link', id: nextLink++, url, ...(title ? { title } : {}), by, sessionOnly };
+    const event: TimelineEvent = { ...at(4), kind: 'link', id: nextLink++, url, ...(title ? { title } : {}), by, sessionOnly };
     hostEvents?.({ type: 'timeline', event });
     viewerEvents?.({ type: 'timeline', event });
   };
@@ -525,7 +632,7 @@ export function demoBridge(screen: string): Bridge {
         status: 'working',
         viewerLimit: 20,
         exited: null,
-        timeline: demoTimeline,
+        timeline: new URLSearchParams(globalThis.location?.search ?? '').get('scene') === 'browser' ? [...demoTimeline, ...demoBrowserTimeline] : demoTimeline,
         suggestionsPossible: true,
         suggestionsAllowed: true,
         suggestions: hostSuggestions,
@@ -688,6 +795,11 @@ export function demoBridge(screen: string): Bridge {
           events({ type: 'participants', participants: demoParticipants });
           events({ type: 'status', status: 'working' });
           for (const event of demoTimeline) events({ type: 'timeline', event });
+          if (params.get('scene') === 'browser') for (const event of demoBrowserTimeline) events({ type: 'timeline', event });
+          if (params.get('scene') === 'plans') {
+            for (const event of demoPlanTimeline) events({ type: 'timeline', event });
+            setTimeout(() => demoPlanUpdate.forEach((event) => events({ type: 'timeline', event })), 5000);
+          }
         }
         viewerEvents = events;
         events({ type: 'allowed', suggestions: params.get('suggestions') !== 'off' });

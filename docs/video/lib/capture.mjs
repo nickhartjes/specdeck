@@ -1,11 +1,16 @@
-// What every video's capture.mjs shares: the UI dev server on :5173 (started when it is not
-// running), the installed Google Chrome, a fixed clock, and recording where things are on screen.
+// What every video's capture.mjs shares: the UI dev server, for the app on :5173 or the web viewer
+// on :5174 (started when it is not running), the installed Google Chrome, a fixed clock, and
+// recording where things are on screen.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
-const BASE = 'http://localhost:5173';
 const ui = new URL('../../../app/ui/', import.meta.url).pathname;
+// The app's page (index.html), or the web viewer's (web.html, with its own Vite config).
+const SERVERS = {
+  app: { port: 5173, args: [] },
+  web: { port: 5174, args: ['--config', 'vite.web.config.ts'] },
+};
 
 // The demo's last timeline event is 13:06 UTC on 31 October 2026; a clock just after it makes
 // "for how long" read seconds, not days.
@@ -14,17 +19,22 @@ const CLOCK = Date.UTC(2026, 9, 31, 13, 6, 12);
 // The demo profile has an update waiting; a how-to video should not show it.
 const HIDE = '.update-notice, button[title$="is ready. Restart to update."] { display: none !important; }';
 
-/** Opens the demo for the video in `dir` (its folder URL); shots go to its assets/shots/. */
-export async function capture(dir) {
+/**
+ * Opens the demo for the video in `dir` (its folder URL); shots go to its assets/shots/.
+ * `server` is `app` (the app's demo) or `web` (the web viewer's page).
+ */
+export async function capture(dir, { server: which = 'app' } = {}) {
   const shots = new URL('./assets/shots/', dir).pathname;
   mkdirSync(shots, { recursive: true });
 
+  const { port, args } = SERVERS[which];
+  const BASE = `http://localhost:${port}`;
   const running = () => fetch(BASE).then(() => true, () => false);
   let server = null;
   if (!(await running())) {
-    server = spawn('pnpm', ['exec', 'vite', '--port', '5173', '--strictPort'], { cwd: ui, stdio: 'ignore', detached: true });
+    server = spawn('pnpm', ['exec', 'vite', ...args, '--port', String(port), '--strictPort'], { cwd: ui, stdio: 'ignore', detached: true });
     for (let i = 0; !(await running()); i++) {
-      if (i === 60) throw new Error('the UI dev server did not start on :5173');
+      if (i === 60) throw new Error(`the UI dev server did not start on :${port}`);
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
@@ -49,6 +59,11 @@ export async function capture(dir) {
     async go(path) {
       await page.goto(BASE + path);
       await page.waitForTimeout(1500);
+    },
+    /** Opens a page that is not the UI, such as a local file (a URL) or the docs site. */
+    async open(url) {
+      await page.goto(String(url));
+      await page.waitForTimeout(800);
     },
     /** Records where `locator` is, as fractions of the viewport. */
     async box(name, locator) {

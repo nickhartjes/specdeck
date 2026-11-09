@@ -1,0 +1,2 @@
+$ docker compose logs server --no-log-prefix --tail 6
+2026-11-09T13:37:39.622057Z  INFO specdeck_server: sharing service listening on 0.0.0.0:8080

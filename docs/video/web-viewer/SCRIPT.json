@@ -1,0 +1,11 @@
+[
+  { "id": "intro", "text": "Can't install SpecDeck, for example on a company laptop? You can watch a session in your browser instead. Hosting still needs the app." },
+  { "id": "link", "text": "Open the web link the host shared, or go to the sharing service's address and type the invite code." },
+  { "id": "private", "text": "The code is never sent to the server: in a link, it sits after the hash, which browsers keep to themselves." },
+  { "id": "name", "text": "Enter your name, and select Watch in this browser. There is no account: your name stays in this browser." },
+  { "id": "session", "text": "You see the session as in the app: the files, the terminal and documents in tabs, and the timeline." },
+  { "id": "layout", "text": "The layout menu has Overview, Developer and Present, and the appearance: System follows your browser, or choose Light or Dark." },
+  { "id": "export", "text": "If something goes wrong, Export diagnostics in the same menu saves a file for a bug report." },
+  { "id": "keys", "text": "Some keys differ, because the browser keeps its own. Press the question mark to see them all." },
+  { "id": "outro", "text": "Each page joins only sessions on its own sharing service, and comes from that service, so you trust whoever runs it." }
+]
