@@ -26,7 +26,7 @@ The [known limits](/specdeck/security/known-limits/) list everything that is wea
 
 The host runs the coding agent in a folder on their own computer, and SpecDeck mirrors the session from there. Each viewer, in the app or in a browser, connects straight to the host over an encrypted WebRTC connection (DTLS). When the networks in between do not allow a direct connection, the same encrypted traffic goes through a TURN relay, which forwards it without being able to read it.
 
-The sharing service only helps them find each other: it matches a viewer to the host by the invite code and passes on the messages that set up the connection. It sees IP addresses, room ids and that setup. The server keeps them in memory only; the relay logs the addresses it connects (see [What the service sees and keeps](/specdeck/security/sharing-service/#what-the-service-sees-and-keeps)).
+The sharing service only helps them find each other: it matches a viewer to the host by the invite code and passes on the messages that set up the connection. It sees IP addresses, room ids and that setup. The server keeps them in memory only, and its log records when sessions open and close and how many viewers join, without ids or addresses; the relay logs the addresses it connects (see [What the service sees and keeps](/specdeck/security/sharing-service/#what-the-service-sees-and-keeps)).
 
 ## Who runs the built-in sharing service
 

@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use axum::Router;
@@ -23,12 +23,15 @@ use futures_util::{SinkExt, StreamExt};
 use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage};
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, mpsc};
+use tokio::time::MissedTickBehavior;
 
 mod limits;
+pub mod log;
 mod turn;
 mod web;
 
 use limits::{RateLimiter, TokenBucket};
+use log::{Burst, Closed, Limit, Refusal, SocketError, Throttle};
 pub use turn::TurnConfig;
 pub use web::WebViewer;
 
@@ -53,8 +56,6 @@ const OUTBOUND_BYTES: usize = 256 * 1024;
 /// `SIGNALS_PER_SECOND`. A join takes an offer, an answer and some tens of candidates.
 const SIGNAL_BURST: f64 = 100.0;
 const SIGNALS_PER_SECOND: f64 = 20.0;
-/// How often a limit that keeps being reached is logged.
-const LIMIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 type ConnectionId = String;
 
@@ -85,6 +86,8 @@ pub struct Config {
     /// How long a TURN credentials request from a connection that has not hosted or joined yet
     /// is held before it is refused. Older apps ask just before they open their room.
     pub turn_grace: Duration,
+    /// How often the service's load is logged, when it changed.
+    pub stats_interval: Duration,
 }
 
 impl Default for Config {
@@ -101,6 +104,7 @@ impl Default for Config {
             max_rooms: 4_000,
             idle_timeout: Duration::from_secs(30),
             turn_grace: Duration::from_secs(2),
+            stats_interval: Duration::from_secs(5 * 60),
         }
     }
 }
@@ -117,8 +121,8 @@ impl Default for Service {
 }
 
 struct Inner {
-    /// Open rooms and the host connection holding each.
-    rooms: HashMap<String, ConnectionId>,
+    /// Open rooms by id.
+    rooms: HashMap<String, Room>,
     connections: HashMap<ConnectionId, Connection>,
     failed_joins: RateLimiter<IpAddr>,
     room_joins: RateLimiter<String>,
@@ -126,9 +130,28 @@ struct Inner {
     networks: HashMap<IpAddr, usize>,
     connection_total: usize,
     /// When each limit was last logged.
-    limits_logged: HashMap<&'static str, Instant>,
+    limits: log::Limits,
+    /// Refusals and socket errors being counted.
+    throttle: Throttle,
+    /// The numbers the log gives the next room and the next viewer.
+    next_room: u64,
+    next_peer: u64,
+    /// Connections that got TURN credentials since the last load summary.
+    turn_issued: u64,
+    /// The last load summary logged: connections, rooms, viewers and credentials.
+    last_stats: (usize, usize, usize, u64),
     turn: Option<TurnConfig>,
     max_rooms: usize,
+}
+
+struct Room {
+    /// The host connection holding it.
+    host: ConnectionId,
+    /// Its number in the log.
+    number: u64,
+    opened: Instant,
+    /// Viewers that joined through it.
+    joined: u64,
 }
 
 struct Connection {
@@ -179,6 +202,9 @@ enum Role {
     },
     Viewer {
         host: ConnectionId,
+        /// Its number in the log.
+        number: u64,
+        joined: Instant,
     },
 }
 
@@ -195,6 +221,7 @@ pub fn router(service: Arc<Service>) -> Router {
 
 /// Serves until the listener fails.
 pub async fn serve(listener: TcpListener, service: Arc<Service>) -> std::io::Result<()> {
+    tokio::spawn(report(Arc::downgrade(&service)));
     axum::serve(listener, router(service).into_make_service_with_connect_info::<SocketAddr>()).await
 }
 
@@ -271,6 +298,28 @@ fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted_proxies: usize) -> IpAdd
     forwarded.len().checked_sub(trusted_proxies).map_or(peer, |i| forwarded[i])
 }
 
+/// Logs the load every `stats_interval` when it changed, and the counts of bursts once their
+/// minute is over, until the service is dropped.
+async fn report(service: Weak<Service>) {
+    let Some(every) = service.upgrade().map(|service| service.config.stats_interval) else {
+        return;
+    };
+    let mut tick = tokio::time::interval(every.min(log::WINDOW));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut last = Instant::now();
+    loop {
+        tick.tick().await;
+        let Some(service) = service.upgrade() else { return };
+        let now = Instant::now();
+        let mut inner = service.inner.lock().unwrap();
+        inner.throttle.flush(now);
+        if now.duration_since(last) >= every {
+            last = now;
+            inner.stats();
+        }
+    }
+}
+
 async fn handle(socket: WebSocket, service: Arc<Service>, slot: Slot) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<String>(OUTBOUND_QUEUE);
@@ -303,13 +352,21 @@ async fn handle(socket: WebSocket, service: Arc<Service>, slot: Slot) {
                         }
                         service.handle(&id, message);
                     }
-                    Err(_) => service.reply(&id, ServerMessage::Error { code: ErrorCode::BadMessage }),
+                    Err(_) => {
+                        service.socket_error(SocketError::BadMessage);
+                        service.reply(&id, ServerMessage::Error { code: ErrorCode::BadMessage });
+                    }
                 },
-                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+                Some(Err(error)) => {
+                    service.socket_error(socket_error(error));
+                    break;
+                }
+                Some(Ok(Message::Close(_))) | None => break,
                 Some(Ok(_)) => {}
             },
             () = &mut idle, if !idle_checked => {
                 if !service.is_member(&id) {
+                    log::idle_closed();
                     break;
                 }
                 idle_checked = true;
@@ -336,7 +393,12 @@ impl Service {
             room_joins: RateLimiter::new(config.joins_per_room, config.window),
             networks: HashMap::new(),
             connection_total: 0,
-            limits_logged: HashMap::new(),
+            limits: log::Limits::default(),
+            throttle: Throttle::default(),
+            next_room: 1,
+            next_peer: 1,
+            turn_issued: 0,
+            last_stats: (0, 0, 0, 0),
             turn: config.turn.clone(),
             max_rooms: config.max_rooms,
         };
@@ -360,28 +422,39 @@ impl Service {
     fn handle(&self, from: &str, message: ClientMessage) {
         let mut inner = self.inner.lock().unwrap();
         let now = Instant::now();
-        let result = match message {
-            ClientMessage::Host { room } => {
-                check_room(&room).and_then(|()| inner.open_room(from, room))
-            }
+        // The event that logs a refusal, for the messages whose refusals are logged.
+        type Refused = Option<fn(Refusal) -> Burst>;
+        let (result, refused): (_, Refused) = match message {
+            ClientMessage::Host { room } => (
+                check_room(&room).and_then(|()| inner.open_room(from, room, now)),
+                Some(Burst::RoomRefused),
+            ),
             ClientMessage::CloseRoom { room } => {
-                check_room(&room).and_then(|()| inner.close_room(from, &room))
+                (check_room(&room).and_then(|()| inner.close_room(from, &room, now)), None)
             }
-            ClientMessage::Join { room } => {
-                check_room(&room).and_then(|()| inner.join(from, &room, now))
-            }
+            ClientMessage::Join { room } => (
+                check_room(&room).and_then(|()| inner.join(from, &room, now)),
+                Some(Burst::PeerRefused),
+            ),
             ClientMessage::Signal { connection, payload } => {
-                inner.relay(from, &connection, payload, now)
+                (inner.relay(from, &connection, payload, now), None)
             }
-            ClientMessage::TurnCredentials => inner.turn_credentials(from),
+            ClientMessage::TurnCredentials => (inner.turn_credentials(from), None),
         };
         if let Err(code) = result {
+            if let (Some(burst), Some(reason)) = (refused, refusal(code)) {
+                inner.throttle.record(burst(reason), now);
+            }
             inner.send(from, ServerMessage::Error { code });
         }
     }
 
     fn reply(&self, to: &str, message: ServerMessage) {
         self.inner.lock().unwrap().send(to, message);
+    }
+
+    fn socket_error(&self, kind: SocketError) {
+        self.inner.lock().unwrap().throttle.record(Burst::SocketError(kind), Instant::now());
     }
 
     fn is_member(&self, id: &str) -> bool {
@@ -402,16 +475,20 @@ impl Service {
     fn disconnect(&self, id: &str) {
         let mut inner = self.inner.lock().unwrap();
         let Some(connection) = inner.connections.remove(id) else { return };
+        let now = Instant::now();
         match connection.role {
             Role::Host { rooms, viewers } => {
                 for room in rooms {
-                    inner.rooms.remove(&room);
+                    if let Some(room) = inner.rooms.remove(&room) {
+                        room.closed(now, Closed::HostLeft);
+                    }
                 }
                 for viewer in viewers {
                     inner.send(&viewer, ServerMessage::PeerLeft { connection: viewer.clone() });
                 }
             }
-            Role::Viewer { host } => {
+            Role::Viewer { host, number, joined } => {
+                log::peer_left(number, now.duration_since(joined));
                 if let Some(Connection { role: Role::Host { viewers, .. }, signals, .. }) =
                     inner.connections.get_mut(&host)
                 {
@@ -435,6 +512,43 @@ impl Service {
     }
 }
 
+/// Why a join or a room was refused, for the log.
+fn refusal(code: ErrorCode) -> Option<Refusal> {
+    match code {
+        ErrorCode::RoomNotFound => Some(Refusal::UnknownRoom),
+        ErrorCode::RoomTaken => Some(Refusal::RoomTaken),
+        ErrorCode::RateLimited => Some(Refusal::RateLimited),
+        ErrorCode::BadMessage => Some(Refusal::BadMessage),
+        ErrorCode::ServerBusy => Some(Refusal::Busy),
+        ErrorCode::UnknownConnection | ErrorCode::TurnUnavailable => None,
+    }
+}
+
+/// How a WebSocket failed, without the error's text, which can hold addresses.
+fn socket_error(error: axum::Error) -> SocketError {
+    use tungstenite::error::{Error, ProtocolError};
+    let error = error.into_inner();
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&*error);
+    while let Some(error) = cause {
+        if let Some(error) = error.downcast_ref::<Error>() {
+            return match error {
+                Error::Capacity(_) => SocketError::TooLarge,
+                Error::Protocol(ProtocolError::ResetWithoutClosingHandshake) => SocketError::Reset,
+                Error::Protocol(_) | Error::Utf8(_) => SocketError::Protocol,
+                _ => SocketError::Reset,
+            };
+        }
+        cause = error.source();
+    }
+    SocketError::Reset
+}
+
+impl Room {
+    fn closed(&self, now: Instant, why: Closed) {
+        log::room_closed(self.number, self.joined, now.duration_since(self.opened), why);
+    }
+}
+
 /// Room ids are short; a long one is refused before it reaches any map.
 fn check_room(room: &str) -> Result<(), ErrorCode> {
     if room.len() > MAX_ROOM_BYTES { Err(ErrorCode::BadMessage) } else { Ok(()) }
@@ -452,33 +566,47 @@ impl Inner {
             || matches!(outbox.tx.try_send(text), Err(mpsc::error::TrySendError::Full(_)));
         if full {
             outbox.close.notify_one();
-            self.limit_reached("backlog per connection", queued);
+            self.throttle.record(Burst::SocketError(SocketError::BacklogFull), Instant::now());
+            self.limit_reached(Limit::Backlog, queued);
         }
     }
 
-    /// Logs a limit, at most once per `LIMIT_LOG_INTERVAL` each. Client addresses are not logged.
-    fn limit_reached(&mut self, limit: &'static str, count: usize) {
-        let now = Instant::now();
-        if self
-            .limits_logged
-            .get(limit)
-            .is_some_and(|&at| now.duration_since(at) < LIMIT_LOG_INTERVAL)
-        {
-            return;
+    fn limit_reached(&mut self, limit: Limit, count: usize) {
+        self.limits.reached(limit, count, Instant::now());
+    }
+
+    /// Logs the load, when it changed since it was last logged.
+    fn stats(&mut self) {
+        let viewers = self
+            .connections
+            .values()
+            .filter(|connection| matches!(connection.role, Role::Viewer { .. }))
+            .count();
+        let stats = (
+            self.connection_total,
+            self.rooms.len(),
+            viewers,
+            std::mem::take(&mut self.turn_issued),
+        );
+        if stats != self.last_stats {
+            self.last_stats = stats;
+            log::stats(stats.0, stats.1, stats.2, stats.3);
         }
-        self.limits_logged.insert(limit, now);
-        tracing::warn!(limit, count, "limit reached");
     }
 
     /// Counts a new connection from `network`, unless a connection limit is reached.
     fn reserve(&mut self, network: IpAddr, config: &Config) -> bool {
         let from_network = self.networks.get(&network).copied().unwrap_or(0);
-        if self.connection_total >= config.max_connections {
-            self.limit_reached("connections", self.connection_total);
-            return false;
-        }
-        if from_network >= config.max_connections_per_ip {
-            self.limit_reached("connections per client network", from_network);
+        let limit = if self.connection_total >= config.max_connections {
+            Some((Limit::Connections, self.connection_total))
+        } else if from_network >= config.max_connections_per_ip {
+            Some((Limit::ConnectionsPerNetwork, from_network))
+        } else {
+            None
+        };
+        if let Some((limit, count)) = limit {
+            self.limit_reached(limit, count);
+            self.throttle.record(Burst::PeerRefused(Refusal::Busy), Instant::now());
             return false;
         }
         self.connection_total += 1;
@@ -516,17 +644,20 @@ impl Inner {
             return;
         };
         connection.turn_wanted = false;
-        let credentials =
-            connection.turn.get_or_insert_with(|| turn.credentials(SystemTime::now())).clone();
+        if connection.turn.is_none() {
+            connection.turn = Some(turn.credentials(SystemTime::now()));
+            self.turn_issued += 1;
+        }
+        let credentials = connection.turn.clone().expect("set above");
         self.send(id, credentials);
     }
 
-    fn open_room(&mut self, from: &str, room: String) -> Result<(), ErrorCode> {
+    fn open_room(&mut self, from: &str, room: String, now: Instant) -> Result<(), ErrorCode> {
         match self.rooms.get(&room) {
-            Some(host) if host != from => return Err(ErrorCode::RoomTaken),
+            Some(open) if open.host != from => return Err(ErrorCode::RoomTaken),
             Some(_) => {}
             None if self.rooms.len() >= self.max_rooms => {
-                self.limit_reached("rooms", self.rooms.len());
+                self.limit_reached(Limit::Rooms, self.rooms.len());
                 return Err(ErrorCode::ServerBusy);
             }
             None => {}
@@ -536,7 +667,7 @@ impl Inner {
             && !rooms.contains(&room)
             && rooms.len() >= MAX_ROOMS_PER_HOST
         {
-            self.limit_reached("rooms per host", MAX_ROOMS_PER_HOST);
+            self.limit_reached(Limit::RoomsPerHost, MAX_ROOMS_PER_HOST);
             return Err(ErrorCode::ServerBusy);
         }
         let turn_wanted = connection.turn_wanted;
@@ -550,7 +681,13 @@ impl Inner {
             }
             Role::Viewer { .. } => return Err(ErrorCode::BadMessage),
         }
-        self.rooms.insert(room.clone(), from.to_owned());
+        if !self.rooms.contains_key(&room) {
+            let number = self.next_room;
+            self.next_room += 1;
+            let open = Room { host: from.to_owned(), number, opened: now, joined: 0 };
+            self.rooms.insert(room.clone(), open);
+            log::room_opened(number, self.rooms.len());
+        }
         self.send(from, ServerMessage::RoomOpened { room });
         if turn_wanted {
             self.give_turn(from);
@@ -558,11 +695,13 @@ impl Inner {
         Ok(())
     }
 
-    fn close_room(&mut self, from: &str, room: &str) -> Result<(), ErrorCode> {
-        if self.rooms.get(room).map(String::as_str) != Some(from) {
+    fn close_room(&mut self, from: &str, room: &str, now: Instant) -> Result<(), ErrorCode> {
+        if self.rooms.get(room).map(|open| open.host.as_str()) != Some(from) {
             return Err(ErrorCode::RoomNotFound);
         }
-        self.rooms.remove(room);
+        if let Some(open) = self.rooms.remove(room) {
+            open.closed(now, Closed::Closed);
+        }
         if let Some(Connection { role: Role::Host { rooms, .. }, .. }) =
             self.connections.get_mut(from)
         {
@@ -580,7 +719,7 @@ impl Inner {
             return Err(ErrorCode::RateLimited);
         }
         self.room_joins.record(room_key, now);
-        let Some(host) = self.rooms.get(room).cloned() else {
+        let Some(host) = self.rooms.get(room).map(|open| open.host.clone()) else {
             self.failed_joins.record(network, now);
             return Err(ErrorCode::RoomNotFound);
         };
@@ -588,19 +727,27 @@ impl Inner {
             self.connections.get(&host)
             && viewers.len() >= MAX_VIEWERS_PER_HOST
         {
-            self.limit_reached("viewers per host", MAX_VIEWERS_PER_HOST);
+            self.limit_reached(Limit::ViewersPerHost, MAX_VIEWERS_PER_HOST);
             return Err(ErrorCode::ServerBusy);
         }
         let viewer = self.connections.get_mut(from).ok_or(ErrorCode::UnknownConnection)?;
         if !matches!(viewer.role, Role::New) {
             return Err(ErrorCode::BadMessage);
         }
-        viewer.role = Role::Viewer { host: host.clone() };
+        let number = self.next_peer;
+        self.next_peer += 1;
+        viewer.role = Role::Viewer { host: host.clone(), number, joined: now };
         let turn_wanted = viewer.turn_wanted;
+        let mut viewers_on_host = 0;
         if let Some(Connection { role: Role::Host { viewers, .. }, .. }) =
             self.connections.get_mut(&host)
         {
             viewers.insert(from.to_owned());
+            viewers_on_host = viewers.len();
+        }
+        if let Some(open) = self.rooms.get_mut(room) {
+            open.joined += 1;
+            log::peer_joined(open.number, number, viewers_on_host);
         }
         self.send(from, ServerMessage::Joined { connection: from.to_owned() });
         self.send(
@@ -623,7 +770,8 @@ impl Inner {
         payload: specdeck_protocol::signalling::SignalPayload,
         now: Instant,
     ) -> Result<(), ErrorCode> {
-        let Some(Connection { role: Role::Viewer { host }, .. }) = self.connections.get(connection)
+        let Some(Connection { role: Role::Viewer { host, .. }, .. }) =
+            self.connections.get(connection)
         else {
             return Err(ErrorCode::UnknownConnection);
         };
@@ -641,7 +789,7 @@ impl Inner {
         });
         if !limit.bucket.take(now) {
             let told = std::mem::replace(&mut limit.told, true);
-            self.limit_reached("signals per connection", SIGNAL_BURST as usize);
+            self.limit_reached(Limit::SignalsPerViewer, SIGNAL_BURST as usize);
             return if told { Ok(()) } else { Err(ErrorCode::RateLimited) };
         }
         limit.told = false;
@@ -677,6 +825,26 @@ mod tests {
         // IPv4 addresses are their own network, also in their IPv6-mapped form.
         assert_ne!(network("203.0.113.7"), network("203.0.113.8"));
         assert_eq!(network("::ffff:203.0.113.7"), network("203.0.113.7"));
+    }
+
+    #[test]
+    fn socket_errors_by_kind_without_their_text() {
+        use std::io;
+        use tungstenite::error::{CapacityError, Error, ProtocolError};
+        let kind = |error: Error| socket_error(axum::Error::new(error));
+        let too_long = CapacityError::MessageTooLong { size: 70_000, max_size: 65_536 };
+        assert_eq!(kind(Error::Capacity(too_long)), SocketError::TooLarge);
+        assert_eq!(
+            kind(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)),
+            SocketError::Reset
+        );
+        assert_eq!(
+            kind(Error::Protocol(ProtocolError::UnmaskedFrameFromClient)),
+            SocketError::Protocol
+        );
+        let reset = io::Error::new(io::ErrorKind::ConnectionReset, "10.0.0.1:443");
+        assert_eq!(kind(Error::Io(reset)), SocketError::Reset);
+        assert_eq!(socket_error(axum::Error::new(io::Error::other("other"))), SocketError::Reset);
     }
 
     #[test]
