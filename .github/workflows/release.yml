@@ -16,7 +16,9 @@
 # only after that (publish-signalling-image design decisions 1 to 5, rename-signalling-to-server
 # decisions 3 to 5). Pushed with GITHUB_TOKEN: no secret.
 #
-# Repository secrets (signing and notarization are skipped while they are missing):
+# Secrets of the `release` environment, which only v* tags and main may use, and only the admin may
+# create v* tags: collaborators' branches cannot read them (signing and notarization are skipped
+# while they are missing):
 #   SPECDECK_SIGNALLING_URL   the team's sharing service, baked into the app
 #   APPLE_CERTIFICATE (base64 .p12, Developer ID Application), APPLE_CERTIFICATE_PASSWORD,
 #   APPLE_SIGNING_IDENTITY    signing on macOS (without them the app is ad-hoc signed)
@@ -92,6 +94,7 @@ jobs:
             rename: 'appimage/*.AppImage=SpecDeck-x86_64.AppImage deb/*.deb=SpecDeck-amd64.deb'
             updates: 'appimage/*.AppImage.sig=SpecDeck-x86_64.AppImage.sig'
     runs-on: ${{ matrix.os }}
+    environment: release
     env:
       SPECDECK_SIGNALLING_URL: ${{ secrets.SPECDECK_SIGNALLING_URL }}
       # Tauri signs the update files with these; empty when the secrets are missing.

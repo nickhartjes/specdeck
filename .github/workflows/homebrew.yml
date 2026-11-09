@@ -2,7 +2,7 @@
 # 13). Called by release.yml after each release; run it by hand to (re)write the cask for an
 # existing tag.
 #
-# Repository secret:
+# Secret of the `release` environment (v* tags and main only; see release.yml):
 #   HOMEBREW_TAP_DEPLOY_KEY   private SSH deploy key with write access to nickhartjes/homebrew-tap
 #                             (the job is skipped with a warning while it is missing)
 name: Homebrew cask
@@ -24,6 +24,7 @@ jobs:
   cask:
     name: Update Homebrew cask
     runs-on: ubuntu-latest
+    environment: release
     env:
       TAG: ${{ inputs.tag }}
       REPO: ${{ github.repository }}
