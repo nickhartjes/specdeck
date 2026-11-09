@@ -44,9 +44,11 @@ jobs:
 
       # session-processes: the app still understands sessions the previous release started, from
       # that release's recorded transcript (app/src-tauri/src/adapter.rs). Part of just check too;
-      # its own step, so a failure says what broke.
+      # its own step, so a failure says what broke. With --workspace, as just check, so it reuses
+      # that build: -p resolves other features and rebuilds the vendored libdatachannel and OpenSSL,
+      # about 9 minutes on Windows.
       - name: Sessions of the previous release
-        run: cargo test -p specdeck-app adapter::tests
+        run: cargo test --workspace adapter::tests
 
       # The web viewer is the same on every platform, and its recipes use bash: once, on Linux.
       - name: Web viewer
