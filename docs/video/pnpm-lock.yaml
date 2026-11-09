@@ -12,8 +12,8 @@ importers:
   .:
     devDependencies:
       hyperframes:
-        specifier: 0.9.16
-        version: 0.9.16
+        specifier: 0.9.23
+        version: 0.9.23
       playwright:
         specifier: ^1.64.0
         version: 1.64.1
@@ -479,8 +479,8 @@ packages:
     resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
     engines: {node: '>=16.9.0'}
 
-  hyperframes@0.9.16:
-    resolution: {integrity: sha512-gTWOalQ9ZWQsODii/e48V37ytCQm1X7YJsf02ayQtS3jRJYNPVbAHvK5MZH7sZxluR1C0UWNOZSxPRJK2ozf2w==}
+  hyperframes@0.9.23:
+    resolution: {integrity: sha512-Fyr1z5QnAEn//SZDlqXzT170h5eo67XapqaQyGuXzNsi+MAbO4aTp/Nf6C657UnEM8BM7NC5+VHcKlE3GObUsg==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -970,7 +970,7 @@ snapshots:
 
   hono@4.13.16: {}
 
-  hyperframes@0.9.16:
+  hyperframes@0.9.23:
     dependencies:
       '@hono/node-server': 2.1.6(hono@4.13.16)
       '@puppeteer/browsers': 3.2.6(yauzl@3.4.0)
