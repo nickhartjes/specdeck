@@ -1,15 +1,24 @@
 name: CI
 
+# Changes to specs, design docs and the root Markdown files build nothing, so they run no CI. A
+# push or pull request that also touches anything else still runs it all.
 on:
   push:
     branches: [main]
+    paths-ignore: ['openspec/**', 'docs/**', '*.md', LICENSE]
   pull_request:
+    paths-ignore: ['openspec/**', 'docs/**', '*.md', LICENSE]
   # Started by renovate-nix-hash.yml for the commit it pushes, which starts no workflow itself.
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# Line tables are enough for test backtraces; full debug info made the Rust caches 2 GB per
+# platform, close to GitHub's 10 GB for all caches, and slowed linking.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   check:

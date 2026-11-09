@@ -7,6 +7,8 @@ name: Nix
 on:
   push:
     branches: [main]
+    # Specs, design docs and the root Markdown files are not part of the build.
+    paths-ignore: ['openspec/**', 'docs/**', '*.md', LICENSE]
   pull_request:
     paths:
       - flake.nix
