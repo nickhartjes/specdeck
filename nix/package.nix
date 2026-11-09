@@ -40,14 +40,21 @@ let
   target = stdenv.hostPlatform.rust.rustcTargetSpec;
 
   # Shared by both derivations: what the Cargo builds see must match, or Cargo rebuilds the
-  # dependencies. So no other packages here that change PKG_CONFIG_PATH for the *-sys crates.
+  # dependencies. That includes the order of PKG_CONFIG_PATH and the C flags, which the *-sys crates
+  # and bindgen track, so the dependencies get the package's build tools too.
   commonArgs = {
     inherit pname version src;
     strictDeps = true;
     cargoVendorDir = craneLib.vendorCargoDeps { inherit src; };
 
     nativeBuildInputs = [
+      # Only for its fixup, which adds GStreamer and NVIDIA settings to the wrapper; crane's build
+      # and install phases replace the hook's.
+      cargo-tauri.hook
+      nodejs
+      pnpm
       pkg-config
+      wrapGAppsHook3
       # The vendored libdatachannel and OpenSSL of the datachannel crate.
       cmake
       perl
@@ -74,6 +81,13 @@ let
     # Stripping is left to Nix, as in nixpkgs' Tauri hook. A profile setting, so the dependencies
     # are built with it too.
     env.CARGO_PROFILE_RELEASE_STRIP = "false";
+
+    # bindgen's build script tracks these flags, which hold stdenv's -frandom-seed, taken from each
+    # derivation's own output path; it doesn't affect the bindings.
+    preBuild = ''
+      BINDGEN_EXTRA_CLANG_ARGS=$(sed -E 's/ -frandom-seed=[^ ]+//' <<<"$BINDGEN_EXTRA_CLANG_ARGS")
+      export BINDGEN_EXTRA_CLANG_ARGS
+    '';
   };
 
   # The two Cargo builds of the package: the app as `cargo tauri build` builds it, with Tauri's
@@ -105,15 +119,7 @@ craneLib.buildPackage (
     # nix.yml caches .#specdeck.cargoArtifacts.
     inherit cargoArtifacts pnpmDeps;
 
-    nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
-      # Only for its fixup, which adds GStreamer and NVIDIA settings to the wrapper; crane's build
-      # and install phases replace the hook's.
-      cargo-tauri.hook
-      nodejs
-      pnpm
-      pnpmConfigHook
-      wrapGAppsHook3
-    ];
+    nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pnpmConfigHook ];
 
     env =
       commonArgs.env
@@ -133,6 +139,8 @@ craneLib.buildPackage (
       popd
     '';
 
+    # Installed from the bundle below, not from Cargo's build log.
+    doNotPostBuildInstallCargoBinaries = true;
     installPhaseCommand = ''
       mkdir -p $out
       mv target/${stdenv.hostPlatform.rust.cargoShortTarget}/release/bundle/deb/*/data/usr/* $out/
