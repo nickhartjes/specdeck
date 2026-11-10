@@ -150,8 +150,9 @@ fn image_type(bytes: &[u8]) -> Option<(&'static str, &'static [&'static str])> {
 }
 
 /// `name` as a plain file name: the part after the last `/` or `\`, without control characters,
-/// characters Windows does not allow in names, or leading dots and spaces, and at most
-/// [`MAX_FILE_NAME_BYTES`] bytes. Empty when nothing is left.
+/// characters Windows does not allow in names, or leading dots and spaces, with a `_` in front of
+/// a name Windows reserves for a device (on every platform, so everyone sees one name), and at
+/// most [`MAX_FILE_NAME_BYTES`] bytes. Empty when nothing is left.
 pub fn clean_name(name: &str) -> String {
     let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
     let kept: String = last
@@ -159,11 +160,41 @@ pub fn clean_name(name: &str) -> String {
         .filter(|c| !c.is_control() && !matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
         .collect();
     let trimmed = kept.trim_start_matches(['.', ' ']).trim_end();
-    let mut name = trimmed.to_owned();
+    let mut name = if is_device_name(trimmed) { format!("_{trimmed}") } else { trimmed.to_owned() };
     if name.len() > MAX_FILE_NAME_BYTES {
         name.truncate(name.floor_char_boundary(MAX_FILE_NAME_BYTES));
     }
     name
+}
+
+/// Whether Windows reserves `name` for a device: `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` or
+/// `LPT1` to `LPT9` before its first `.`, compared without case.
+fn is_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    matches!(
+        stem.as_bytes(),
+        b"CON"
+            | b"PRN"
+            | b"AUX"
+            | b"NUL"
+            | [b'C', b'O', b'M', b'1'..=b'9']
+            | [b'L', b'P', b'T', b'1'..=b'9']
+    )
+}
+
+/// Names an agent reads as instructions in the folder it works in, compared without case.
+const INSTRUCTION_NAMES: [&str; 3] = ["claude.md", "claude.local.md", "agents.md"];
+
+/// `name` as it is written in the session folder: an agent's instruction file gets ` (shared)`
+/// before its extension, so the agent reads it only as a file it is pointed to.
+fn written_name(name: String) -> String {
+    if !INSTRUCTION_NAMES.contains(&name.to_lowercase().as_str()) {
+        return name;
+    }
+    match name.rsplit_once('.') {
+        Some((stem, extension)) => format!("{stem} (shared).{extension}"),
+        None => name,
+    }
 }
 
 fn extension(name: &str) -> Option<&str> {
@@ -584,7 +615,7 @@ pub fn put_in_folder(
     }
     let name = match clean_name(name) {
         name if name.is_empty() => "file".to_owned(),
-        name => name,
+        name => written_name(name),
     };
     let (stem, extension) = match name.rsplit_once('.') {
         Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
@@ -622,6 +653,22 @@ mod tests {
         assert_eq!(clean_name(".env"), "env");
         assert_eq!(clean_name("..."), "");
         assert_eq!(clean_name("what?<>.md"), "what.md");
+        for (name, cleaned) in [
+            ("NUL", "_NUL"),
+            ("nul.txt", "_nul.txt"),
+            ("Con.md", "_Con.md"),
+            ("COM1", "_COM1"),
+            ("lpt9.log", "_lpt9.log"),
+            ("dir/aux.tar.gz", "_aux.tar.gz"),
+        ] {
+            assert_eq!(clean_name(name), cleaned, "{name}");
+        }
+        for name in ["CONSOLE.md", "null.txt", "COM10.txt", "LPT0", "xCON.md"] {
+            assert_eq!(clean_name(name), name, "{name}");
+        }
+        let long_device = format!("CON.{}", "x".repeat(300));
+        assert!(clean_name(&long_device).len() <= MAX_FILE_NAME_BYTES);
+        assert!(clean_name(&long_device).starts_with("_CON."));
         let long = "é".repeat(200);
         let cut = clean_name(&long);
         assert!(cut.len() <= MAX_FILE_NAME_BYTES && cut.chars().all(|c| c == 'é'));
@@ -771,6 +818,23 @@ mod tests {
             PNG,
             "never replaced"
         );
+    }
+
+    #[test]
+    fn instruction_files_are_written_under_another_name() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = session(root.path());
+        let put = |sub: &str, name: &str| put_in_folder(&folder, root.path(), sub, name, b"a");
+        assert_eq!(put("", "CLAUDE.md").unwrap(), "shared/CLAUDE (shared).md");
+        assert_eq!(put("", "claude.local.md").unwrap(), "shared/claude.local (shared).md");
+        assert_eq!(put("", "CLAUDE.md").unwrap(), "shared/CLAUDE (shared) (2).md");
+        assert_eq!(
+            put(BRAINDUMP_FOLDER, "AGENTS.md").unwrap(),
+            format!("shared/{BRAINDUMP_FOLDER}/AGENTS (shared).md")
+        );
+        assert_eq!(put("", "README.md").unwrap(), "shared/README.md");
+        assert!(!root.path().join("shared/CLAUDE.md").exists());
+        assert!(root.path().join("shared/CLAUDE (shared).md").exists());
     }
 
     #[cfg(unix)]
