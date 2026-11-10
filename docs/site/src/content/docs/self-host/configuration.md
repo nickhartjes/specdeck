@@ -106,7 +106,7 @@ The server signs TURN credentials with the shared secret (the TURN REST API sche
 | `--min-port`, `--max-port` | The relay ports; open the same range in the firewall |
 | `--no-tcp`, `--no-tls`, `--no-tcp-relay` | The apps use TURN over UDP only. coturn 4.18 and later leave DTLS off by default and refuse `--no-dtls`; add it only on older versions |
 | `--denied-peer-ip=<range>` for each private, loopback, link-local and other special-purpose range, IPv4 and IPv6 | Keeps the relay from reaching into your own network |
-| `--user-quota=40` | Allocations per credential. One credential cannot take the whole relay; a host needs one per viewer |
+| `--user-quota=<at most half the total>` | Allocations per credential: at most half of `--total-quota`, and no more than 40 (Compose: 40 of 100; Kubernetes: 10 of 20). One credential cannot take the whole relay; a host needs one per viewer |
 | `--total-quota=<relay ports>` | Allocations in total, as many as there are relay ports, so a full relay says so instead of failing to find a port |
 | `--max-bps=2500000` | Bandwidth per allocation: 20 Mbit/s, enough for a late joiner's catch-up |
 

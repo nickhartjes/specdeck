@@ -37,7 +37,7 @@
 ## 6. Relay manifests and tool versions
 
 - [ ] 6.1 Set the Kubernetes relay to the coturn version in `deploy/compose/compose.yaml`, drop arguments that version refuses, and set `--user-quota=10` with a comment that explains it (design decision 8); verify with `docker run` of that image and the manifest's arguments that coturn stays up for 10 seconds, and with `just local-test` where Colima is available
-- [ ] 6.2 Add `scripts/check-relay-manifests.sh` to `just check` (same coturn tag in both files; per-credential quota below the total in each) and extend `ci.yml`'s `relay` job to start coturn with the Kubernetes arguments too; verify the script fails on the manifests as they are now and passes after 6.1
+- [x] 6.2 Add `scripts/check-relay-manifests.sh` to `just check` (same coturn tag in both files; per-credential quota below the total in each) and extend `ci.yml`'s `relay` job to start coturn with the Kubernetes arguments too; verify the script fails on the manifests as they are now and passes after 6.1
 - [ ] 6.3 Make the Dockerfile's pnpm version a build argument whose default equals `mise.toml`, pass it in `ci.yml` and `release.yml`, and fail `just check` when the two differ (design decision 9); verify `docker build -f docker/server.Dockerfile .` still builds
 - [ ] 6.4 Update `docs/site/src/content/docs/self-host/configuration.md` (the `--user-quota` row: at most half of the total, no more than 40) and `kubernetes.md` (raise the port range, the Service's ports and both quotas together); verify with `just docs-build`
 

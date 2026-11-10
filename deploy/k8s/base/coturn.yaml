@@ -15,7 +15,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: coturn
-          image: coturn/coturn:4.7
+          image: coturn/coturn:4.18
           args:
             - --log-file=stdout
             - --listening-port=3478
@@ -30,17 +30,19 @@ spec:
             - --fingerprint
             # The root filesystem is read-only; the pid file goes to the writable state volume.
             - --pidfile=/var/lib/coturn/turnserver.pid
-            - --no-cli
-            # The app reaches TURN over UDP only (libjuice has no TURN over TCP or TLS).
+            # The app reaches TURN over UDP only (libjuice has no TURN over TCP or TLS). DTLS and
+            # the CLI are off by default since 4.18, which refuses --no-dtls.
             - --no-tcp
             - --no-tls
-            - --no-dtls
             - --no-tcp-relay
             - --no-multicast-peers
             # Quotas, so one credential or one session cannot take the whole relay. Each viewer
             # uses about two allocations, and a host one per viewer. Keep the total equal to the
-            # number of relay ports above, and raise both together.
-            - --user-quota=40
+            # number of relay ports above, and the per-credential quota at most half of it (and no
+            # more than 40): one credential then holds at most half the relay, and a host can still
+            # relay as many viewers as there is room for. Raise the ports, the Service's port list
+            # and both quotas together. scripts/check-relay-manifests.sh checks the order.
+            - --user-quota=10
             - --total-quota=20
             # 20 Mbit/s per allocation, in bytes per second. No --bps-capacity: coturn reserves
             # this rate twice (in and out) for every allocation against it, so it limits

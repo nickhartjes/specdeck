@@ -106,7 +106,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - run: docker build -f docker/server.Dockerfile -t specdeck-server:ci .
+      # With the pnpm of mise.toml, as the release builds it.
+      - run: docker build --build-arg PNPM_VERSION="$(sed -n 's/^pnpm = "\(.*\)"$/\1/p' mise.toml)" -f docker/server.Dockerfile -t specdeck-server:ci .
 
       - name: Serve the web viewer from the image
         run: |
@@ -117,8 +118,9 @@ jobs:
           curl -sf http://127.0.0.1:8080/join | grep -q '<div id="root">'
           curl -sfI http://127.0.0.1:8080/join | grep -qi '^content-security-policy:'
 
-  # The Compose relay as self-hosters start it: coturn exits on options it no longer accepts
-  # (4.18 refuses --no-dtls), and a Renovate bump of the image would otherwise ship that unnoticed.
+  # The Compose and Kubernetes relays as self-hosters start them: coturn exits on options it no
+  # longer accepts (4.18 refuses --no-dtls), and a Renovate bump of the image would otherwise ship
+  # that unnoticed. scripts/check-relay-manifests.sh keeps both on the same version.
   relay:
     runs-on: ubuntu-26.04
     steps:
@@ -140,3 +142,29 @@ jobs:
           docker compose logs coturn
           id=$(docker compose ps --all --quiet coturn)
           test "$(docker inspect --format '{{.State.Running}} {{.RestartCount}}' "$id")" = "true 0"
+          # Both use the host's ports.
+          docker compose down
+
+      # The manifest's image and arguments, with its $(…) variables filled in, as its pod runs them:
+      # as nobody, with a read-only root and the state directory writable.
+      - name: Start the Kubernetes relay
+        run: |
+          set -euo pipefail
+          manifest=deploy/k8s/base/coturn.yaml
+          image=$(sed -n 's/^ *image: *\(coturn\/coturn:[^ ]*\)$/\1/p' "$manifest")
+          # The manifest's $(…) are Kubernetes variables, quoted on purpose.
+          # shellcheck disable=SC2016
+          mapfile -t args < <(
+            awk '/^ *args:$/ { on = 1; next } on && /^ *[a-z]+:/ { on = 0 } on && /^ *- --/ { sub(/^ *- /, ""); print }' "$manifest" |
+              sed -e 's/\$(TURN_EXTERNAL_IP)/127.0.0.1/' -e 's/\$(TURN_SECRET)/ci/' -e 's/\$(POD_IP)/127.0.0.1/'
+          )
+          # shellcheck disable=SC2016
+          if [ -z "$image" ] || [ "${#args[@]}" -lt 10 ] || printf '%s\n' "${args[@]}" | grep -q '\$('; then
+            echo "::error::Could not read the image and arguments from $manifest"
+            exit 1
+          fi
+          docker run --detach --name k8s-relay --network host --user 65534:65534 --read-only \
+            --tmpfs /var/lib/coturn:uid=65534,gid=65534 "$image" "${args[@]}"
+          sleep 10
+          docker logs k8s-relay
+          test "$(docker inspect --format '{{.State.Running}} {{.RestartCount}}' k8s-relay)" = "true 0"

@@ -27,7 +27,7 @@ patches:
         value: { name: NODE_IP, valueFrom: { fieldRef: { fieldPath: status.hostIP } } }
   # Locally both peers are always relayed through this one coturn, so relay traffic stays inside
   # the pod: coturn advertises the pod's own address, the relay ports are not exposed, and the
-  # range, and the total quota with it, is wide enough for allocations that linger after earlier
+  # range, and the quotas with it, are wide enough for allocations that linger after earlier
   # test runs.
   - target: { kind: Deployment, name: specdeck-turn }
     patch: |-
@@ -39,8 +39,10 @@ patches:
       - { op: replace, path: /spec/template/spec/containers/0/args/2, value: "--min-port=51000" }
       - { op: test, path: /spec/template/spec/containers/0/args/3, value: "--max-port=49179" }
       - { op: replace, path: /spec/template/spec/containers/0/args/3, value: "--max-port=51999" }
-      - { op: test, path: /spec/template/spec/containers/0/args/17, value: "--total-quota=20" }
-      - { op: replace, path: /spec/template/spec/containers/0/args/17, value: "--total-quota=1000" }
+      - { op: test, path: /spec/template/spec/containers/0/args/14, value: "--user-quota=10" }
+      - { op: replace, path: /spec/template/spec/containers/0/args/14, value: "--user-quota=40" }
+      - { op: test, path: /spec/template/spec/containers/0/args/15, value: "--total-quota=20" }
+      - { op: replace, path: /spec/template/spec/containers/0/args/15, value: "--total-quota=1000" }
   - target: { kind: Service, name: specdeck-turn }
     patch: |-
       - op: replace

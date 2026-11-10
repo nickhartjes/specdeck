@@ -267,11 +267,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      - name: Read the pnpm version from mise.toml
+        id: pnpm
+        run: echo "version=$(sed -n 's/^pnpm = "\(.*\)"$/\1/p' mise.toml)" >> "$GITHUB_OUTPUT"
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: docker/server.Dockerfile
+          build-args: PNPM_VERSION=${{ steps.pnpm.outputs.version }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/specdeck-server,push-by-digest=true,name-canonical=true,push=true
