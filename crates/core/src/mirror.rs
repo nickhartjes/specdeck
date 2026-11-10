@@ -244,6 +244,7 @@ printf "\nfirst=[%s] second=[%s] done\n" "${first#?}" "$second"'"#,
             rows: 24,
             extra_args: vec![],
             extra_env: vec![],
+            start: None,
         };
         let mut process = launch(&options, &env).unwrap();
         let mut mirror = Mirror::new(80, 24);

@@ -143,6 +143,8 @@ export interface TimelineModel {
   files: TouchedFile[];
   /** Why the timeline is unavailable right now, or null. */
   unavailable: string | null;
+  /** Whether the reason comes with the guide to setting up a sandbox (`agent-sandbox`). */
+  unavailableSandbox: boolean;
 }
 
 export function totalTokens(tokens: TokenCounts): number {
@@ -165,6 +167,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
   // The mark for the next prompt, which comes right after it.
   let pendingMark: { by: string; edited: boolean } | null = null;
   let unavailable: string | null = null;
+  let unavailableSandbox = false;
   // The session total when each turn started; a turn's tokens are what was added since.
   let sessionTotal = 0;
   const startTotals = new Map<Turn, number>();
@@ -287,9 +290,11 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
       }
       case 'timeline-unavailable':
         unavailable = event.reason;
+        unavailableSandbox = event.help === 'sandbox';
         break;
       case 'timeline-available':
         unavailable = null;
+        unavailableSandbox = false;
         break;
       case 'usage': {
         const total = totalTokens(event.tokens);
@@ -366,7 +371,7 @@ export function buildTimeline(events: TimelineEvent[]): TimelineModel {
   const sorted = [...files.values()].sort(
     (a, b) => Number(a.readOnly) - Number(b.readOnly) || a.path.localeCompare(b.path),
   );
-  return { turns, links, earlyLinks, asks, earlyAsks, suggested, files: sorted, unavailable };
+  return { turns, links, earlyLinks, asks, earlyAsks, suggested, files: sorted, unavailable, unavailableSandbox };
 }
 
 /** A short line describing what a tool call does, for its timeline entry. */

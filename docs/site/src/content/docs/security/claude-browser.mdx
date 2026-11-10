@@ -13,9 +13,9 @@ On macOS, a Claude Code session gets a browser of its own, so Claude can check t
 
 Claude Code reaches the browser through a small web server that SpecDeck starts for each session. The same server receives the events that build the session's timeline.
 
-- **It listens on `127.0.0.1` only**, on a port the system picks, so nothing on your network can reach it.
+- **It listens on `127.0.0.1` only**, on a port the system picks, so nothing on your network can reach it. When Claude Code runs [in a sandbox](/specdeck/guide/sandbox/), it reaches the server through the sandbox's own way to your computer, such as `host.docker.internal`, which arrives on `127.0.0.1` too; a sandbox or container on your computer whose network allows the port can reach it, other machines still can't.
 - **Every request needs the session's token.** The token is 32 random bytes, new for every session, and the server refuses any request to `/hooks`, `/status` or `/mcp` without it. Another program on your computer that finds the port still gets nothing.
-- **The token is not written to disk.** Claude Code gets it in its environment, as `SPECDECK_HOOK_TOKEN`. The settings files SpecDeck gives Claude Code, including the MCP configuration that adds the browser, contain `${SPECDECK_HOOK_TOKEN}` instead of the token, and only your account can read them. They are deleted when the session ends.
+- **The token is not written to disk.** Claude Code gets it in its environment, as `SPECDECK_HOOK_TOKEN`. The settings files SpecDeck gives Claude Code, including the MCP configuration that adds the browser, contain `${SPECDECK_HOOK_TOKEN}` instead of the token, and only your account can read them. They are deleted when the session ends. Started through a [start command](/specdeck/guide/sandbox/), Claude Code gets the same settings as arguments instead of files, still without the token, which the start command gets in its environment and passes into the sandbox.
 
 Commands the agent runs inherit Claude Code's environment, and with it the token. See [Known limits](/specdeck/security/known-limits/#the-hook-token-is-visible-to-the-agents-commands).
 

@@ -25,6 +25,15 @@ export interface AgentVersion {
 export interface RecentFolder {
   path: string;
   name: string;
+  /** How Claude Code starts there, such as a sandbox script; null starts `claude`. */
+  start: StartCommand | null;
+}
+
+/** A command that starts Claude Code instead of `claude`, with SpecDeck's arguments appended (`agent-sandbox`). */
+export interface StartCommand {
+  command: string;
+  /** How the sandbox reaches this computer; absent for `host.docker.internal`. */
+  hostAddress?: string;
 }
 
 /** A `specdeck://join/…` link that opened the app: its code, or why it does not work. */
@@ -284,7 +293,8 @@ export type TimelineEvent = Stamp &
     /** The host sent a viewer's suggestion as the next prompt: who suggested it, and whether the host edited it. */
     | { kind: 'suggested'; by: string; edited: boolean }
     | { kind: 'plan'; change: string; documents: PlanDocument[]; tasks: { done: number; total: number } }
-    | { kind: 'timeline-unavailable'; reason: string }
+    /** `help` names a docs page on fixing it; a page this release does not know is ignored. */
+    | { kind: 'timeline-unavailable'; reason: string; help?: 'sandbox' | 'unknown' }
     | { kind: 'timeline-available' }
     | { kind: 'usage'; tokens: TokenCounts; contextTokens?: number; contextWindow?: number }
     | { kind: 'usage-unavailable'; reason: string }

@@ -61,6 +61,15 @@ describe('timeline model', () => {
     const unavailable: TimelineEvent = { ...stamp(), kind: 'timeline-unavailable', reason: 'No events arrived from the agent.' };
     expect(buildTimeline([unavailable]).unavailable).toBe('No events arrived from the agent.');
     expect(buildTimeline([unavailable, { ...stamp(), kind: 'timeline-available' }]).unavailable).toBeNull();
+    expect(buildTimeline([unavailable]).unavailableSandbox).toBe(false);
+  });
+
+  it('marks the explanation for a sandbox, and ignores a help page it does not know', () => {
+    const sandbox: TimelineEvent = { ...stamp(), kind: 'timeline-unavailable', reason: 'SpecDeck has not been reached from the sandbox yet.', help: 'sandbox' };
+    expect(buildTimeline([sandbox]).unavailableSandbox).toBe(true);
+    expect(buildTimeline([sandbox, { ...stamp(), kind: 'timeline-available' }]).unavailableSandbox).toBe(false);
+    const unknown: TimelineEvent = { ...stamp(), kind: 'timeline-unavailable', reason: 'Something else.', help: 'unknown' };
+    expect(buildTimeline([sandbox, unknown]).unavailableSandbox).toBe(false);
   });
 
   it('summarises tool calls and makes turns searchable', () => {

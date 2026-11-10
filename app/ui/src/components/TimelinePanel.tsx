@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Ban, Check, CircleSlash, Hand, History, Loader, Send, Share2, X } from 'lucide-react';
 import { itemsFrom, type GiveStep, type ShareStep } from '../model/sharedFiles';
 import type { AskItem, LinkItem, TimelineModel, ToolItem, Turn } from '../model/timeline';
@@ -14,6 +14,8 @@ import { ScreenshotThumbnail } from './Screenshot';
 import { LinkCard } from './LinkCard';
 import { AskCard } from './AskCard';
 import { CatchUpCard } from './CatchUpCard';
+import { BridgeContext } from '../api/bridge';
+import { SANDBOX_GUIDE_URL } from '../model/sandbox';
 import { PromptPicker } from './PromptPicker';
 
 interface Props {
@@ -237,7 +239,10 @@ export function TimelinePanel({ model, timelineSupported, agentName, steps = 'de
       {model.unavailable && (
         <div className="banner warning" role="status">
           <AlertTriangle aria-hidden />
-          <span>Timeline paused: {model.unavailable} The terminal keeps working.</span>
+          <span>
+            Timeline paused: {model.unavailable} The terminal keeps working.
+            {model.unavailableSandbox && <SandboxGuideLink />}
+          </span>
         </div>
       )}
       {model.turns.length === 0 && shares.length === 0 && gives.length === 0 ? (
@@ -581,3 +586,20 @@ function Disclosure({ open: wanted, className, summary, children }: { open: bool
   );
 }
 
+
+/** Opens the docs page on setting up a sandbox, through the bridge when there is one (`agent-sandbox`). */
+function SandboxGuideLink() {
+  const bridge = useContext(BridgeContext);
+  const open = () => {
+    if (bridge) void bridge.openSandboxGuide().catch(() => {});
+    else window.open(SANDBOX_GUIDE_URL, '_blank', 'noopener');
+  };
+  return (
+    <>
+      {' '}
+      <button type="button" className="link" onClick={open}>
+        Setting up a sandbox
+      </button>
+    </>
+  );
+}

@@ -55,7 +55,7 @@ fn shrink(entry: &mut Entry, allowed: usize) {
         | Entry::Message { text, .. }
         | Entry::Response { text, .. }
         | Entry::Attention { message: text }
-        | Entry::TimelineUnavailable { reason: text }
+        | Entry::TimelineUnavailable { reason: text, .. }
         | Entry::UsageUnavailable { reason: text } => cut(text, allowed),
         Entry::ToolCall { input, .. } => {
             if allowed == 0 {
@@ -316,6 +316,9 @@ pub enum Entry {
     /// Structured events cannot be captured; the terminal mirror still works.
     TimelineUnavailable {
         reason: String,
+        /// A page on fixing it, for the window to link; none from older hosts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        help: Option<Help>,
     },
     /// Events arrive again after `TimelineUnavailable`.
     TimelineAvailable,
@@ -368,6 +371,17 @@ pub enum Entry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         worktree: Option<String>,
     },
+}
+
+/// A docs page an entry can link to (`agent-sandbox`). A page this release does not know reads as
+/// `Unknown`, so the rest of the entry still shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Help {
+    /// Setting up a sandbox to run Claude Code in.
+    Sandbox,
+    #[serde(other)]
+    Unknown,
 }
 
 /// One document of an OpenSpec change, as its schema names it.
@@ -550,6 +564,32 @@ pub struct DiffHunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unavailable_timeline_names_its_help_page_when_it_has_one() {
+        let older =
+            r#"{"kind":"timeline-unavailable","reason":"No events arrived from the agent."}"#;
+        let entry: Entry = serde_json::from_str(older).unwrap();
+        assert_eq!(
+            entry,
+            Entry::TimelineUnavailable {
+                reason: "No events arrived from the agent.".into(),
+                help: None
+            }
+        );
+        assert_eq!(serde_json::to_string(&entry).unwrap(), older);
+
+        let sandbox = Entry::TimelineUnavailable { reason: "r".into(), help: Some(Help::Sandbox) };
+        let json = serde_json::to_string(&sandbox).unwrap();
+        assert_eq!(json, r#"{"kind":"timeline-unavailable","reason":"r","help":"sandbox"}"#);
+        // A page from a newer host still shows the reason.
+        let newer = r#"{"kind":"timeline-unavailable","reason":"r","help":"vpn"}"#;
+        let entry: Entry = serde_json::from_str(newer).unwrap();
+        assert_eq!(
+            entry,
+            Entry::TimelineUnavailable { reason: "r".into(), help: Some(Help::Unknown) }
+        );
+    }
 
     #[test]
     fn serialises_with_kind_tag_and_camel_case_fields() {

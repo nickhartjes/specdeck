@@ -32,9 +32,9 @@ const t0 = Date.UTC(2026, 9, 31, 13, 2);
 export const demoProfile: Profile = {
   username: 'Nick',
   recentFolders: [
-    { path: '/Users/nick/projects/webshop', name: 'webshop' },
-    { path: '/Users/nick/projects/specshare', name: 'specshare' },
-    { path: '/Users/nick/work/billing-api', name: 'billing-api' },
+    { path: '/Users/nick/projects/webshop', name: 'webshop', start: null },
+    { path: '/Users/nick/projects/specshare', name: 'specshare', start: null },
+    { path: '/Users/nick/work/billing-api', name: 'billing-api', start: { command: 'just sandbox' } },
   ],
   lastAgent: 'claude-code',
   notifications: true,
@@ -615,6 +615,13 @@ export function demoBridge(screen: string): Bridge {
     },
     checkSharingService: async () => ({ reachable: true }),
     removeRecentFolder: async (path) => ({ ...profile, recentFolders: profile.recentFolders.filter((f) => f.path !== path) }),
+    setFolderStart: async (path, command, hostAddress) => {
+      const start = command.trim() ? { command: command.trim(), ...(hostAddress?.trim() ? { hostAddress: hostAddress.trim() } : {}) } : null;
+      const others = profile.recentFolders.filter((f) => f.path !== path);
+      const name = path.split('/').pop() || path;
+      return { ...profile, recentFolders: [{ path, name, start }, ...others] };
+    },
+    openSandboxGuide: async () => {},
     chooseFolder: async () => '/Users/nick/projects/webshop',
     startHosting: async () => {},
     hostAttach: async (terminal: TerminalSink, events: (event: HostEvent) => void) => {

@@ -188,6 +188,7 @@ fn start(folder: &Path, signalling_url: &str) -> Command {
         verbose: false,
         browser: false,
         screenshots: true,
+        start: None,
     }
 }
 
@@ -324,6 +325,7 @@ async fn a_sent_suggestion_is_typed_as_one_prompt() {
         verbose,
         browser: false,
         screenshots: true,
+        start: None,
     };
     let mut terminal = String::new();
     app.send(&start).await;
@@ -738,6 +740,7 @@ async fn browsing_session(app: &mut App, folder: &Path, url: &str, browser: bool
         verbose: false,
         browser,
         screenshots: true,
+        start: None,
     })
     .await;
     app.until(&mut terminal, |event| matches!(event, Event::Started)).await;
@@ -824,6 +827,7 @@ async fn whole_code_files_follow_the_hosts_setting() {
         verbose: false,
         browser: false,
         screenshots: true,
+        start: None,
     })
     .await;
     app.until(&mut terminal, |event| matches!(event, Event::Started)).await;
@@ -1188,6 +1192,7 @@ fn start_as(folder: &Path, url: &str, agent: AgentId) -> Command {
         verbose: false,
         browser: false,
         screenshots: true,
+        start: None,
     }
 }
 

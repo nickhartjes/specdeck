@@ -505,6 +505,7 @@ async fn start(command: Command, shared: &Arc<Shared>, outgoing: &mpsc::Unbounde
         verbose,
         browser,
         screenshots,
+        start,
     } = command
     else {
         return;
@@ -535,6 +536,7 @@ async fn start(command: Command, shared: &Arc<Shared>, outgoing: &mpsc::Unbounde
         peer: shared.options.peer.clone(),
         browser: browser.then(|| browser_handler(Arc::downgrade(shared))),
         screenshots,
+        start,
     };
     match HostRuntime::start(options, &environment, observer).await {
         Ok(runtime) => {

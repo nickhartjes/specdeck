@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use specdeck_core::browser::{BrowserAction, BrowserResult};
 use specdeck_core::environment::Environment;
+use specdeck_core::launcher::StartCommand;
 use specdeck_protocol::AgentId;
 use specdeck_protocol::asks::{Card, CardSet, ReadTarget};
 
@@ -41,6 +42,10 @@ pub enum Command {
         /// the timeline*); on when the app does not say.
         #[serde(default = "on")]
         screenshots: bool,
+        /// Starts Claude Code through the host's command for the folder (`agent-sandbox`); none
+        /// from a previous release's app.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<StartCommand>,
     },
     /// Shows the session in the app's window: a snapshot, then the terminal from the start.
     Attach,
@@ -281,6 +286,10 @@ mod tests {
             verbose: false,
             browser: true,
             screenshots: false,
+            start: Some(StartCommand {
+                command: "just sandbox".into(),
+                host_address: Some("host.containers.internal".into()),
+            }),
         };
         let json = serde_json::to_string(&start).unwrap();
         assert!(json.starts_with(r#"{"type":"start","agent":"#), "{json}");
@@ -474,16 +483,20 @@ mod tests {
             verbose: false,
             browser: true,
             screenshots: false,
+            start: None,
         })
         .unwrap();
+        // Without a start command the field is left out, as a previous release's app sends it.
+        assert!(json.get("start").is_none());
         json.as_object_mut().unwrap().remove("browser");
         json.as_object_mut().unwrap().remove("screenshots");
-        let Command::Start { browser, screenshots, .. } =
+        let Command::Start { browser, screenshots, start, .. } =
             serde_json::from_value::<Command>(json).unwrap()
         else {
             panic!("not a start");
         };
         assert!(!browser);
         assert!(screenshots);
+        assert_eq!(start, None);
     }
 }

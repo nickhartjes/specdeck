@@ -144,6 +144,80 @@ describe('start screen', () => {
     expect(bridge.removeRecentFolder).toHaveBeenCalledWith('/Users/nick/projects/webshop');
   });
 
+  it('sets a start command for a folder and starts through it', async () => {
+    const { bridge, onProfile, onHosting } = setup();
+    await userEvent.click(screen.getByRole('button', { name: 'Start command for webshop' }));
+    const dialog = screen.getByRole('dialog', { name: 'Start command for webshop' });
+    expect(within(dialog).getByRole('button', { name: 'Save and start' })).toBeDisabled();
+    expect(within(dialog).getByLabelText('Host address')).toHaveAttribute('placeholder', 'host.docker.internal');
+    await userEvent.type(within(dialog).getByLabelText('Command'), 'just sandbox');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save and start' }));
+    expect(bridge.setFolderStart).toHaveBeenCalledWith('/Users/nick/projects/webshop', 'just sandbox', null);
+    await waitFor(() => expect(onProfile).toHaveBeenCalled());
+    expect(bridge.startHosting).toHaveBeenCalledWith('claude-code', '/Users/nick/projects/webshop', expect.any(Number), expect.any(Number));
+    await waitFor(() => expect(onHosting).toHaveBeenCalled());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('shows a remembered start command and saves another address without starting', async () => {
+    const { bridge } = setup();
+    // The demo's billing-api starts through `just sandbox`.
+    expect(screen.getByRole('button', { name: 'Start a session in billing-api' })).toHaveTextContent('· just sandbox');
+    await userEvent.click(screen.getByRole('button', { name: 'Start command for billing-api' }));
+    const dialog = screen.getByRole('dialog', { name: 'Start command for billing-api' });
+    expect(within(dialog).getByLabelText('Command')).toHaveValue('just sandbox');
+    await userEvent.type(within(dialog).getByLabelText('Host address'), 'host.containers.internal');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(bridge.setFolderStart).toHaveBeenCalledWith('/Users/nick/work/billing-api', 'just sandbox', 'host.containers.internal');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(bridge.startHosting).not.toHaveBeenCalled();
+  });
+
+  it('clears a start command', async () => {
+    const { bridge } = setup();
+    await userEvent.click(screen.getByRole('button', { name: 'Start command for billing-api' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(bridge.setFolderStart).toHaveBeenCalledWith('/Users/nick/work/billing-api', '', null);
+    // A folder without one has nothing to clear.
+    await userEvent.click(screen.getByRole('button', { name: 'Start command for webshop' }));
+    expect(screen.queryByRole('button', { name: 'Clear' })).not.toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('starts a new folder through a command', async () => {
+    const { bridge } = setup({}, { chooseFolder: vi.fn(async () => '/Users/nick/projects/sandboxed') });
+    await userEvent.click(screen.getByRole('button', { name: 'Start through a command…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Start command for sandboxed' });
+    await userEvent.type(within(dialog).getByLabelText('Command'), './sandbox.sh{Enter}');
+    expect(bridge.setFolderStart).toHaveBeenCalledWith('/Users/nick/projects/sandboxed', './sandbox.sh', null);
+    await waitFor(() => expect(bridge.startHosting).toHaveBeenCalledWith('claude-code', '/Users/nick/projects/sandboxed', expect.any(Number), expect.any(Number)));
+  });
+
+  it('opens the sandbox guide from the dialog', async () => {
+    const { bridge } = setup();
+    await userEvent.click(screen.getByRole('button', { name: 'Start command for webshop' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Setting up a sandbox' }));
+    expect(bridge.openSandboxGuide).toHaveBeenCalled();
+  });
+
+  it('offers start commands only for Claude Code, and not on Windows', async () => {
+    setup({ lastAgent: 'open-code' });
+    expect(screen.queryByRole('button', { name: /^Start command for/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start through a command…' })).not.toBeInTheDocument();
+    // Nor is a folder's command shown, since it is not used.
+    expect(screen.getByRole('button', { name: 'Start a session in billing-api' })).not.toHaveTextContent('just sandbox');
+    await userEvent.click(screen.getByRole('radio', { name: /^Terminal/ }));
+    expect(screen.queryByRole('button', { name: /^Start command for/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: /^Claude Code/ }));
+    expect(screen.getByRole('button', { name: 'Start command for webshop' })).toBeInTheDocument();
+  });
+
+  it('offers no start commands on Windows', () => {
+    setup({ platform: 'windows' });
+    expect(screen.queryByRole('button', { name: /^Start command for/ })).not.toBeInTheDocument();
+  });
+
   it('formats the code as it is typed and joins when it is complete', async () => {
     const { onJoin } = setup();
     const field = screen.getByLabelText('Invite code');

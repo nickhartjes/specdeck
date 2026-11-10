@@ -69,6 +69,10 @@ export interface Bridge {
   setSharingService(service: string): Promise<Profile>;
   checkSharingService(service: string): Promise<ServiceCheck>;
   removeRecentFolder(path: string): Promise<Profile>;
+  /** Sets how Claude Code starts in `path`; an empty command clears it. Lists the folder as recent. */
+  setFolderStart(path: string, command: string, hostAddress: string | null): Promise<Profile>;
+  /** Opens the docs page on running Claude Code in a sandbox, in the browser. */
+  openSandboxGuide(): Promise<void>;
   /** Opens the system folder picker; null when cancelled. */
   chooseFolder(): Promise<string | null>;
   startHosting(agent: AgentId, folder: string, cols: number, rows: number): Promise<void>;

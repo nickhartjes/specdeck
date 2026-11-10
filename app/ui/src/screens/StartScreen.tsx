@@ -3,6 +3,7 @@ import {
   Bot,
   Braces,
   CodeXml,
+  Container,
   ExternalLink,
   Folder,
   FolderOpen,
@@ -16,11 +17,12 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
-import type { AgentId, AgentInfo, Profile, RunningSession } from '../api/types';
+import type { AgentId, AgentInfo, Profile, RecentFolder, RunningSession } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { initials } from '../components/PeoplePanel';
 import { PLAIN_TEXT } from '../components/fields';
 import { formatCode, isCompleteCode, isJoinLink } from '../model/code';
+import { DEFAULT_HOST_ADDRESS } from '../model/sandbox';
 import type { MenuCommand } from '../menu/menu';
 import { AGENT_NAMES, endingText } from './HostScreen';
 
@@ -266,6 +268,8 @@ function HostCard({
   const [agent, setAgent] = useState<AgentId | null>(() => defaultAgent(profile));
   const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The folder whose start command is being set (`agent-sandbox`).
+  const [editing, setEditing] = useState<RecentFolder | null>(null);
   // Asked for once the screen shows: reading them can take seconds the first time.
   const [versions, setVersions] = useState<Partial<Record<AgentId, string>>>({});
   useEffect(() => {
@@ -286,6 +290,8 @@ function HostCard({
   const missing = profile.agents.filter((info) => !info.installed && info.installPage);
   // Terminal is always there; the coding agents may all be missing.
   const noCodingAgents = profile.agents.every((a) => a.id === 'terminal' || !a.installed);
+  // Only Claude Code starts through a command, and only on macOS and Linux.
+  const startCommands = agent === 'claude-code' && profile.platform !== 'windows';
 
   const start = async (folder: string | null) => {
     if (!folder || !agent) return;
@@ -300,6 +306,17 @@ function HostCard({
     } catch (e) {
       setError(errorMessage(e));
       setStarting(null);
+    }
+  };
+
+  const saveStart = async (folder: string, command: string, hostAddress: string, andStart: boolean) => {
+    setError(null);
+    try {
+      onProfile(await bridge.setFolderStart(folder, command, hostAddress.trim() ? hostAddress : null));
+      setEditing(null);
+      if (andStart) await start(folder);
+    } catch (e) {
+      setError(errorMessage(e));
     }
   };
 
@@ -370,8 +387,21 @@ function HostCard({
                 >
                   {starting === folder.path ? <span className="spinner" aria-label="Starting" /> : <Folder aria-hidden />}
                   <span className="name">{folder.name}</span>
-                  <span className="path">{folder.path}</span>
+                  <span className="path">
+                    {folder.path}
+                    {startCommands && folder.start && <span className="start-command"> · {folder.start.command}</span>}
+                  </span>
                 </button>
+                {startCommands && (
+                  <button
+                    className={`btn ghost icon small start-settings${folder.start ? ' set' : ''}`}
+                    aria-label={`Start command for ${folder.name}`}
+                    title="Start Claude Code through a command, such as a sandbox script"
+                    onClick={() => setEditing(folder)}
+                  >
+                    <Container aria-hidden />
+                  </button>
+                )}
                 <button
                   className="btn ghost icon small remove"
                   aria-label={`Remove ${folder.name} from recent folders`}
@@ -394,7 +424,111 @@ function HostCard({
         {starting && !profile.recentFolders.some((f) => f.path === starting) ? <span className="spinner" /> : <FolderOpen aria-hidden />}
         {profile.recentFolders.length > 0 ? 'Choose another folder…' : 'Choose a folder and start…'}
       </button>
+      {startCommands && (
+        <button
+          className="btn ghost small start-through"
+          disabled={starting !== null}
+          onClick={async () => {
+            const path = await bridge.chooseFolder();
+            if (path) setEditing(profile.recentFolders.find((f) => f.path === path) ?? { path, name: folderName(path), start: null });
+          }}
+        >
+          Start through a command…
+        </button>
+      )}
+      {editing && (
+        <StartCommandDialog
+          folder={editing}
+          onSave={(command, hostAddress, andStart) => void saveStart(editing.path, command, hostAddress, andStart)}
+          onGuide={() => void bridge.openSandboxGuide().catch((e) => setError(errorMessage(e)))}
+          onCancel={() => setEditing(null)}
+        />
+      )}
     </section>
+  );
+}
+
+function folderName(path: string): string {
+  return path.split(/[/\\]/).filter(Boolean).pop() ?? path;
+}
+
+/** Sets how Claude Code starts in a folder (`agent-sandbox` design decision 1): saved with the folder, cleared by emptying it. */
+function StartCommandDialog({
+  folder,
+  onSave,
+  onGuide,
+  onCancel,
+}: {
+  folder: RecentFolder;
+  onSave: (command: string, hostAddress: string, andStart: boolean) => void;
+  onGuide: () => void;
+  onCancel: () => void;
+}) {
+  const [command, setCommand] = useState(folder.start?.command ?? '');
+  const [hostAddress, setHostAddress] = useState(folder.start?.hostAddress ?? '');
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onCancel();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+  const hasCommand = command.trim() !== '';
+  return (
+    <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+      <form
+        className="dialog start-command"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="start-command-title"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave(command, hostAddress, hasCommand);
+        }}
+      >
+        <h2 id="start-command-title">Start command for {folder.name}</h2>
+        <p>
+          Runs instead of <code>claude</code> in this folder, with SpecDeck's arguments added at the end. A script that passes its arguments on to{' '}
+          <code>claude</code> keeps the timeline working in a sandbox.
+        </p>
+        <label className="section-label" htmlFor="start-command">
+          Command
+        </label>
+        <input {...PLAIN_TEXT} id="start-command" className="field mono" autoFocus placeholder="just sandbox" value={command} onChange={(e) => setCommand(e.target.value)} />
+        <label className="section-label" htmlFor="host-address">
+          Host address
+        </label>
+        <input
+          {...PLAIN_TEXT}
+          id="host-address"
+          className="field mono"
+          placeholder={DEFAULT_HOST_ADDRESS}
+          value={hostAddress}
+          onChange={(e) => setHostAddress(e.target.value)}
+          aria-describedby="host-address-hint"
+        />
+        <span id="host-address-hint" className="field-hint">
+          How the sandbox reaches this computer. Podman uses host.containers.internal.{' '}
+          <button type="button" className="link" onClick={onGuide}>
+            Setting up a sandbox
+          </button>
+        </span>
+        <div className="actions">
+          {folder.start && (
+            <button type="button" className="btn ghost" onClick={() => onSave('', '', false)}>
+              Clear
+            </button>
+          )}
+          <button type="button" className="btn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn" disabled={!hasCommand && !folder.start} onClick={() => onSave(command, hostAddress, false)}>
+            Save
+          </button>
+          <button type="submit" className="btn primary" disabled={!hasCommand}>
+            Save and start
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 

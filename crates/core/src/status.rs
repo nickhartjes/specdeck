@@ -13,21 +13,28 @@ use crate::environment::Environment;
 /// Environment variable with the host's own status-line command, run by the relay script.
 pub const HOST_STATUS_LINE_ENV: &str = "SPECDECK_STATUSLINE_COMMAND";
 
-/// The relay script. It posts its input to SpecDeck with the hook token (passed to `curl` through
-/// a config on a file descriptor, so it never shows in the process list), then runs the host's own
-/// status line with the same input. Without `curl` only the host's status line runs.
-fn relay_script(status_url: &str) -> String {
+/// Posts `$input` to SpecDeck with the hook token, passed to `curl` through a config on a file
+/// descriptor so it never shows in the process list. Without `curl` it does nothing.
+fn relay_post(status_url: &str) -> String {
     format!(
-        r#"#!/bin/sh
-# SpecDeck status-line relay. Shows the host's own status line unchanged.
-input=$(cat)
+        r#"input=$(cat)
 if command -v curl >/dev/null 2>&1; then
   printf '%s' "$input" | curl -s -m 1 -o /dev/null -X POST -K /dev/fd/3 \
     -H 'Content-Type: application/json' --data-binary @- '{status_url}' >/dev/null 2>&1 3<<EOF
 header = "Authorization: Bearer $SPECDECK_HOOK_TOKEN"
 EOF
 fi
-if [ -n "${HOST_STATUS_LINE_ENV}" ]; then
+"#
+    )
+}
+
+/// The relay script. It posts its input to SpecDeck, then runs the host's own status line with the
+/// same input. Without `curl` only the host's status line runs.
+fn relay_script(status_url: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+# SpecDeck status-line relay. Shows the host's own status line unchanged.
+{post}if [ -n "${HOST_STATUS_LINE_ENV}" ]; then
   if command -v bash >/dev/null 2>&1; then
     printf '%s' "$input" | bash -c "${HOST_STATUS_LINE_ENV}"
   else
@@ -35,6 +42,7 @@ if [ -n "${HOST_STATUS_LINE_ENV}" ]; then
   fi
 fi
 "#,
+        post = relay_post(status_url),
         HOST_STATUS_LINE_ENV = HOST_STATUS_LINE_ENV,
     )
 }
@@ -59,6 +67,13 @@ pub fn status_line_setting(script: &Path, host: Option<&Value>) -> Value {
         setting["padding"] = padding.clone();
     }
     setting
+}
+
+/// The `statusLine` setting for Claude Code started through a start command (`agent-sandbox`
+/// design decision 2): the relay inline, since a sandbox cannot read a script in the session's
+/// data folder. The host's own status line cannot run there, so the line stays empty.
+pub fn inline_status_line_setting(status_url: &str) -> Value {
+    json!({ "type": "command", "command": relay_post(status_url) })
 }
 
 /// The status line the host set up for Claude Code, in the order Claude Code reads its settings:
@@ -301,13 +316,12 @@ mod tests {
         assert_eq!(setting["padding"], 0);
     }
 
+    /// A one-request server that records the headers and body the relay sends to `/status`.
     #[cfg(unix)]
-    #[test]
-    fn relay_posts_its_input_and_still_shows_the_hosts_line() {
+    fn status_server() -> (String, std::thread::JoinHandle<(String, String)>) {
         use std::io::{BufRead, BufReader, Read, Write};
         use std::net::TcpListener;
 
-        // A one-request server that records what the relay sends.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/status", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
@@ -331,7 +345,15 @@ mod tests {
             (&stream).write_all(b"HTTP/1.1 204 No Content\r\n\r\n").unwrap();
             (headers, String::from_utf8(body).unwrap())
         });
+        (url, server)
+    }
 
+    #[cfg(unix)]
+    #[test]
+    fn relay_posts_its_input_and_still_shows_the_hosts_line() {
+        use std::io::Write;
+
+        let (url, server) = status_server();
         let dir = tempfile::tempdir().unwrap();
         let script = write_relay_script(dir.path(), &url).unwrap();
         let mut child = Command::new("sh")
@@ -349,6 +371,34 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             "host line got {\"model\":{\"id\":\"m\"}}\n"
         );
+        let (headers, body) = server.join().unwrap();
+        assert!(headers.contains("Authorization: Bearer secret"), "{headers}");
+        assert_eq!(body, r#"{"model":{"id":"m"}}"#);
+    }
+
+    /// Claude Code runs a status-line command through a shell; inline, the relay needs no file.
+    #[cfg(unix)]
+    #[test]
+    fn the_inline_relay_posts_its_input_with_the_token_from_the_environment() {
+        use std::io::Write;
+
+        let (url, server) = status_server();
+        let setting = inline_status_line_setting(&url);
+        assert_eq!(setting["type"], "command");
+        let command = setting["command"].as_str().unwrap();
+        assert!(!command.contains("secret"));
+        let mut child = Command::new("sh")
+            .args(["-c", command])
+            .env("SPECDECK_HOOK_TOKEN", "secret")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(br#"{"model":{"id":"m"}}"#).unwrap();
+        let output = child.wait_with_output().unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "");
         let (headers, body) = server.join().unwrap();
         assert!(headers.contains("Authorization: Bearer secret"), "{headers}");
         assert_eq!(body, r#"{"model":{"id":"m"}}"#);
