@@ -1,6 +1,7 @@
 # Writes Casks/specdeck.rb in nickhartjes/homebrew-tap for a published release (design decision
 # 13). Called by release.yml after each release; run it by hand to (re)write the cask for an
-# existing tag.
+# existing tag. Only for a final release: the tag must be vMAJOR.MINOR.PATCH and its release
+# published and not a prerelease, or the job fails before it checks anything out.
 #
 # Secret of the `release` environment (v* tags and main only; see release.yml):
 #   HOMEBREW_TAP_DEPLOY_KEY   private SSH deploy key with write access to nickhartjes/homebrew-tap
@@ -32,6 +33,21 @@ jobs:
       # Without a Developer ID the app is ad-hoc signed; the cask then explains how to open it.
       SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
+      # TAG comes through env, never into the script's text; scripts/render-cask.sh checks again.
+      - name: Check the tag is a final release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The tag is not vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          state=$(gh release view "$TAG" -R "$REPO" --json isDraft,isPrerelease --jq '"\(.isDraft) \(.isPrerelease)"')
+          if [ "$state" != "false false" ]; then
+            echo "::error::The release $TAG is a draft or a prerelease (draft, prerelease: $state)."
+            exit 1
+          fi
       - name: Check for the tap deploy key
         run: |
           if [ -z "$TAP_KEY" ]; then

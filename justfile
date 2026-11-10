@@ -25,11 +25,12 @@ check:
     node --test 'scripts/*.test.mjs'
     just check-scripts
 
-# Check the workflows' pins and permissions (release-integrity). Shell scripts, so not on Windows,
+# Check the workflows' pins and permissions, and the cask script (release-integrity). Shell scripts, so not on Windows,
 # where CI's macOS and Linux runs cover them.
 [unix]
 check-scripts:
     scripts/check-workflows.sh
+    scripts/render-cask.test.sh
 
 [windows]
 check-scripts:

@@ -24,8 +24,8 @@
 
 ## 4. Homebrew
 
-- [ ] 4.1 In `homebrew.yml`, refuse a tag that is not `vMAJOR.MINOR.PATCH` as the first step, and a release that is a draft or a prerelease (design decision 6); verify with `actionlint`
-- [ ] 4.2 In `scripts/render-cask.sh`, check the version, both hashes and the repository name before printing anything, and add `scripts/render-cask.test.sh` to `just check`: one good call whose output equals the current cask, and one failing call per bad argument, including a version with a quote; verify the test passes and fails when a check is removed
+- [x] 4.1 In `homebrew.yml`, refuse a tag that is not `vMAJOR.MINOR.PATCH` as the first step, and a release that is a draft or a prerelease (design decision 6); verify with `actionlint`
+- [x] 4.2 In `scripts/render-cask.sh`, check the version, both hashes and the repository name before printing anything, and add `scripts/render-cask.test.sh` to `just check`: one good call whose output equals the current cask, and one failing call per bad argument, including a version with a quote; verify the test passes and fails when a check is removed
 - [ ] 4.3 After merge, start `homebrew.yml` by hand with the tag `v0.0.0";x` and with the prerelease tag of 2.6; verify both runs fail before the tap is checked out, and that the tap has no new commit
 
 ## 5. Renovate without the token

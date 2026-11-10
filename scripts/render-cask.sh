@@ -2,12 +2,33 @@
 # Prints the Homebrew cask for a release (design decision 13).
 # Usage: scripts/render-cask.sh 1.0.0 <sha256 of SpecDeck-arm64.dmg> <sha256 of SpecDeck-x64.dmg> [owner/repo] [unsigned]
 # With `unsigned` (no Developer ID yet), the cask says how to open the app past Gatekeeper.
+# Each argument is checked before anything is printed, since each is written into Ruby that runs
+# on `brew install` (release-integrity: Cask only for a final release).
 set -eu
+if [ "$#" -lt 3 ] || [ "$#" -gt 5 ]; then
+  echo "usage: $0 <version> <sha256 arm64> <sha256 x64> [owner/repo] [unsigned]" >&2
+  exit 2
+fi
 version=$1
 sha_arm=$2
 sha_intel=$3
 repo=${4:-nickhartjes/specdeck}
 unsigned=${5:-}
+
+# Whole-argument matches: `expr` anchors at the start, `$` at the end; a newline cannot pass.
+matches() {
+  case "$1" in *'
+'*) return 1 ;; esac
+  LC_ALL=C expr "x$1" : "x$2\$" > /dev/null
+}
+matches "$version" '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*' ||
+  { echo "render-cask: version is not MAJOR.MINOR.PATCH: $version" >&2; exit 1; }
+matches "$sha_arm" '[0-9a-f]\{64\}' ||
+  { echo "render-cask: arm64 hash is not 64 lowercase hexadecimal characters: $sha_arm" >&2; exit 1; }
+matches "$sha_intel" '[0-9a-f]\{64\}' ||
+  { echo "render-cask: x64 hash is not 64 lowercase hexadecimal characters: $sha_intel" >&2; exit 1; }
+matches "$repo" '[A-Za-z0-9._-][A-Za-z0-9._-]*/[A-Za-z0-9._-][A-Za-z0-9._-]*' ||
+  { echo "render-cask: repository is not owner/name: $repo" >&2; exit 1; }
 
 caveats=""
 if [ "$unsigned" = unsigned ]; then
