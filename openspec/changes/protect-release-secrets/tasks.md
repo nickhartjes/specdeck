@@ -43,9 +43,9 @@
 
 ## 7. Dependency audit
 
-- [ ] 7.1 Add `.github/workflows/audit.yml` (weekly and by hand; `contents: read`, `issues: write`): `cargo audit`, `pnpm audit --prod` in the root, `docs/site` and `docs/video`, and the vendored `datachannel` version against crates.io; one issue "Dependency audit" that is created, updated or closed (design decision 9); add an empty `.cargo/audit.toml` with a comment on how to ignore an advisory with a reason and a date; verify with `actionlint` and 1.1
+- [x] 7.1 Add `.github/workflows/audit.yml` (weekly and by hand; `contents: read`, `issues: write`): `cargo audit`, `pnpm audit --prod` in the root, `docs/site` and `docs/video`, and the vendored `datachannel` version against crates.io; one issue "Dependency audit" that is created, updated or closed (design decision 9); add an empty `.cargo/audit.toml` with a comment on how to ignore an advisory with a reason and a date; verify with `actionlint` and 1.1
 - [ ] 7.2 After merge, run it by hand; verify a clean run opens no issue, and that with a temporary known-vulnerable crate version on a branch it opens the issue and a second run updates the same one; record today's findings, if any, in the issue
-- [ ] 7.3 Add "Following upstream" to `vendor/datachannel/PATCHED.md`: the audit issue is the signal, and the steps to update (design decision 9)
+- [x] 7.3 Add "Following upstream" to `vendor/datachannel/PATCHED.md`: the audit issue is the signal, and the steps to update (design decision 9)
 
 ## 8. Repository settings, by the maintainer
 

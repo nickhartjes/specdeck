@@ -1,0 +1,10 @@
+# cargo audit's settings (.github/workflows/audit.yml). To ignore an advisory, for example one with
+# no fixed version that does not affect SpecDeck, add its ID with the reason and the date on the line
+# above, and look at it again later:
+#
+#   ignore = [
+#     # 2026-11-10: only the TLS client uses the affected function, and SpecDeck builds without it.
+#     "RUSTSEC-0000-0000",
+#   ]
+[advisories]
+ignore = []
