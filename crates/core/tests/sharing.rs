@@ -2108,3 +2108,402 @@ async fn viewers_add_to_the_braindump_and_edit_their_own_notes() {
     let note = items[0].info.file;
     assert_eq!(wait(anna.replace_note(note, "Too late".into())).await, Outcome::AlreadyGiven);
 }
+
+// Room ownership (`room-ownership` tasks 5.1, 5.2, 5.4 and 5.5).
+
+/// What the proxy in front of the service does with a new connection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Gate {
+    Open,
+    /// Accepts the connection and closes it at once.
+    Refuse,
+    /// Accepts the connection and never answers it.
+    Hang,
+}
+
+/// A proxy in front of the sharing service for the host alone, which can cut the host off.
+struct Proxy {
+    url: String,
+    gate: tokio::sync::watch::Sender<Gate>,
+    /// Bumped to end every connection it forwards; the flag keeps the service's side open, as
+    /// when the host's network changes before the service noticed.
+    cuts: tokio::sync::watch::Sender<(u32, bool)>,
+    /// Connections it holds without an answer.
+    hung: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Proxy {
+    async fn start(service_url: &str) -> Proxy {
+        use std::sync::atomic::Ordering;
+        let upstream =
+            service_url.trim_start_matches("ws://").trim_end_matches("/signal").to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+        let (gate, gates) = tokio::sync::watch::channel(Gate::Open);
+        let (cuts, cut) = tokio::sync::watch::channel((0, false));
+        let hung = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let held = hung.clone();
+        tokio::spawn(async move {
+            let mut kept = Vec::new();
+            loop {
+                let (mut client, _) = listener.accept().await.unwrap();
+                let gate = *gates.borrow();
+                match gate {
+                    Gate::Refuse => drop(client),
+                    Gate::Hang => {
+                        kept.push(client);
+                        held.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Gate::Open => {
+                        let (upstream, mut cut) = (upstream.clone(), cut.clone());
+                        cut.mark_unchanged();
+                        tokio::spawn(async move {
+                            let mut service =
+                                tokio::net::TcpStream::connect(upstream).await.unwrap();
+                            let quietly = tokio::select! {
+                                _ = tokio::io::copy_bidirectional(&mut client, &mut service) => return,
+                                _ = cut.changed() => cut.borrow().1,
+                            };
+                            drop(client);
+                            if quietly {
+                                // The service hears nothing more, and no close either.
+                                std::future::pending::<()>().await;
+                            }
+                        });
+                    }
+                }
+            }
+        });
+        Proxy { url, gate, cuts, hung }
+    }
+
+    fn set(&self, gate: Gate) {
+        self.gate.send_replace(gate);
+    }
+
+    fn cut(&self, quietly: bool) {
+        self.cuts.send_modify(|(count, quiet)| {
+            *count += 1;
+            *quiet = quietly;
+        });
+    }
+}
+
+/// Waits for the code, and fails if the code was replaced on the way.
+async fn ready_unreplaced(events: &mut UnboundedReceiver<SharingEvent>) -> InviteCode {
+    loop {
+        match tokio::time::timeout(WAIT, events.recv()).await.expect("no code").unwrap() {
+            SharingEvent::Ready { code } => return code,
+            SharingEvent::CodeReplaced { reason } => panic!("the code was replaced: {reason:?}"),
+            _ => continue,
+        }
+    }
+}
+
+async fn unavailable(events: &mut UnboundedReceiver<SharingEvent>) {
+    loop {
+        match tokio::time::timeout(WAIT, events.recv()).await.expect("still available").unwrap() {
+            SharingEvent::Unavailable => return,
+            SharingEvent::CodeReplaced { reason } => panic!("the code was replaced: {reason:?}"),
+            _ => continue,
+        }
+    }
+}
+
+/// A host back on the service after a short loss keeps its code; a new viewer joins with it, and
+/// a viewer that lost its connection meanwhile rejoins (`session-sharing`, *Short loss of the
+/// service* and *Viewer rejoins while the host is away*).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_host_keeps_its_code_when_it_returns_to_the_service() {
+    let url = signalling().await;
+    let proxy = Proxy::start(&url).await;
+    let mut hosted = host(&proxy.url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut anna_events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut anna_events, &mut seen, |seen, _| seen.text.contains("ready")).await;
+
+    proxy.set(Gate::Refuse);
+    proxy.cut(false);
+    unavailable(&mut hosted.events).await;
+    anna.interrupt(Duration::from_millis(200));
+    until(&mut anna_events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    hosted.session.input(b"while away\r").unwrap();
+    proxy.set(Gate::Open);
+
+    assert_eq!(ready_unreplaced(&mut hosted.events).await, code);
+    let (_bob, mut bob_events) = join(&url, &code, "bob");
+    until(&mut bob_events, &mut Seen::default(), |seen, _| seen.text.contains("got:while away"))
+        .await;
+    let event =
+        until(&mut anna_events, &mut seen, |_, e| matches!(e, ViewerEvent::Welcome { .. })).await;
+    assert!(matches!(event, ViewerEvent::Welcome { reconnected: true, .. }), "{event:?}");
+    until(&mut anna_events, &mut seen, |seen, _| seen.text.contains("got:while away")).await;
+}
+
+/// The host's network changed and the service still holds the old connection: the host takes
+/// its rooms back with its claim (`session-sharing`, *Host returns before the service noticed*).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_host_takes_its_rooms_back_from_its_old_connection() {
+    let url = signalling().await;
+    let proxy = Proxy::start(&url).await;
+    let mut hosted = host(&proxy.url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (anna, mut anna_events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut anna_events, &mut seen, |seen, _| seen.text.contains("ready")).await;
+
+    proxy.cut(true);
+    unavailable(&mut hosted.events).await;
+    assert_eq!(ready_unreplaced(&mut hosted.events).await, code);
+
+    let (_bob, mut bob_events) = join(&url, &code, "bob");
+    until(&mut bob_events, &mut Seen::default(), |seen, _| seen.welcome.is_some()).await;
+    anna.interrupt(Duration::from_millis(100));
+    until(&mut anna_events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    let event =
+        until(&mut anna_events, &mut seen, |_, e| matches!(e, ViewerEvent::Welcome { .. })).await;
+    assert!(matches!(event, ViewerEvent::Welcome { reconnected: true, .. }), "{event:?}");
+}
+
+/// While an attempt to reach the service hangs, viewers keep the session and the host's actions
+/// take effect at once (`room-ownership` design decision 9).
+#[tokio::test(flavor = "multi_thread")]
+async fn viewers_keep_the_session_while_the_service_does_not_answer() {
+    let url = signalling().await;
+    let proxy = Proxy::start(&url).await;
+    let mut hosted = host(&proxy.url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (_anna, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("ready")).await;
+
+    proxy.set(Gate::Hang);
+    proxy.cut(false);
+    tokio::time::timeout(WAIT, async {
+        while proxy.hung.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("no attempt to reach the service");
+
+    let started = std::time::Instant::now();
+    hosted.session.input(b"while it hangs\r").unwrap();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:while it hangs")).await;
+    hosted.sharing.remove(seen.welcome.unwrap());
+    let event = until(&mut events, &mut seen, |_, e| e.is_final()).await;
+    assert_eq!(event, ViewerEvent::Refused(RefusalReason::Removed));
+    assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+}
+
+/// Shares a session without an agent, for tests on tokio's paused clock.
+fn share_log(url: &str) -> (Sharing, UnboundedReceiver<SharingEvent>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(OutputLog::create(dir.path()).unwrap());
+    let view = SessionView::from_log(AgentId::OpenCode, log);
+    let (sharing, events) = Sharing::start(
+        view,
+        SharingConfig {
+            signalling_url: url.into(),
+            username: "nick".into(),
+            peer: loopback(),
+            viewer_limit: 20,
+        },
+    );
+    (sharing, events, dir)
+}
+
+/// Long enough for anything on the paused clock; fails a test whose host's loop is stuck.
+const PAUSED_WAIT: Duration = Duration::from_secs(120);
+
+#[tokio::test(start_paused = true)]
+async fn an_attempt_that_hangs_fails_after_ten_seconds_and_holds_nothing_up() {
+    use tokio::io::AsyncReadExt;
+    use tokio::time::Instant;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+    let (accepted_tx, mut accepted) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            let _ = accepted_tx.send((Instant::now(), socket));
+        }
+    });
+    let (sharing, mut events, _dir) = share_log(&url);
+
+    let (first, _first) = next_accepted(&mut accepted).await;
+    unavailable(&mut events).await;
+    let waited = first.elapsed();
+    assert!(waited >= Duration::from_secs(10), "{waited:?}");
+    assert!(waited < Duration::from_millis(10_100), "{waited:?}");
+
+    // The usual backoff after each failed attempt: half a second, then a second.
+    let (second, _second) = next_accepted(&mut accepted).await;
+    let gap = second - first;
+    assert!(gap >= Duration::from_millis(10_500) && gap < Duration::from_millis(10_600), "{gap:?}");
+    let (third, mut third_socket) = next_accepted(&mut accepted).await;
+    let gap = third - second;
+    assert!(gap >= Duration::from_secs(11) && gap < Duration::from_millis(11_100), "{gap:?}");
+
+    // The host's commands are answered while the attempt hangs.
+    let vote = AskCommand::StartVote { task: "t".into(), cards: CardSet::TShirt };
+    let _ = tokio::time::timeout(PAUSED_WAIT, sharing.ask(vote)).await.expect("stuck").unwrap();
+    assert!(third.elapsed() < Duration::from_millis(100), "{:?}", third.elapsed());
+    // Closing ends the attempt with it.
+    sharing.close();
+    let mut buffer = [0; 1024];
+    while tokio::time::timeout(PAUSED_WAIT, third_socket.read(&mut buffer)).await.unwrap().unwrap()
+        > 0
+    {}
+    assert!(third.elapsed() < Duration::from_secs(1), "{:?}", third.elapsed());
+}
+
+async fn next_accepted(
+    accepted: &mut UnboundedReceiver<(tokio::time::Instant, tokio::net::TcpStream)>,
+) -> (tokio::time::Instant, tokio::net::TcpStream) {
+    tokio::time::timeout(PAUSED_WAIT, accepted.recv()).await.expect("no attempt").unwrap()
+}
+
+/// A `host` a scripted service got: the connection's number, the room, the claim, and when.
+type HostSeen = (usize, String, Option<String>, tokio::time::Instant);
+
+/// An older sharing service, scripted: it ignores the claim, names no room in its errors, and
+/// says another connection holds the `taken`th room it is asked for (0 for the code's room, 1
+/// for the rejoin room).
+struct Scripted {
+    url: String,
+    /// Every `host` it got.
+    hosts: Arc<std::sync::Mutex<Vec<HostSeen>>>,
+    /// Bumped to close every connection.
+    close: tokio::sync::watch::Sender<u32>,
+}
+
+impl Scripted {
+    async fn start(taken: Option<usize>) -> Scripted {
+        use futures_util::{SinkExt, StreamExt};
+        use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+        let hosts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let rooms = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (close, closing) = tokio::sync::watch::channel(0);
+        let recorded = hosts.clone();
+        tokio::spawn(async move {
+            let mut connection = 0;
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                connection += 1;
+                let (hosts, rooms, mut closing) =
+                    (recorded.clone(), rooms.clone(), closing.clone());
+                closing.mark_unchanged();
+                tokio::spawn(async move {
+                    let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                    loop {
+                        let text = tokio::select! {
+                            message = socket.next() => match message {
+                                Some(Ok(Message::Text(text))) => text,
+                                Some(Ok(_)) => continue,
+                                _ => return,
+                            },
+                            _ = closing.changed() => return,
+                        };
+                        let Ok(ClientMessage::Host { room, claim }) = serde_json::from_str(&text)
+                        else {
+                            continue;
+                        };
+                        let now = tokio::time::Instant::now();
+                        hosts.lock().unwrap().push((connection, room.clone(), claim, now));
+                        let nth = {
+                            let mut rooms = rooms.lock().unwrap();
+                            if !rooms.contains(&room) {
+                                rooms.push(room.clone());
+                            }
+                            rooms.iter().position(|r| *r == room)
+                        };
+                        let answer = if nth == taken {
+                            ServerMessage::Error { code: ErrorCode::RoomTaken, room: None }
+                        } else {
+                            ServerMessage::RoomOpened { room }
+                        };
+                        let json = serde_json::to_string(&answer).unwrap();
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        Scripted { url, hosts, close }
+    }
+
+    fn hosts(&self) -> Vec<HostSeen> {
+        self.hosts.lock().unwrap().clone()
+    }
+
+    /// Waits until it got `count` `host` messages.
+    async fn hosts_until(&self, count: usize) -> Vec<HostSeen> {
+        tokio::time::timeout(PAUSED_WAIT, async {
+            loop {
+                let hosts = self.hosts();
+                if hosts.len() >= count {
+                    return hosts;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no {count} hosts: {:?}", self.hosts()))
+    }
+}
+
+/// An older service that says the rejoin room is taken, without naming it: the code stays, and
+/// the rejoin room is asked for again every 30 seconds (tasks 5.2 and 5.5).
+#[tokio::test(start_paused = true)]
+async fn an_older_service_holding_the_rejoin_room_leaves_the_code_alone() {
+    let service = Scripted::start(Some(1)).await;
+    let (_sharing, mut events, _dir) = share_log(&service.url);
+    tokio::time::timeout(PAUSED_WAIT, ready_unreplaced(&mut events)).await.unwrap();
+
+    let hosts = service.hosts_until(4).await;
+    let rooms: Vec<_> = hosts.iter().map(|(_, room, ..)| room.as_str()).collect();
+    let (code_room, rejoin) = (rooms[0], rooms[1]);
+    assert_ne!(code_room, rejoin);
+    assert_eq!(rooms[2..], [rejoin, rejoin]);
+    for pair in hosts[1..].windows(2) {
+        let gap = pair[1].3 - pair[0].3;
+        assert!(gap >= Duration::from_secs(30) && gap < Duration::from_millis(30_100), "{gap:?}");
+    }
+    assert!(hosts.iter().all(|(connection, ..)| *connection == 1), "{hosts:?}");
+    assert!(events.try_recv().is_err(), "no new code, nothing else");
+}
+
+/// An older service that forgot the host's rooms when its connection closed: the host opens
+/// them again with the same claim, and keeps its code (tasks 5.1 and 5.5).
+#[tokio::test(start_paused = true)]
+async fn an_older_service_lets_the_host_open_its_rooms_again() {
+    let service = Scripted::start(None).await;
+    let (sharing, mut events, _dir) = share_log(&service.url);
+    let code = tokio::time::timeout(PAUSED_WAIT, ready_unreplaced(&mut events)).await.unwrap();
+    service.hosts_until(2).await;
+
+    service.close.send_modify(|count| *count += 1);
+    tokio::time::timeout(PAUSED_WAIT, unavailable(&mut events)).await.unwrap();
+    let again = tokio::time::timeout(PAUSED_WAIT, ready_unreplaced(&mut events)).await.unwrap();
+    assert_eq!(again, code);
+
+    // A new code keeps the claim too.
+    sharing.new_code();
+    let new = tokio::time::timeout(PAUSED_WAIT, ready_unreplaced(&mut events)).await.unwrap();
+    assert_ne!(new, code);
+
+    let hosts = service.hosts_until(5).await;
+    let summary: Vec<_> = hosts.iter().map(|(connection, room, ..)| (*connection, room)).collect();
+    assert_eq!(summary[2..4], [(2, &hosts[0].1), (2, &hosts[1].1)], "the same rooms again");
+    assert_eq!(hosts[4].0, 2);
+    let claim = hosts[0].2.clone().expect("a claim");
+    assert!(hosts.iter().all(|(.., c, _)| c.as_ref() == Some(&claim)), "{hosts:?}");
+}

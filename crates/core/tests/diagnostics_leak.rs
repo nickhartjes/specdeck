@@ -491,3 +491,82 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     let failed = capture.named("agent.start_failed");
     assert_eq!(failed[0].field("reason"), Some("folder_missing"));
 }
+
+/// Rooms taken on the sharing service (`room-ownership` task 5.3): the host records that its
+/// code was in use and its rejoin room taken, without a room id or its claim.
+#[tokio::test(flavor = "multi_thread")]
+async fn taken_rooms_are_recorded_without_room_ids_or_the_claim() {
+    use futures_util::{SinkExt, StreamExt};
+    use specdeck_core::output_log::OutputLog;
+    use specdeck_core::session::SessionView;
+    use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (capture, _guard) = Capture::start();
+    // A service on which someone else holds the first two rooms the host asks for: its code's
+    // and its rejoin room.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+    let (heard_tx, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let mut taken = 2;
+        while let Some(Ok(message)) = socket.next().await {
+            let Message::Text(text) = message else { continue };
+            let Ok(ClientMessage::Host { room, claim }) = serde_json::from_str(&text) else {
+                continue;
+            };
+            let _ = heard_tx.send((room.clone(), claim));
+            let answer = if taken > 0 {
+                taken -= 1;
+                ServerMessage::Error { code: ErrorCode::RoomTaken, room: Some(room) }
+            } else {
+                ServerMessage::RoomOpened { room }
+            };
+            let json = serde_json::to_string(&answer).unwrap();
+            socket.send(Message::Text(json.into())).await.unwrap();
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(OutputLog::create(dir.path()).unwrap());
+    let view = SessionView::from_log(AgentId::OpenCode, log);
+    let (sharing, mut events) = Sharing::start(
+        view,
+        SharingConfig {
+            signalling_url: url,
+            username: HOST_NAME.into(),
+            peer: loopback(),
+            viewer_limit: 20,
+        },
+    );
+    let code = tokio::time::timeout(WAIT, async {
+        loop {
+            if let Some(SharingEvent::Ready { code }) = events.recv().await {
+                return code;
+            }
+        }
+    })
+    .await
+    .expect("no code");
+    drop(sharing);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let mut secrets = vec![code.as_str().to_owned()];
+    while let Ok((room, claim)) = heard.try_recv() {
+        secrets.push(room);
+        secrets.extend(claim);
+    }
+    assert!(secrets.len() >= 5, "{secrets:?}");
+    let captured = capture.events();
+    for name in ["host.code_in_use", "host.rejoin_room_taken"] {
+        assert_eq!(captured.iter().filter(|e| e.name == name).count(), 1, "{name}: {captured:?}");
+    }
+    for event in &captured {
+        let line = format!("{} {:?}", event.name, event.fields);
+        for secret in &secrets {
+            assert!(!line.contains(secret.as_str()), "leaked in {line}");
+        }
+        assert!(event.fields.iter().all(|(_, value)| plain(value)), "not plain: {line}");
+    }
+}
