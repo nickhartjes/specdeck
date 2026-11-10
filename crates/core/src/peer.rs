@@ -22,6 +22,10 @@ use crate::diag::{self, CandidateType, Reason};
 /// Queued bytes per channel below which `BufferedLow` is reported.
 pub const BUFFERED_LOW: usize = 256 * 1024;
 
+/// Most of the other side's candidates kept while local gathering runs; an honest side sends
+/// about ten.
+const MAX_PENDING_CANDIDATES: usize = 64;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Channel {
     Control,
@@ -283,17 +287,22 @@ impl Peer {
             .map_err(|e| e.to_string())
     }
 
-    /// Adds the other side's candidate, or keeps it until local gathering is complete.
+    /// Adds the other side's candidate, or keeps it until local gathering is complete. Keeps at
+    /// most [`MAX_PENDING_CANDIDATES`]; an honest side sends about ten, so more are dropped.
     pub fn add_remote_candidate(&mut self, candidate: String, mid: String) -> Result<(), String> {
-        self.candidates.lock().unwrap().add(Side::Remote, &candidate);
-        let candidate = IceCandidate { candidate, mid };
         {
             let mut gathered = self.gathered.lock().unwrap();
             if !gathered.complete {
-                gathered.pending.push(candidate);
+                if gathered.pending.len() >= MAX_PENDING_CANDIDATES {
+                    return Ok(());
+                }
+                self.candidates.lock().unwrap().add(Side::Remote, &candidate);
+                gathered.pending.push(IceCandidate { candidate, mid });
                 return Ok(());
             }
         }
+        self.candidates.lock().unwrap().add(Side::Remote, &candidate);
+        let candidate = IceCandidate { candidate, mid };
         self.pc.add_remote_candidate(&candidate).map_err(|e| e.to_string())
     }
 
@@ -516,6 +525,20 @@ mod tests {
                 },
             }
         }
+    }
+
+    #[tokio::test]
+    async fn at_most_sixty_four_candidates_wait_for_gathering() {
+        let (tx, _events) = unbounded_channel();
+        // Gathering starts with the offer, so nothing is complete before it.
+        let mut host = Peer::answer(&loopback(), tx).unwrap();
+        for port in 0..100 {
+            let candidate =
+                format!("a=candidate:1 1 UDP 2122317823 127.0.0.1 {} typ host", 40000 + port);
+            host.add_remote_candidate(candidate, "0".into()).unwrap();
+        }
+        assert_eq!(host.gathered.lock().unwrap().pending.len(), MAX_PENDING_CANDIDATES);
+        assert_eq!(host.candidates.lock().unwrap().remote.len(), MAX_PENDING_CANDIDATES);
     }
 
     #[tokio::test]
