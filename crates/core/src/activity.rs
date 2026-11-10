@@ -82,6 +82,9 @@ pub struct Activity {
     /// The timeline is unavailable with a sandbox's explanation, which [`NOT_REACHED`] or
     /// [`TOKEN_NOT_PASSED`] gave.
     explained: Option<&'static str>,
+    /// The prompt whose turn ended. Claude Code 2.1.319 can send that turn's final message after
+    /// `Stop`, which must not make it look busy again (#108).
+    answered: Option<String>,
 }
 
 impl Activity {
@@ -104,6 +107,7 @@ impl Activity {
             reached: false,
             rejected: false,
             explained: None,
+            answered: None,
         }
     }
 
@@ -142,6 +146,14 @@ impl Activity {
     pub fn on_entries(&mut self, entries: &[Entry]) -> Vec<Change> {
         let mut changes = self.on_hook_event();
         for entry in entries {
+            match entry {
+                Entry::Prompt { .. } => self.answered = None,
+                Entry::Response { prompt_id, .. } => self.answered = Some(prompt_id.clone()),
+                Entry::Message { prompt_id, .. } if self.answered.as_ref() == Some(prompt_id) => {
+                    continue;
+                }
+                _ => {}
+            }
             self.hook_status = match entry {
                 // The question or plan is on screen until its result arrives.
                 Entry::ToolCall { tool_name, .. }
@@ -488,6 +500,38 @@ mod tests {
         let mut opencode = Activity::new(AgentId::OpenCode).sandboxed();
         opencode.on_output(start);
         assert!(opencode.poll(start + REACH_TIMEOUT * 2).is_empty());
+    }
+
+    fn message(prompt_id: &str) -> Entry {
+        Entry::Message {
+            prompt_id: prompt_id.into(),
+            message_id: "m".into(),
+            text: "done".into(),
+            r#final: true,
+        }
+    }
+
+    /// Claude Code 2.1.319 can send its final message after `Stop` (#108).
+    #[test]
+    fn a_message_after_the_turn_ended_keeps_the_status_waiting() {
+        let mut activity = Activity::new(AgentId::ClaudeCode);
+        activity.on_entries(&[prompt()]);
+        assert_eq!(activity.on_entries(&[response()]), [Change::Status(AgentStatus::Waiting)]);
+        assert!(activity.on_entries(&[message("p")]).is_empty());
+        assert_eq!(activity.status(), AgentStatus::Waiting);
+        // A message in a new turn still means work.
+        let next = Entry::Prompt { prompt_id: "q".into(), text: "again".into() };
+        assert_eq!(activity.on_entries(&[next]), [Change::Status(AgentStatus::Working)]);
+        activity.on_entries(&[Entry::Response { prompt_id: "q".into(), text: "ok".into() }]);
+        assert_eq!(activity.on_entries(&[message("r")]), [Change::Status(AgentStatus::Working)]);
+    }
+
+    #[test]
+    fn a_message_before_the_turn_ends_means_work() {
+        let mut activity = Activity::new(AgentId::ClaudeCode);
+        activity.on_output(Instant::now());
+        assert_eq!(activity.on_entries(&[message("p")]), [Change::Status(AgentStatus::Working)]);
+        assert_eq!(activity.on_entries(&[response()]), [Change::Status(AgentStatus::Waiting)]);
     }
 
     #[test]
