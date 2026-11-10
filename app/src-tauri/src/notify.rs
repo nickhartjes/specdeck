@@ -195,7 +195,18 @@ pub fn notify<R: Runtime>(
         return false;
     }
     let id = notices.lock().unwrap().record(session, open);
+    let body = plain_body(body, cfg!(target_os = "linux"));
     app.notification().builder().id(id).title(title).body(body).show().is_ok()
+}
+
+/// `body` as plain text. Linux notification servers may render a little markup in bodies, so
+/// there `&`, `<` and `>` are escaped; titles are plain text everywhere, as are bodies on macOS
+/// and Windows (`confine-window-navigation` design decision 6).
+fn plain_body(body: &str, linux: bool) -> String {
+    if !linux {
+        return body.to_owned();
+    }
+    body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 /// Whether the window exists and has focus; a closed window has none.
@@ -257,6 +268,14 @@ mod tests {
         let id = |n: usize| NoticeOpen::PlanMode { tool_use_id: "t".repeat(n) };
         assert!(id(OPEN_ID_BYTES).checked().is_some());
         assert_eq!(id(OPEN_ID_BYTES + 1).checked(), None);
+    }
+
+    #[test]
+    fn bodies_are_plain_text_on_linux() {
+        let body = "<b>nick</b> is watching your session.";
+        assert_eq!(plain_body(body, true), "&lt;b&gt;nick&lt;/b&gt; is watching your session.");
+        assert_eq!(plain_body("a & b", true), "a &amp; b");
+        assert_eq!(plain_body(body, false), body);
     }
 
     #[test]

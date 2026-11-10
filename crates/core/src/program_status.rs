@@ -9,6 +9,7 @@
 use alacritty_terminal::vte::{Parser, Perform};
 use base64::Engine;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+use specdeck_protocol::control::shown_name;
 
 /// The answer to `OSC 7501 ; ?`, naming every state and kind SpecDeck understands.
 pub const QUERY_REPLY: &[u8] =
@@ -219,27 +220,13 @@ pub fn clean(text: &str) -> Option<String> {
     if text.chars().any(char::is_control) {
         return None;
     }
-    let visible: String = text.chars().filter(|c| !invisible(*c)).collect();
-    let visible = visible.trim();
-    if visible.is_empty() {
-        return None;
-    }
+    let visible = shown_name(text)?;
     if visible.chars().count() <= MAX_SHOWN_CHARS {
-        return Some(visible.to_owned());
+        return Some(visible);
     }
     let mut cut: String = visible.chars().take(MAX_SHOWN_CHARS - 1).collect();
     cut.push('…');
     Some(cut)
-}
-
-/// Zero-width and text-direction characters, which could hide or reorder what is shown.
-fn invisible(c: char) -> bool {
-    matches!(c,
-        '\u{200B}'..='\u{200F}'
-        | '\u{202A}'..='\u{202E}'
-        | '\u{2060}'..='\u{2064}'
-        | '\u{2066}'..='\u{2069}'
-        | '\u{FEFF}')
 }
 
 /// A display name for a program's `app` id, for the programs SpecDeck knows.

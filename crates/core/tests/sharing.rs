@@ -230,6 +230,22 @@ async fn duplicate_usernames_can_be_told_apart() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn names_are_listed_without_hidden_characters() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick\u{2066}").await;
+    let code = ready(&mut hosted.events).await;
+    let (_a, mut a) = join(&url, &code, "nick\u{200B}");
+    until(&mut a, &mut Seen::default(), |seen, _| seen.welcome.is_some()).await;
+    let (_b, mut b) = join(&url, &code, "\u{202E}anna");
+    let mut seen = Seen::default();
+    until(&mut b, &mut seen, |seen, _| seen.participants.len() == 3).await;
+    let labels: Vec<_> = seen.participants.iter().map(|p| p.label.as_str()).collect();
+    assert_eq!(labels, ["nick", "nick (2)", "anna"]);
+    let names: Vec<_> = seen.participants.iter().map(|p| p.username.as_str()).collect();
+    assert_eq!(names, ["nick", "nick", "anna"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn wrong_code_is_refused() {
     let url = signalling().await;
     let mut hosted = host(&url, "nick").await;

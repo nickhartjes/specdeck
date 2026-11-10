@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { shownName } from '../model/names';
 import { HOST_NOTIFICATION_KINDS } from '../model/hostNotifications';
 import { VIEWER_NOTIFICATION_KINDS } from '../model/viewerNotices';
 import { errorMessage, useBridge } from '../api/bridge';
@@ -31,10 +32,11 @@ export function SettingsScreen() {
 
   const saveName = async (event?: FormEvent) => {
     event?.preventDefault();
-    if (name.trim() === (profile.username ?? '')) return;
-    if (!name.trim()) return setError('Enter the name others should see.');
+    const shown = shownName(name);
+    if (!shown) return setError('Enter the name others should see.');
+    if (shown === profile.username) return;
     try {
-      setProfile(await bridge.setUsername(name));
+      setProfile(await bridge.setUsername(shown));
       setError(null);
       setSaved(true);
     } catch (e) {
