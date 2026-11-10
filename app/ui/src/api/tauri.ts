@@ -129,6 +129,7 @@ export const tauriBridge: Bridge = {
   saveSharedFile: (name, bytes) => invoke<boolean>('save_shared_file', bytes, { headers: fileHeaders(name) }),
   sendLink: (url, title, sessionOnly) => invoke('send_link', { url, title, sessionOnly }),
   openLink: (id) => invoke('open_shared_link', { id }),
+  openContentLink: (url) => invoke('open_content_link', { url }),
   answerRead: (ask, answer) => invoke('answer_read', { ask, answer }),
   castVote: (ask, round, card) => invoke('cast_vote', { ask, round, card }),
   takeJoinLink: () => invoke<JoinLink | null>('take_join_link'),
