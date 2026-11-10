@@ -125,9 +125,11 @@ describe('menu commands', () => {
     expect(document.documentElement).toHaveClass('translucent');
   });
 
-  it('joins straight away when a join link opened the app', async () => {
+  it('joins when a join link opened the app and the user agrees', async () => {
     const bridge = fakeBridge('start', { takeJoinLink: vi.fn(async () => ({ code: '7K2M-9QXH-4TPA' })) });
     renderWith(bridge, <App />);
+    const dialog = await screen.findByRole('alertdialog', { name: 'Join this session?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Join' }));
     await waitFor(() => expect(bridge.joinSession).toHaveBeenCalledWith('7K2M-9QXH-4TPA', null, expect.any(Function), expect.any(Function)));
   });
 
