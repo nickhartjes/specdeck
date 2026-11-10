@@ -36,7 +36,7 @@ Write each task's tests first and see them fail. Rust tests run with `cargo test
 
 ## 3. The sharing service: liveness, rates, probing, stopping (`crates/server`)
 
-- [ ] 3.1 Liveness (design decision 5): ping every connection every 30 seconds through its writer, and close one from which no frame arrived for 90 seconds, with `socket.error` `unresponsive`. Make both intervals `Config` fields so tests can shorten them. Verify with tests in `rooms.rs`:
+- [x] 3.1 Liveness (design decision 5): ping every connection every 30 seconds through its writer, and close one from which no frame arrived for 90 seconds, with `socket.error` `unresponsive`. Make both intervals `Config` fields so tests can shorten them. Verify with tests in `rooms.rs`:
   - a raw socket that never reads or answers is closed after the deadline, and its connection slot and rooms are handled as for any disconnect (a room with a claim becomes reserved);
   - a client that only answers pings stays open for many intervals;
   - `signalling_client::connect` from `crates/core` (as a dev-dependency test, or in `crates/core/tests/sharing.rs`) stays connected to a service with 1-second pings for 10 seconds without sending anything itself.
