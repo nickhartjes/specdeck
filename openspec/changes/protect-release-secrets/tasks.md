@@ -39,7 +39,7 @@
 - [ ] 6.1 Set the Kubernetes relay to the coturn version in `deploy/compose/compose.yaml`, drop arguments that version refuses, and set `--user-quota=10` with a comment that explains it (design decision 8); verify with `docker run` of that image and the manifest's arguments that coturn stays up for 10 seconds, and with `just local-test` where Colima is available
 - [x] 6.2 Add `scripts/check-relay-manifests.sh` to `just check` (same coturn tag in both files; per-credential quota below the total in each) and extend `ci.yml`'s `relay` job to start coturn with the Kubernetes arguments too; verify the script fails on the manifests as they are now and passes after 6.1
 - [ ] 6.3 Make the Dockerfile's pnpm version a build argument whose default equals `mise.toml`, pass it in `ci.yml` and `release.yml`, and fail `just check` when the two differ (design decision 9); verify `docker build -f docker/server.Dockerfile .` still builds
-- [ ] 6.4 Update `docs/site/src/content/docs/self-host/configuration.md` (the `--user-quota` row: at most half of the total, no more than 40) and `kubernetes.md` (raise the port range, the Service's ports and both quotas together); verify with `just docs-build`
+- [x] 6.4 Update `docs/site/src/content/docs/self-host/configuration.md` (the `--user-quota` row: at most half of the total, no more than 40) and `kubernetes.md` (raise the port range, the Service's ports and both quotas together); verify with `just docs-build`
 
 ## 7. Dependency audit
 
@@ -60,10 +60,10 @@ These cannot be done or read from the repository. Each is a manual step; note th
 
 Not a feature of the app, so no README overview line and no video (proposal.md, Impact). The pages that describe releases change:
 
-- [ ] 9.1 `docs/site/src/content/docs/security/known-limits.md`: remove "No checksums or build provenance" and "The release workflow trusts tagged actions", and point the remaining "Installers are not signed by Apple or Microsoft" item to checking a download
-- [ ] 9.2 `docs/site/src/content/docs/security/your-computer.md`, "How releases are signed": add rows for checksums and build provenance with the two commands, and replace the sentence that says there are none
-- [ ] 9.3 `docs/site/src/content/docs/install.md`: add "Check your download" with the two commands and what a good result looks like, linked from the first-launch section
-- [ ] 9.4 `README.md`: the Releases section (the signing job, `update-signing`, `SHA256SUMS` and provenance) and the CI section (pinned actions, the audit workflow)
+- [x] 9.1 `docs/site/src/content/docs/security/known-limits.md`: remove "No checksums or build provenance" and "The release workflow trusts tagged actions", and point the remaining "Installers are not signed by Apple or Microsoft" item to checking a download
+- [x] 9.2 `docs/site/src/content/docs/security/your-computer.md`, "How releases are signed": add rows for checksums and build provenance with the two commands, and replace the sentence that says there are none
+- [x] 9.3 `docs/site/src/content/docs/install.md`: add "Check your download" with the two commands and what a good result looks like, linked from the first-launch section
+- [x] 9.4 `README.md`: the Releases section (the signing job, `update-signing`, `SHA256SUMS` and provenance) and the CI section (pinned actions, the audit workflow)
 - [ ] 9.5 Verify with `just docs-build`, and read the three pages against a real release once 2.6 and 3.3 have passed: every command on them works as written
 
 ## 10. After the first final release

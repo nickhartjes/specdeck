@@ -20,7 +20,7 @@ The release files keep the same names from version to version, so a link such as
 
 ## The first launch
 
-Releases are not signed yet, so your system warns the first time you open SpecDeck:
+Releases are not signed yet, so your system warns the first time you open SpecDeck. Before you allow it, you can [check your download](#check-your-download) against the release that made it.
 
 - **macOS**: allow SpecDeck once under **System Settings › Privacy & Security** (**Open Anyway**), or run `xattr -dr com.apple.quarantine /Applications/SpecDeck.app`. The Homebrew cask says the same when it installs.
 - **Windows**: choose **More info › Run anyway** in the SmartScreen prompt.
@@ -28,6 +28,26 @@ Releases are not signed yet, so your system warns the first time you open SpecDe
 On macOS, the first time you host or join, macOS also asks whether SpecDeck may *find and connect to devices on your local network*. Select **Allow**: SpecDeck connects directly to teammates on the same network when it can.
 
 Installing also registers `specdeck://` links, so clicking a join link opens SpecDeck.
+
+## Check your download
+
+Every release lists the SHA-256 hash of each installer in a file `SHA256SUMS`, and GitHub keeps a signed record of which workflow built each file, its build provenance. Either check tells you the file is the one SpecDeck's release workflow made; Homebrew checks the hash for you.
+
+**The checksum.** Download `SHA256SUMS` from the same release into the folder with the installer, then on Linux:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+A good download prints its name followed by `OK`, for example `SpecDeck-x86_64.AppImage: OK`. Any other result means the file is not the one released: download it again. On macOS, run `shasum -a 256 SpecDeck-arm64.dmg`, and on Windows, `Get-FileHash SpecDeck-x64-setup.exe` in PowerShell; the hash must equal the one on that file's line in `SHA256SUMS`.
+
+**The build provenance**, with the [GitHub CLI](https://cli.github.com):
+
+```sh
+gh attestation verify SpecDeck-arm64.dmg --repo nickhartjes/specdeck
+```
+
+A good download ends with `Verification succeeded!`, and the attestation it shows names `.github/workflows/release.yml` at the release's tag, for example `refs/tags/v1.9.0`. A file that this workflow did not make fails the check.
 
 ## Nix
 
