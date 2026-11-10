@@ -414,6 +414,8 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP/cli"
           cd "$RUNNER_TEMP/cli"
+          # Its own project root, so npm installs here and nowhere above.
+          echo '{}' > package.json
           npm install --ignore-scripts --no-save --no-audit --no-fund "@tauri-apps/cli@$version"
           echo "$RUNNER_TEMP/cli/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Download the update files
