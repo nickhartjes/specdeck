@@ -78,7 +78,7 @@ Write each task's tests first and see them fail. Rust tests run with `cargo test
 
 ## 7. Deployments
 
-- [ ] 7.1 Add `SPECDECK_ROOM_HOLD_SECONDS` as a commented setting to `deploy/compose/compose.yaml` and `deploy/k8s/base/server.yaml`, and set a termination grace period of 10 seconds for the server in both. Verify with `docker compose config` and `kubectl kustomize deploy/k8s/base`.
+- [x] 7.1 Add `SPECDECK_ROOM_HOLD_SECONDS` as a commented setting to `deploy/compose/compose.yaml` and `deploy/k8s/base/server.yaml`, and set a termination grace period of 10 seconds for the server in both. Verify with `docker compose config` and `kubectl kustomize deploy/k8s/base`.
 
 ## 8. Documentation
 

@@ -22,8 +22,12 @@ services:
       SPECDECK_TURN_URLS: turn:${TURN_DOMAIN:?Set TURN_DOMAIN in .env}:3478?transport=udp
       # A relayed session refreshes its allocation with these credentials: cover a long day.
       SPECDECK_TURN_TTL_SECONDS: "43200"
+      # How long a room is kept for a host whose connection dropped, in seconds; 0 keeps none.
+      # SPECDECK_ROOM_HOLD_SECONDS: "300"
       # Plain text, for `docker compose logs`. See the configuration reference for the events.
       SPECDECK_LOG_LEVEL: info
+    # On stop the service closes its connections and exits within 5 seconds.
+    stop_grace_period: 10s
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
