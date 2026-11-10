@@ -341,6 +341,11 @@ impl SessionView {
         self.files.lock().unwrap().store.release(upload);
     }
 
+    /// Frees the room of every unfinished upload of `viewer`, who was removed.
+    pub fn release_viewer(&self, viewer: u32) {
+        self.files.lock().unwrap().store.release_viewer(viewer);
+    }
+
     /// Shares a viewer's upload once all of it arrived and matched its hash. The switch is
     /// checked again: a file still on its way when the host turned it off is not shared.
     pub fn complete_upload(

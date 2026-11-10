@@ -94,6 +94,12 @@ async fn host_agent(
     host_timed(url, username, agent, command, script, (HELLO_DEADLINE, JOIN_DEADLINE)).await
 }
 
+/// Hosts the echo agent with these deadlines for joining: after connecting, and after being
+/// announced.
+async fn host_with_deadlines(url: &str, hello: Duration, join: Duration) -> Hosted {
+    host_timed(url, "nick", AgentId::OpenCode, "opencode", ECHO_AGENT, (hello, join)).await
+}
+
 async fn host_timed(
     url: &str,
     username: &str,
@@ -220,6 +226,24 @@ struct RawViewer {
     _signalling: (SignallingSender, UnboundedReceiver<ServerMessage>),
     /// Stream frames received: output, timeline events, the end of a replay.
     frames: usize,
+}
+
+/// Joins `room` on the service and stays there, without making a connection.
+async fn announce(url: &str, room: &str) -> (SignallingSender, UnboundedReceiver<ServerMessage>) {
+    let (signalling, mut server) = signalling_client::connect(url).await.unwrap();
+    signalling.send(ClientMessage::Join { room: room.into() });
+    tokio::time::timeout(WAIT, async {
+        loop {
+            match server.recv().await.expect("service closed") {
+                ServerMessage::Joined { .. } => break,
+                ServerMessage::Error { code } => panic!("refused by the service: {code:?}"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("not joined");
+    (signalling, server)
 }
 
 impl RawViewer {
@@ -358,6 +382,25 @@ impl RawViewer {
         }
         messages
     }
+
+    /// Whether the connection stays open for `wait`, ignoring what it receives.
+    async fn stays_open(&mut self, wait: Duration) -> bool {
+        tokio::time::timeout(wait, async {
+            loop {
+                match self.events.recv().await {
+                    None
+                    | Some(PeerEvent::State(
+                        datachannel::ConnectionState::Closed
+                        | datachannel::ConnectionState::Failed
+                        | datachannel::ConnectionState::Disconnected,
+                    )) => return,
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .is_err()
+    }
 }
 
 fn suggestion(id: u32) -> ViewerMessage {
@@ -434,6 +477,226 @@ async fn a_second_hello_does_not_reset_the_rate_limit() {
         }
     }
     assert_eq!(seen, 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_that_never_says_hello_is_dropped() {
+    let url = signalling().await;
+    let mut hosted = host_with_deadlines(&url, Duration::from_millis(200), JOIN_DEADLINE).await;
+    let code = ready(&mut hosted.events).await;
+    let (_viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.welcome.is_some()).await;
+
+    let mut raw = RawViewer::join(&url, &code).await;
+    assert!(!raw.stays_open(Duration::from_secs(5)).await, "the silent connection stayed open");
+    let status = host_status(&hosted, |s| s.viewers.len() == 1).await;
+    assert_eq!(
+        status.last_departure.map(|d| (d.viewer, d.reason)),
+        Some((None, LeaveReason::Failed))
+    );
+
+    // The viewer who joined is past the deadline and still receives the session.
+    hosted.session.input(b"still here\r").unwrap();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:still here")).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_announced_viewer_that_never_connects_is_dropped() {
+    let url = signalling().await;
+    let mut hosted = host_with_deadlines(&url, HELLO_DEADLINE, Duration::from_millis(200)).await;
+    let code = ready(&mut hosted.events).await;
+    let _announced = announce(&url, &code.keys().room_id).await;
+    let status = host_status(&hosted, |s| s.last_departure.is_some()).await;
+    assert!(status.viewers.is_empty(), "{:?}", status.viewers);
+    let departure = status.last_departure.unwrap();
+    assert_eq!((departure.viewer, departure.reason), (None, LeaveReason::Failed));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_parked_connection_does_not_survive_a_new_code() {
+    let url = signalling().await;
+    let long = Duration::from_secs(60);
+    let mut hosted = host_with_deadlines(&url, long, long).await;
+    let code = ready(&mut hosted.events).await;
+    let mut raw = RawViewer::join(&url, &code).await;
+
+    hosted.sharing.new_code();
+    assert_ne!(ready(&mut hosted.events).await, code);
+    raw.hello(None);
+    let messages = raw.until_closed().await;
+    assert!(!messages.iter().any(|m| matches!(m, HostMessage::Welcome { .. })), "{messages:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_parked_connection_does_not_survive_removal() {
+    let url = signalling().await;
+    let long = Duration::from_secs(60);
+    let mut hosted = host_with_deadlines(&url, long, long).await;
+    let code = ready(&mut hosted.events).await;
+    let (_viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.welcome.is_some()).await;
+    let mut parked = RawViewer::join(&url, &code).await;
+
+    hosted.sharing.remove(seen.welcome.unwrap());
+    let event = until(&mut events, &mut seen, |_, e| e.is_final()).await;
+    assert_eq!(event, ViewerEvent::Refused(RefusalReason::Removed));
+    parked.hello(None);
+    let messages = parked.until_closed().await;
+    assert!(!messages.iter().any(|m| matches!(m, HostMessage::Welcome { .. })), "{messages:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_viewer_away_during_a_new_code_needs_the_new_code() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("ready")).await;
+
+    viewer.interrupt(Duration::from_secs(2));
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    hosted.sharing.new_code();
+    let new = ready(&mut hosted.events).await;
+    assert_ne!(new, code);
+    hosted.session.input(b"new code\r").unwrap();
+
+    let event = until(&mut events, &mut seen, |_, e| e.is_final()).await;
+    assert_eq!(event, ViewerEvent::Refused(RefusalReason::Removed));
+    assert!(!seen.text.contains("got:new code"), "{:?}", seen.text);
+
+    let (_again, mut again) = join(&url, &new, "anna");
+    let mut seen_again = Seen::default();
+    until(&mut again, &mut seen_again, |seen, _| seen.text.contains("got:new code")).await;
+    assert_ne!(seen_again.welcome, seen.welcome, "a new viewer");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_viewer_away_without_a_new_code_comes_back() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("ready")).await;
+    let first = seen.welcome;
+
+    viewer.interrupt(Duration::from_secs(2));
+    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    hosted.session.input(b"while away\r").unwrap();
+
+    let event =
+        until(&mut events, &mut seen, |_, e| matches!(e, ViewerEvent::Welcome { .. })).await;
+    assert!(matches!(event, ViewerEvent::Welcome { reconnected: true, .. }));
+    assert_eq!(seen.welcome, first, "the same viewer");
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:while away")).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removed_viewer_is_told_so_when_it_tries_to_return() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    hosted.session.input(b"before\r").unwrap();
+    let mut raw = RawViewer::join(&url, &code).await;
+    raw.hello(None);
+    let (id, token, rejoin_room) = raw.welcome().await.unwrap();
+
+    hosted.sharing.remove(id);
+    let messages = raw.until_closed().await;
+    assert!(messages.contains(&HostMessage::Refused { reason: RefusalReason::Removed }));
+
+    let mut back = RawViewer::connect(&url, &rejoin_room, &token)
+        .await
+        .expect("the host did not answer the removed viewer's offer");
+    back.hello(Some(token));
+    let messages = back.until_closed().await;
+    assert_eq!(messages, [HostMessage::Refused { reason: RefusalReason::Removed }]);
+    assert_eq!(back.frames, 0, "no output or timeline frame");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_viewer_frees_its_unfinished_upload() {
+    use specdeck_core::shared_files::{MAX_SESSION_BYTES, MAX_VIEWER_BYTES};
+
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    hosted.session.allow_viewer_files(true);
+    let mut raw = RawViewer::join(&url, &code).await;
+    raw.hello(None);
+    let (id, ..) = raw.welcome().await.unwrap();
+    let size = MAX_VIEWER_BYTES / 2;
+    let request = ViewerRequest::ShareFile { name: "big.txt".into(), size, sha256: [7; 32] };
+    raw.send(&ViewerMessage::Send { id: 1, request });
+    loop {
+        match raw.recv().await.expect("closed") {
+            HostMessage::Reply { id: 1, outcome } => {
+                assert!(matches!(outcome, Outcome::Ready { .. }), "{outcome:?}");
+                break;
+            }
+            _ => continue,
+        }
+    }
+
+    hosted.sharing.remove(id);
+    raw.until_closed().await;
+    // The whole session's room is free again for the host's files.
+    let mut shared = 0;
+    for n in 0..MAX_SESSION_BYTES / size {
+        let bytes = vec![b'x'; size as usize];
+        let outcome = hosted.session.share_file("nick", &format!("{n}.txt"), bytes);
+        assert!(outcome.is_ok(), "file {n}: {outcome:?}");
+        shared += size;
+    }
+    assert_eq!(shared, MAX_SESSION_BYTES);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_viewer_drops_its_reconnection_in_progress() {
+    let url = signalling().await;
+    let long = Duration::from_secs(60);
+    let mut hosted = host_with_deadlines(&url, long, long).await;
+    let code = ready(&mut hosted.events).await;
+    let mut raw = RawViewer::join(&url, &code).await;
+    raw.hello(None);
+    let (id, token, rejoin_room) = raw.welcome().await.unwrap();
+    // Its offer is verified; it has not said hello yet.
+    let mut returning = RawViewer::connect(&url, &rejoin_room, &token).await.unwrap();
+
+    hosted.sharing.remove(id);
+    raw.until_closed().await;
+    returning.hello(Some(token));
+    let messages = returning.until_closed().await;
+    assert!(!messages.iter().any(|m| matches!(m, HostMessage::Welcome { .. })), "{messages:?}");
+    assert_eq!(returning.frames, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hello_with_the_largest_sequence_number_is_malformed() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (_viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.welcome.is_some()).await;
+
+    for (output, event) in [(Some(u64::MAX), None), (None, Some(u64::MAX))] {
+        let mut raw = RawViewer::join(&url, &code).await;
+        raw.hello_from(None, output, event);
+        let messages = raw.until_closed().await;
+        assert!(!messages.iter().any(|m| matches!(m, HostMessage::Welcome { .. })), "{messages:?}");
+        let status = host_status(&hosted, |s| {
+            s.last_departure.as_ref().is_some_and(|d| d.reason == LeaveReason::Malformed)
+        })
+        .await;
+        assert_eq!(status.viewers.len(), 1, "only anna");
+    }
+
+    hosted.session.input(b"still here\r").unwrap();
+    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:still here")).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1163,24 +1426,6 @@ async fn a_late_join_records_the_replay_on_both_sides() {
     let caught_up = &captured(&capture, "viewer.caught_up", 2).await[1];
     assert_eq!(replay.field("returning"), Some("true"));
     assert_eq!(caught_up.field("reconnected"), Some("true"));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn viewer_returns_after_a_new_code_was_made_during_its_outage() {
-    let url = signalling().await;
-    let mut hosted = host(&url, "nick").await;
-    let code = ready(&mut hosted.events).await;
-    let (viewer, mut events) = join(&url, &code, "anna");
-    let mut seen = Seen::default();
-    until(&mut events, &mut seen, |seen, _| seen.text.contains("ready")).await;
-
-    viewer.interrupt(Duration::from_secs(2));
-    until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
-    hosted.sharing.new_code();
-    assert_ne!(ready(&mut hosted.events).await, code);
-    hosted.session.input(b"new code\r").unwrap();
-
-    until(&mut events, &mut seen, |seen, _| seen.text.contains("got:new code")).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
