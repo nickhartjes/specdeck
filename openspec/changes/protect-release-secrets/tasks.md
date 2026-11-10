@@ -69,3 +69,31 @@ Not a feature of the app, so no README overview line and no video (proposal.md, 
 ## 10. After the first final release
 
 - [ ] 10.1 Ask `release-and-verification` 5.1 to 5.3 to run against this release: an installed app on macOS, Linux and Windows accepts an update signed by `sign-updates`. Record here only that they passed; the tasks stay in that change
+
+## Implementation notes
+
+Decisions where design.md and the code or spec differed:
+
+- **Key missing (spec "Key missing" vs design decision 1):** `package` always uploads the update files, but the spec keeps "published without update files, as before". Without the key, `sign-updates` warns and removes the two `SpecDeck-*.app.tar.gz` from the draft; on Windows and Linux the update file is the installer, which stays. `publish` then writes no `latest.json`, as before.
+- **`checksums` compares every draft asset** except `*.sig` and `latest.json` with the hashes the build jobs recorded, rather than a fixed list, so it works with or without the macOS archives and fails on any asset no build job uploaded. macOS runners hash with `shasum -a 256`; a `*` binary-mode marker from Git Bash is normalised.
+- **Renovate token (decision 5):** the run's token goes to a `Push the new hash` step of its own instead of the step that runs Nix, so the Nix build never has it in its environment.
+- **pnpm (decision 9):** the Dockerfile's default equals `mise.toml` and `scripts/check-pnpm-version.sh` keeps it so; CI and the release pass the version, the documentation's `docker build` commands rely on the default and are unchanged.
+- **The shell checks** (`check-workflows.sh`, `render-cask.test.sh`, `check-relay-manifests.sh`, `check-pnpm-version.sh`) run from a `just check-scripts` recipe that `just check` calls; it is a no-op on Windows, where CI's macOS and Linux runs cover it.
+- **`deploy/k8s/local`** patched coturn's arguments by index; removing `--no-cli` and `--no-dtls` moved them, so its patch now names indexes 14 and 15 and keeps the local relay at `--user-quota=40` of `--total-quota=1000` (checked with `kustomize build`).
+- **2.2:** the 1.8.0 archive has one `SpecDeck.app/` folder at the top, and the updater skips the first path component (`tauri-plugin-updater` 2.14.1, `skip(1)`). Re-archiving its contents with `tar -czf … -C … SpecDeck.app` gives the same entries (only trailing slashes on folders differ). The job runs macOS's bsdtar with `COPYFILE_DISABLE=1`, so no AppleDouble files; 2.6 confirms on a real build. No fallback needed.
+- **2.4:** the npm registry is not reachable from this machine, so the CLI 2.12.4 was installed into an empty folder from the local pnpm store with `--offline --ignore-scripts` (the platform binary package named explicitly; npm installs it as an optional dependency by itself). `tauri signer generate`, then `signer sign --app-version 1.8.0`: the `.sig` decodes to a minisign signature with trusted comment `file:SpecDeck-arm64.app.tar.gz version:1.8.0`, which `minisign -V` verifies. The 1.8.0 signature verifies the same way against `tauri.conf.json`'s key.
+- **1.3:** validated with `renovate-config-validator` from nixpkgs (Renovate 44.181.0) instead of `npx`, for the same reason.
+- **3.2:** `actions/attest-build-provenance` is pinned at v4.2.2, whose `action.yml` accepts `subject-checksums`.
+- **4.2:** the expected cask is `scripts/testdata/specdeck-1.8.0.rb`, the 1.8.0 cask as published in the tap; the test fails when the version or the repository check is removed.
+- **actionlint** reports only that it does not know the `ubuntu-26.04` runner label, which the workflows used before this change.
+
+Left unticked:
+
+- 1.4: done and passes 1.1 and actionlint; "CI, Docs and Nix pass on the pull request" needs a pushed pull request.
+- 2.6, 3.3, 9.5: need the maintainer's 8.2 and a prerelease tag.
+- 4.3, 7.2: need the workflows on GitHub after merge.
+- 5.3: needs a Renovate pull request after merge.
+- 6.1: done; Docker was not available to this run, so coturn 4.17.2 from nixpkgs ran with the manifest's arguments and stayed up for 10 seconds instead; `docker run` of 4.18 is what CI's `relay` job now does. `just local-test` not run (no Colima).
+- 6.3: done and `just check` passes; `docker build` not run here (no Docker); CI's `image` job builds it.
+- 8.1 to 8.4: repository settings, by the maintainer.
+- 10.1: after the first final release.
