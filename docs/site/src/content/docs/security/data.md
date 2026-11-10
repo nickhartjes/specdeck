@@ -23,23 +23,33 @@ SpecDeck keeps a few files for each session in a folder of its own, `sessions/<n
 
 SpecDeck deletes them when the session ends. If the session's process is killed instead, for example by a crash or a power cut, they can stay behind; see [Known limits](/specdeck/security/known-limits/#leftover-session-files). Shared files and the braindump are kept in memory only, and are written to disk only when you put a file in the session folder or give the braindump yourself. Prompt suggestions, waiting or kept for later, are kept in memory only and never written to disk.
 
+SpecDeck runs git in the session folder to show the branch, to see what a shell command changed and to ask whether a file is ignored. Those git calls run no command that the folder's own git settings name: no file-system monitor, no hook and no filter, so a folder with a prepared `.git/config` cannot run anything through SpecDeck. git commands you or the agent type in the terminal use the folder's settings as usual.
+
 A session keeps running when SpecDeck restarts to update or crashes, and ends by itself if SpecDeck is not back within 10 minutes (see [When SpecDeck restarts or stops](/specdeck/guide/host/#when-specdeck-restarts-or-stops)).
 
 ## What viewers can see
 
-**Everything in the terminal is shared. The timeline adds nothing from outside the session folder.**
+**Everything in the terminal is shared. The timeline adds no content of a file outside the session folder, of a private file or of a file git ignores.**
 
 SpecDeck cannot filter the terminal. Whatever the agent or a command prints is shared as it appears, including secrets: a token in an environment variable, a `.env` file the agent shows, a password a program echoes. Claude Code itself prints part of the files it writes, and of files changed by commands, in its own terminal. So a file outside the session folder can still reach viewers, through the terminal.
+
+One rule decides whether the timeline carries a file's content, in any form: a diff, the lines of a new file, a document's text or a code file's whole text. It does only when the file is **inside the session folder**, with symlinks resolved, **is not private by name**, and **is not ignored by git**. Any other file, Markdown included, appears only by its path, as created, changed or deleted, also when it is edited. The rule is the same for Claude's file tools and its shell commands, and no setting changes it.
+
+- **Private by name**, compared without case: environment files (`.env`, `.env.*`, `.envrc`), keys and certificates (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `*.jks`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`), credentials (`.npmrc`, `.netrc`, `.pypirc`, `.git-credentials`, `.htpasswd`, `.dockercfg`, `credentials*`, `secrets.*`, `*.secret`) and Terraform variables and state (`*.tfvars`, `*.tfvars.json`, `*.tfstate`, `*.tfstate.backup`). So is every file below a folder named `.ssh`, `.aws`, `.kube`, `.gnupg`, `.docker` or `.git` inside the session folder. The list is a backstop, not a promise: a secret can be in any file.
+- **Ignored by git** is asked of the repository the file is in, which can be a submodule or a clone below the session folder. A file git tracks is not ignored, nor is a file in no repository. When git cannot answer for a file in a repository, the file is named only.
+- **A path the agent names** is resolved in the session folder, and the file SpecDeck reads is the one that passed the rule.
 
 What the timeline adds, with Claude Code:
 
 - **Prompts, answers and tool calls**, including shell commands as Claude typed them, and the questions and permission requests Claude Code shows you, with your answers.
-- **Diffs** of files Claude creates or changes inside the session folder, and, in a git repository, of files inside it that its commands change.
-- **Markdown documents** inside the session folder that Claude creates or changes, whole, up to 200 KB.
-- **Files outside the session folder only by path**, starting with `~` in your home folder, without text or diff.
-- **Whole code files only if you choose so**, with **Code viewers can open** in the sharing settings. Every session starts with only the changes. Files git ignores, private files such as `.env` and keys, and files outside the session folder are never sent whole.
+- **Diffs** of files Claude creates or changes inside the session folder, and, in a git repository, of files inside it that its commands change, under the rule above.
+- **Markdown documents** inside the session folder that Claude creates or changes, whole, up to 200 KB, under the rule above.
+- **Other files only by path**, starting with `~` in your home folder, without text or diff: files outside the session folder, private files and files git ignores.
+- **Whole code files only if you choose so**, with **Code viewers can open** in the sharing settings. Every session starts with only the changes. The rule above applies to them too.
 - **Screenshots** from Claude's browser and other MCP tools, unless you turn off **Show screenshots in the timeline**. A screenshot can show more than the terminal, such as a page you are logged in to.
 - **Usage figures** from Claude Code's status line, such as your 5-hour and 7-day limits, in the bar at the bottom.
+
+The terminal is not filtered by this rule: what Claude Code prints of a private file there is still shared.
 
 The exact list is in [What viewers see](/specdeck/guide/host/#what-viewers-see).
 
