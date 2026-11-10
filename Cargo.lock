@@ -4732,7 +4732,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-app"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "base64 0.23.1",
  "block2",
@@ -4771,7 +4771,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-core"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "alacritty_terminal",
  "axum",
@@ -4800,7 +4800,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-diag"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4814,7 +4814,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-local"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "libc",
  "serde",
@@ -4826,7 +4826,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-protocol"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -4844,7 +4844,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-server"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -4865,7 +4865,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-session"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "base64 0.23.1",
  "serde",
@@ -4882,7 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "specdeck-web"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "ed25519-dalek",
  "serde",
