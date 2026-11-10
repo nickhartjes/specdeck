@@ -3,11 +3,11 @@
 //! pages. Each window refuses everything else in its `on_navigation` handler; links leave the app
 //! through `open_content_link` instead, so there is one way to the system browser.
 
-use tauri::{AppHandle, Url};
+use tauri::{AppHandle, Runtime, Url};
 
 /// The origin the app's own page is served from: the `devUrl` in a development build, otherwise
 /// the address Tauri serves the bundled page at on this platform.
-pub fn app_origin(app: &AppHandle) -> Url {
+pub fn app_origin<R: Runtime>(app: &AppHandle<R>) -> Url {
     let dev = tauri::is_dev().then(|| app.config().build.dev_url.clone()).flatten();
     dev.unwrap_or_else(|| {
         let bundled = if cfg!(windows) { "http://tauri.localhost/" } else { "tauri://localhost/" };
@@ -22,7 +22,9 @@ pub fn own_page(url: &Url, app_origin: &Url) -> bool {
         && url.port_or_known_default() == app_origin.port_or_known_default()
 }
 
-/// Whether Claude's browser may load `url`: a web page, or the empty page it starts on.
+/// Whether Claude's browser may load `url`: a web page, or the empty page it starts on. Only the
+/// macOS browser makes windows; the tests check the rule everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn web_page(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https") || url.as_str() == "about:blank"
 }
