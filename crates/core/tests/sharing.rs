@@ -10,17 +10,18 @@ mod executable;
 use std::sync::Arc;
 use std::time::Duration;
 
-use specdeck_core::diag::AttemptEnd;
+use specdeck_core::diag::{AttemptEnd, LeaveReason};
 use specdeck_core::environment::Environment;
 use specdeck_core::output_log::OutputLog;
 use specdeck_core::peer::LinkState;
-use specdeck_core::peer::PeerConfig;
+use specdeck_core::peer::{Channel, Peer, PeerConfig, PeerEvent};
 use specdeck_core::session::SessionView;
 use specdeck_core::session::{HostConfig, HostSession};
 use specdeck_core::sharing::{
     Answer, AskCommand, HELLO_DEADLINE, HostAsks, HostLink, JOIN_DEADLINE, ServiceState, Sharing,
-    SharingConfig, SharingEvent,
+    SharingConfig, SharingEvent, SharingStatus,
 };
+use specdeck_core::signalling_client::{self, SignallingSender};
 use specdeck_core::viewer::{
     CONNECT_TIMEOUT, FileError, ViewerConfig, ViewerEvent, ViewerPhase, ViewerSession,
 };
@@ -29,11 +30,14 @@ use specdeck_protocol::asks::{
     Card, CardSet, ReadAnswer, ReadState, ReadTarget, ReadView, VoteView,
 };
 use specdeck_protocol::control::{
-    ASKS_PROTOCOL_VERSION, BraindumpItemInfo, MIN_VIEWER_PROTOCOL_VERSION, Outcome,
-    PROTOCOL_VERSION, Participant, RefusalReason, SentLinkState, SharedFileInfo, SuggestionState,
+    self, ASKS_PROTOCOL_VERSION, BraindumpItemInfo, HostMessage, MIN_VIEWER_PROTOCOL_VERSION,
+    Outcome, PROTOCOL_VERSION, Participant, RefusalReason, SentLinkState, SharedFileInfo,
+    SuggestionState, ViewerMessage, ViewerRequest,
 };
 use specdeck_protocol::frames::Record;
 use specdeck_protocol::invite::InviteCode;
+use specdeck_protocol::signal_auth::{DescriptionKind, SignedDescription};
+use specdeck_protocol::signalling::{ClientMessage, ServerMessage, SignalPayload};
 use specdeck_protocol::timeline::{Entry, MAX_EVENT_JSON_BYTES, ToolOutcome};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -87,6 +91,17 @@ async fn host_agent(
     command: &str,
     script: &str,
 ) -> Hosted {
+    host_timed(url, username, agent, command, script, (HELLO_DEADLINE, JOIN_DEADLINE)).await
+}
+
+async fn host_timed(
+    url: &str,
+    username: &str,
+    agent: AgentId,
+    command: &str,
+    script: &str,
+    (hello_deadline, join_deadline): (Duration, Duration),
+) -> Hosted {
     let bin = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let program = bin.path().join(command);
@@ -110,8 +125,8 @@ async fn host_agent(
             username: username.into(),
             peer: loopback(),
             viewer_limit: 20,
-            hello_deadline: HELLO_DEADLINE,
-            join_deadline: JOIN_DEADLINE,
+            hello_deadline,
+            join_deadline,
         },
     );
     Hosted { session, sharing, events, _dirs: (bin, data) }
@@ -194,6 +209,231 @@ async fn until(
     })
     .await
     .unwrap_or_else(|_| panic!("timed out; seen text {:?}", seen.text))
+}
+
+/// A viewer app that does what an honest one never would: the test makes its connection by hand,
+/// sends any message on the control channel and reads the host's messages back.
+struct RawViewer {
+    peer: Peer,
+    events: UnboundedReceiver<PeerEvent>,
+    /// Kept open: the host drops a viewer that is not admitted when its signalling goes.
+    _signalling: (SignallingSender, UnboundedReceiver<ServerMessage>),
+    /// Stream frames received: output, timeline events, the end of a replay.
+    frames: usize,
+}
+
+impl RawViewer {
+    /// Joins with the invite code.
+    async fn join(url: &str, code: &InviteCode) -> Self {
+        let keys = code.keys();
+        Self::connect(url, &keys.room_id, &keys.auth_key).await.expect("not connected")
+    }
+
+    /// Joins `room` and signs the offer with `key`, a code's key or a resume token. `None` when
+    /// the host does not answer the offer and the connection is not made within 3 seconds.
+    async fn connect(url: &str, room: &str, key: &[u8; 32]) -> Option<Self> {
+        let (signalling, mut server) = signalling_client::connect(url).await.unwrap();
+        signalling.send(ClientMessage::Join { room: room.into() });
+        let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let mut peer: Option<Peer> = None;
+        let mut connection = String::new();
+        let made = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                tokio::select! {
+                    message = server.recv() => match message.expect("service closed") {
+                        ServerMessage::Joined { connection: id } => {
+                            connection = id;
+                            peer = Some(Peer::offer(&loopback(), tx.clone()).unwrap());
+                        }
+                        ServerMessage::Signal { payload, .. } => {
+                            let Some(peer) = &mut peer else { continue };
+                            match payload {
+                                SignalPayload::Description(description) => {
+                                    let answer = DescriptionKind::Answer;
+                                    let sdp = description.verify(key, &connection, answer).unwrap();
+                                    peer.set_remote_description(answer, sdp).unwrap();
+                                }
+                                SignalPayload::Candidate { candidate, mid } => {
+                                    let _ = peer.add_remote_candidate(candidate, mid);
+                                }
+                            }
+                        }
+                        ServerMessage::Error { code } => panic!("refused by the service: {code:?}"),
+                        _ => {}
+                    },
+                    Some(event) = events.recv() => {
+                        let Some(peer) = &mut peer else { continue };
+                        match event {
+                            PeerEvent::Description { kind, sdp } => {
+                                let signed = SignedDescription::sign(key, &connection, kind, sdp);
+                                let payload = SignalPayload::Description(signed);
+                                let connection = connection.clone();
+                                signalling.send(ClientMessage::Signal { connection, payload });
+                            }
+                            PeerEvent::Candidate { candidate, mid } => {
+                                let payload = SignalPayload::Candidate { candidate, mid };
+                                let connection = connection.clone();
+                                signalling.send(ClientMessage::Signal { connection, payload });
+                            }
+                            PeerEvent::State(datachannel::ConnectionState::Connecting) => {
+                                peer.flush_remote_candidates();
+                            }
+                            PeerEvent::Open(Channel::Control) => return,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+        let peer = peer.filter(|_| made.is_ok())?;
+        Some(Self { peer, events, _signalling: (signalling, server), frames: 0 })
+    }
+
+    /// Sends on the control channel; a connection the host closed meanwhile drops it.
+    fn send(&mut self, message: &ViewerMessage) {
+        let _ = self.peer.send(Channel::Control, &control::encode(message));
+    }
+
+    /// Says hello as a new viewer, or as the viewer `resume_token` belongs to.
+    fn hello(&mut self, resume_token: Option<[u8; 32]>) {
+        self.hello_from(resume_token, None, None);
+    }
+
+    /// Says hello with these positions in the output and the timeline.
+    fn hello_from(
+        &mut self,
+        resume_token: Option<[u8; 32]>,
+        last_output_seq: Option<u64>,
+        last_event_seq: Option<u64>,
+    ) {
+        self.send(&ViewerMessage::Hello {
+            protocol_version: PROTOCOL_VERSION,
+            username: "raw".into(),
+            last_output_seq,
+            last_event_seq,
+            resume_token,
+        });
+    }
+
+    /// The host's next control message; `None` once the connection closed.
+    async fn recv(&mut self) -> Option<HostMessage> {
+        tokio::time::timeout(WAIT, async {
+            loop {
+                match self.events.recv().await? {
+                    PeerEvent::Message(Channel::Control, bytes) => {
+                        return Some(control::decode_host(&bytes).unwrap());
+                    }
+                    PeerEvent::Message(Channel::Stream, _) => self.frames += 1,
+                    PeerEvent::State(
+                        datachannel::ConnectionState::Closed
+                        | datachannel::ConnectionState::Failed
+                        | datachannel::ConnectionState::Disconnected,
+                    ) => return None,
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("the connection neither closed nor received anything")
+    }
+
+    /// The host's next `Welcome`, as viewer id and resume token; `None` when the connection
+    /// closed first.
+    async fn welcome(&mut self) -> Option<(u32, [u8; 32], String)> {
+        loop {
+            if let HostMessage::Welcome { viewer_id, resume_token, rejoin_room, .. } =
+                self.recv().await?
+            {
+                return Some((viewer_id, resume_token, rejoin_room));
+            }
+        }
+    }
+
+    /// Every control message until the connection closes.
+    async fn until_closed(&mut self) -> Vec<HostMessage> {
+        let mut messages = Vec::new();
+        while let Some(message) = self.recv().await {
+            messages.push(message);
+        }
+        messages
+    }
+}
+
+fn suggestion(id: u32) -> ViewerMessage {
+    ViewerMessage::Send { id, request: ViewerRequest::Suggest { text: format!("idea {id}") } }
+}
+
+/// The host's status once `done` holds for it.
+async fn host_status(hosted: &Hosted, done: impl Fn(&SharingStatus) -> bool) -> SharingStatus {
+    let mut status = hosted.sharing.status();
+    tokio::time::timeout(WAIT, status.wait_for(|s| done(s)))
+        .await
+        .expect("the host's status never got there")
+        .unwrap()
+        .clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_raw_viewer_can_join() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let mut raw = RawViewer::join(&url, &code).await;
+    raw.hello(None);
+    assert!(raw.welcome().await.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_hello_closes_the_connection() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let mut raw = RawViewer::join(&url, &code).await;
+    raw.hello(None);
+    let (first, ..) = raw.welcome().await.unwrap();
+
+    raw.hello(None);
+    let after = raw.until_closed().await;
+    assert!(!after.iter().any(|m| matches!(m, HostMessage::Welcome { .. })), "{after:?}");
+    let status = host_status(&hosted, |s| s.viewers.is_empty()).await;
+    let departure = status.last_departure.expect("a departure");
+    assert_eq!((departure.viewer, departure.reason), (Some(first), LeaveReason::Malformed));
+    // The host's participant list never showed a second viewer.
+    while let Ok(event) = hosted.events.try_recv() {
+        if let SharingEvent::Participants(people) = event {
+            assert!(people.len() <= 2, "{people:?}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_hello_does_not_reset_the_rate_limit() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let mut raw = RawViewer::join(&url, &code).await;
+    raw.hello(None);
+    raw.welcome().await.unwrap();
+    for id in 1..=3 {
+        raw.send(&suggestion(id));
+    }
+    raw.hello(None);
+    raw.send(&suggestion(4));
+    raw.until_closed().await;
+
+    let mut seen = 0;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(1), hosted.events.recv()).await {
+            Ok(Some(SharingEvent::Suggestions(suggestions))) => {
+                assert!(suggestions.iter().all(|s| s.id != 4), "{suggestions:?}");
+                seen = suggestions.len();
+            }
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => break,
+        }
+    }
+    assert_eq!(seen, 3);
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1122,6 +1122,11 @@ impl Host {
                 last_event_seq,
                 resume_token,
             } => {
+                // A connection is one viewer: joining again on it is not something an honest
+                // app does, and would give it a new identity, rate limit and file quota.
+                if self.slots.get(connection).is_none_or(|slot| slot.admitted.is_some()) {
+                    return self.disconnect(connection, LeaveReason::Malformed);
+                }
                 if let Err(reason) = control::check_version(
                     MIN_VIEWER_PROTOCOL_VERSION,
                     PROTOCOL_VERSION,
