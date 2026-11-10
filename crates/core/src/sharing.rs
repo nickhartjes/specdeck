@@ -73,6 +73,14 @@ const FILES_HIGH_WATER: usize = BUFFERED_LOW;
 /// An upload that gets no chunk for this long is dropped and its room freed.
 const UPLOAD_IDLE: Duration = Duration::from_secs(30);
 
+/// A viewer connection that is not admitted this long after it connected is dropped
+/// (`harden-viewer-admission` design decision 2): `Hello` is the first thing a viewer sends.
+pub const HELLO_DEADLINE: Duration = Duration::from_secs(10);
+
+/// A viewer connection that is not admitted this long after the service announced it is
+/// dropped; longer than the viewer's own [`crate::viewer::CONNECT_TIMEOUT`].
+pub const JOIN_DEADLINE: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Debug)]
 pub struct SharingConfig {
     /// `ws://` or `wss://…/signal`.
@@ -82,6 +90,10 @@ pub struct SharingConfig {
     /// ICE settings; TURN servers from the signalling service are added to these.
     pub peer: PeerConfig,
     pub viewer_limit: u8,
+    /// [`HELLO_DEADLINE`] outside tests.
+    pub hello_deadline: Duration,
+    /// [`JOIN_DEADLINE`] outside tests.
+    pub join_deadline: Duration,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2354,6 +2366,14 @@ mod tests {
         let sum: u64 =
             events.iter().map(|e| e.field("messages").unwrap().parse::<u64>().unwrap()).sum();
         assert_eq!(sum, 200, "every record counted once");
+    }
+
+    #[test]
+    fn joining_has_ten_seconds_after_connecting_and_thirty_after_being_announced() {
+        assert_eq!(HELLO_DEADLINE, Duration::from_secs(10));
+        assert_eq!(JOIN_DEADLINE, Duration::from_secs(30));
+        // A join the host drops has already failed on the viewer's side.
+        assert!(JOIN_DEADLINE > crate::viewer::CONNECT_TIMEOUT);
     }
 
     #[test]

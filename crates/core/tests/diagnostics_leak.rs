@@ -14,7 +14,9 @@ use std::time::Duration;
 use specdeck_core::environment::Environment;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession};
-use specdeck_core::sharing::{Answer, AskCommand, Sharing, SharingConfig, SharingEvent};
+use specdeck_core::sharing::{
+    Answer, AskCommand, HELLO_DEADLINE, JOIN_DEADLINE, Sharing, SharingConfig, SharingEvent,
+};
 use specdeck_core::viewer::{CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession};
 use specdeck_protocol::AgentId;
 use specdeck_protocol::asks::{Card, CardSet, ReadAnswer, ReadTarget};
@@ -147,6 +149,8 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
             username: HOST_NAME.into(),
             peer: loopback(),
             viewer_limit: 20,
+            hello_deadline: HELLO_DEADLINE,
+            join_deadline: JOIN_DEADLINE,
         },
     );
     tokio::time::sleep(Duration::from_millis(300)).await;

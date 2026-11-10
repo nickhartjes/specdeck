@@ -20,8 +20,8 @@ use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{GiveError, HostConfig, HostSession, SessionEvent};
 use specdeck_core::shared_files::{PutError, Refusal};
 use specdeck_core::sharing::{
-    Answer, AskCommand, HostAsks, HostLink, HostSuggestion, MAX_VIEWERS, Sharing, SharingConfig,
-    SharingEvent, SharingStatus,
+    Answer, AskCommand, HELLO_DEADLINE, HostAsks, HostLink, HostSuggestion, JOIN_DEADLINE,
+    MAX_VIEWERS, Sharing, SharingConfig, SharingEvent, SharingStatus,
 };
 use specdeck_protocol::asks::{ReadView, VoteView};
 use specdeck_protocol::control::{
@@ -424,6 +424,8 @@ impl HostRuntime {
                 username: options.username.clone(),
                 peer: options.peer,
                 viewer_limit: MAX_VIEWERS,
+                hello_deadline: HELLO_DEADLINE,
+                join_deadline: JOIN_DEADLINE,
             },
         );
         let ui = Arc::new(Mutex::new(Ui {

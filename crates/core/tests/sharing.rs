@@ -18,7 +18,8 @@ use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::SessionView;
 use specdeck_core::session::{HostConfig, HostSession};
 use specdeck_core::sharing::{
-    Answer, AskCommand, HostAsks, HostLink, ServiceState, Sharing, SharingConfig, SharingEvent,
+    Answer, AskCommand, HELLO_DEADLINE, HostAsks, HostLink, JOIN_DEADLINE, ServiceState, Sharing,
+    SharingConfig, SharingEvent,
 };
 use specdeck_core::viewer::{
     CONNECT_TIMEOUT, FileError, ViewerConfig, ViewerEvent, ViewerPhase, ViewerSession,
@@ -109,6 +110,8 @@ async fn host_agent(
             username: username.into(),
             peer: loopback(),
             viewer_limit: 20,
+            hello_deadline: HELLO_DEADLINE,
+            join_deadline: JOIN_DEADLINE,
         },
     );
     Hosted { session, sharing, events, _dirs: (bin, data) }
@@ -1986,6 +1989,8 @@ async fn a_read_request_closes_when_its_time_is_up() {
             username: "nick".into(),
             peer: loopback(),
             viewer_limit: 20,
+            hello_deadline: HELLO_DEADLINE,
+            join_deadline: JOIN_DEADLINE,
         },
     );
     let read = || AskCommand::Read {
