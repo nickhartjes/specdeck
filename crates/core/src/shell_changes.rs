@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -16,6 +15,7 @@ use crate::code_files;
 use crate::diag;
 use crate::documents::{self, DocumentText};
 use crate::environment::Environment;
+use crate::git;
 use crate::hooks::HookPayload;
 
 /// Claude Code's tools that run shell commands.
@@ -186,7 +186,8 @@ struct Snapshots {
     prefix: String,
     /// The repository's object folder, read through alternates.
     objects: PathBuf,
-    /// Filters (such as Git LFS) switched off, so snapshots never write to the repository.
+    /// Filters (such as Git LFS) switched off, so snapshots never write to the repository and
+    /// never run the folder's commands; read again before each snapshot.
     no_filters: Vec<String>,
     private: TempDir,
 }
@@ -195,10 +196,8 @@ impl Snapshots {
     fn new(folder: &Path, data_dir: &Path, env: &Environment) -> Result<Self, Step> {
         let git = env.find_executable("git").ok_or(Step::NoGit)?;
         let run = |args: &[&str]| {
-            let mut command = Command::new(&git);
-            command.args(args).current_dir(folder).stdin(Stdio::null()).stderr(Stdio::null());
-            command.env_clear().envs(env.iter());
-            let output = command.output().ok().filter(|output| output.status.success())?;
+            let output = git::command(&git, env, folder).args(args).output();
+            let output = output.ok().filter(|output| output.status.success())?;
             Some(String::from_utf8_lossy(&output.stdout).into_owned())
         };
         let dirs = run(&[
@@ -216,17 +215,6 @@ impl Snapshots {
         };
         let prefix = run(&["rev-parse", "--show-prefix"]).ok_or(Step::Prefix)?;
         let prefix = prefix.trim_end_matches('\n').to_owned();
-        let no_filters = run(&["config", "--name-only", "--get-regexp", r"^filter\..*\."])
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|key| key.strip_prefix("filter.")?.rsplit_once('.').map(|(name, _)| name))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .flat_map(|name| {
-                ["clean=", "smudge=", "process=", "required=false"]
-                    .map(|setting| format!("filter.{name}.{setting}"))
-            })
-            .collect();
 
         std::fs::create_dir_all(data_dir).map_err(|_| Step::DataDir)?;
         let private = tempfile::Builder::new()
@@ -245,20 +233,17 @@ impl Snapshots {
             folder: folder.to_owned(),
             prefix,
             objects: objects.into(),
-            no_filters,
+            no_filters: Vec::new(),
             private,
         })
     }
 
+    /// git in the working tree with the private index and objects.
     fn git(&self, args: &[&str]) -> Option<Vec<u8>> {
-        let mut command = Command::new(&self.git);
-        for setting in &self.no_filters {
-            command.args(["-c", setting]);
-        }
-        command.args(args).current_dir(&self.top).stdin(Stdio::null()).stderr(Stdio::null());
+        let mut command = git::command(&self.git, &self.env, &self.top);
         command
-            .env_clear()
-            .envs(self.env.iter())
+            .args(&self.no_filters)
+            .args(args)
             .env("GIT_INDEX_FILE", self.private.path().join("index"))
             .env("GIT_OBJECT_DIRECTORY", self.private.path().join("objects"))
             .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &self.objects);
@@ -273,7 +258,9 @@ impl Snapshots {
     }
 
     /// The session folder, including untracked files that are not ignored, as a tree id.
-    fn snapshot(&self) -> Option<String> {
+    fn snapshot(&mut self) -> Option<String> {
+        // Read each time, so a filter added during the session is switched off too.
+        self.no_filters = git::no_filters(&self.git, &self.env, &self.top);
         self.git(&["add", "--all", "--ignore-errors", "--", &self.pathspec()])?;
         let tree = self.git(&["write-tree"])?;
         Some(String::from_utf8_lossy(&tree).trim().to_owned())
@@ -415,6 +402,7 @@ fn limit_lines(hunks: Vec<DiffHunk>) -> Vec<DiffHunk> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::process::Command;
 
     struct Repo {
         dir: TempDir,
@@ -589,6 +577,47 @@ mod tests {
         tracker.observe(&hook("PreToolUse", "Bash", "t2"), false);
         repo.write("a.txt", "outside again\n");
         assert_eq!(tracker.observe(&hook("PostToolUse", "Bash", "t2"), false), None);
+    }
+
+    /// A script in the repository's `.git` that leaves `ran` in the data folder when run.
+    fn trap(repo: &Repo) -> (String, PathBuf) {
+        let marker = repo.data.path().join("ran");
+        let trap = repo.dir.path().join(".git/trap.sh");
+        std::fs::write(&trap, format!("#!/bin/sh\ncat >/dev/null\touch '{}'\n", marker.display()))
+            .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&trap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (trap.to_string_lossy().into_owned(), marker)
+    }
+
+    #[test]
+    fn snapshots_run_no_hook_of_the_repository() {
+        let repo = Repo::new();
+        let (trap, marker) = trap(&repo);
+        let hook_path = repo.dir.path().join(".git/hooks/post-index-change");
+        std::fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
+        std::fs::copy(&trap, &hook_path).unwrap();
+        repo.git(&["config", "core.fsmonitor", &trap]);
+        let tracker = repo.tracker();
+        tracker.observe(&hook("PreToolUse", "Bash", "t1"), false);
+        repo.write("a.txt", "changed\n");
+        assert_eq!(files(tracker.observe(&hook("PostToolUse", "Bash", "t1"), false)).len(), 1);
+        assert!(!marker.exists(), "a hook or monitor of the repository ran");
+    }
+
+    #[test]
+    fn a_filter_added_during_the_session_does_not_run() {
+        let repo = Repo::new();
+        let tracker = repo.tracker();
+        let (trap, marker) = trap(&repo);
+        repo.git(&["config", "filter.trap.clean", &trap]);
+        repo.write(".gitattributes", "*.txt filter=trap\n");
+        tracker.observe(&hook("PreToolUse", "Bash", "t1"), false);
+        repo.write("a.txt", "changed\n");
+        repo.write("b.txt", "new\n");
+        let changed = files(tracker.observe(&hook("PostToolUse", "Bash", "t1"), false));
+        assert!(changed.iter().any(|f| f.0 == repo.path("b.txt")), "{changed:?}");
+        assert!(!marker.exists(), "the filter ran");
     }
 
     #[test]
