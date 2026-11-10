@@ -159,7 +159,7 @@ export function refusalReason(reason: Refusal): EndReason {
 
 type ServerMessage =
   | { type: 'turn-credentials'; urls: string[]; username: string; credential: string }
-  | { type: 'error'; code: string }
+  | { type: 'error'; code: string; room?: string }
   | { type: 'joined'; connection: string }
   | { type: 'signal'; connection: string; payload: SignalPayload }
   | { type: 'peer-left'; connection: string }

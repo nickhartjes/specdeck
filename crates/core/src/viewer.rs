@@ -656,7 +656,7 @@ impl Viewer {
                             }
                         }
                     }
-                    Some(ServerMessage::Error { code }) => match code {
+                    Some(ServerMessage::Error { code, .. }) => match code {
                         ErrorCode::TurnUnavailable if connection.is_some() && peer.is_none() => {
                             match self.offer(&ice_servers, &peer_tx) {
                                 Some(new_peer) => peer = Some(new_peer),

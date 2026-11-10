@@ -82,7 +82,7 @@ fn offer() -> SignalPayload {
 /// Opens `room` on a new host client and joins it with a new viewer client.
 async fn host_and_viewer(url: &str, room: &str) -> (Client, Client, String) {
     let mut host = Client::connect(url).await;
-    host.send(ClientMessage::Host { room: room.into() }).await;
+    host.send(ClientMessage::Host { room: room.into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     let mut viewer = Client::connect(url).await;
     viewer.send(ClientMessage::Join { room: room.into() }).await;
@@ -132,7 +132,10 @@ async fn unknown_room_is_refused() {
     let (url, _) = start().await;
     let mut viewer = Client::connect(&url).await;
     viewer.send(ClientMessage::Join { room: "nope".into() }).await;
-    assert_eq!(viewer.recv().await, ServerMessage::Error { code: ErrorCode::RoomNotFound });
+    assert_eq!(
+        viewer.recv().await,
+        ServerMessage::Error { code: ErrorCode::RoomNotFound, room: None }
+    );
 }
 
 #[tokio::test]
@@ -140,7 +143,7 @@ async fn closed_room_can_no_longer_be_joined_but_its_viewers_stay() {
     let (url, service) = start().await;
     let (mut host, mut viewer, connection) = host_and_viewer(&url, "old").await;
     // Rotating the code: open the new room, close the old one.
-    host.send(ClientMessage::Host { room: "new".into() }).await;
+    host.send(ClientMessage::Host { room: "new".into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     host.send(ClientMessage::CloseRoom { room: "old".into() }).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -148,7 +151,10 @@ async fn closed_room_can_no_longer_be_joined_but_its_viewers_stay() {
 
     let mut late = Client::connect(&url).await;
     late.send(ClientMessage::Join { room: "old".into() }).await;
-    assert_eq!(late.recv().await, ServerMessage::Error { code: ErrorCode::RoomNotFound });
+    assert_eq!(
+        late.recv().await,
+        ServerMessage::Error { code: ErrorCode::RoomNotFound, room: None }
+    );
 
     // The viewer that joined through the old room can still talk to the host.
     viewer.send(ClientMessage::Signal { connection: connection.clone(), payload: offer() }).await;
@@ -159,11 +165,14 @@ async fn closed_room_can_no_longer_be_joined_but_its_viewers_stay() {
 async fn another_host_cannot_take_an_open_room() {
     let (url, _) = start().await;
     let mut host = Client::connect(&url).await;
-    host.send(ClientMessage::Host { room: "r".into() }).await;
+    host.send(ClientMessage::Host { room: "r".into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     let mut intruder = Client::connect(&url).await;
-    intruder.send(ClientMessage::Host { room: "r".into() }).await;
-    assert_eq!(intruder.recv().await, ServerMessage::Error { code: ErrorCode::RoomTaken });
+    intruder.send(ClientMessage::Host { room: "r".into(), claim: None }).await;
+    assert_eq!(
+        intruder.recv().await,
+        ServerMessage::Error { code: ErrorCode::RoomTaken, room: None }
+    );
 }
 
 #[tokio::test]
@@ -172,7 +181,10 @@ async fn nobody_else_can_signal_into_a_connection() {
     let (mut host, mut viewer, connection) = host_and_viewer(&url, "r").await;
     let mut stranger = Client::connect(&url).await;
     stranger.send(ClientMessage::Signal { connection: connection.clone(), payload: offer() }).await;
-    assert_eq!(stranger.recv().await, ServerMessage::Error { code: ErrorCode::UnknownConnection });
+    assert_eq!(
+        stranger.recv().await,
+        ServerMessage::Error { code: ErrorCode::UnknownConnection, room: None }
+    );
     host.expect_silence().await;
     viewer.expect_silence().await;
 }
@@ -199,7 +211,10 @@ async fn malformed_message_is_answered_with_an_error() {
     let (url, _) = start().await;
     let mut client = Client::connect(&url).await;
     client.0.send(Message::Text("{\"type\":\"launch-missiles\"}".into())).await.unwrap();
-    assert_eq!(client.recv().await, ServerMessage::Error { code: ErrorCode::BadMessage });
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::Error { code: ErrorCode::BadMessage, room: None }
+    );
 }
 
 async fn join(url: &str, room: &str) -> ServerMessage {
@@ -214,15 +229,24 @@ async fn repeated_wrong_codes_are_temporarily_refused() {
         Config { failed_joins_per_ip: 3, window: Duration::from_millis(500), ..Config::default() };
     let (url, _) = start_with(config).await;
     let mut host = Client::connect(&url).await;
-    host.send(ClientMessage::Host { room: "real".into() }).await;
+    host.send(ClientMessage::Host { room: "real".into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
 
     for guess in ["a", "b", "c"] {
-        assert_eq!(join(&url, guess).await, ServerMessage::Error { code: ErrorCode::RoomNotFound });
+        assert_eq!(
+            join(&url, guess).await,
+            ServerMessage::Error { code: ErrorCode::RoomNotFound, room: None }
+        );
     }
     // Refused from now on, even with the right code.
-    assert_eq!(join(&url, "d").await, ServerMessage::Error { code: ErrorCode::RateLimited });
-    assert_eq!(join(&url, "real").await, ServerMessage::Error { code: ErrorCode::RateLimited });
+    assert_eq!(
+        join(&url, "d").await,
+        ServerMessage::Error { code: ErrorCode::RateLimited, room: None }
+    );
+    assert_eq!(
+        join(&url, "real").await,
+        ServerMessage::Error { code: ErrorCode::RateLimited, room: None }
+    );
 
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(matches!(join(&url, "real").await, ServerMessage::Joined { .. }));
@@ -233,11 +257,14 @@ async fn a_room_is_protected_against_join_floods() {
     let config = Config { joins_per_room: 2, window: Duration::from_secs(60), ..Config::default() };
     let (url, _) = start_with(config).await;
     let mut host = Client::connect(&url).await;
-    host.send(ClientMessage::Host { room: "r".into() }).await;
+    host.send(ClientMessage::Host { room: "r".into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     assert!(matches!(join(&url, "r").await, ServerMessage::Joined { .. }));
     assert!(matches!(join(&url, "r").await, ServerMessage::Joined { .. }));
-    assert_eq!(join(&url, "r").await, ServerMessage::Error { code: ErrorCode::RateLimited });
+    assert_eq!(
+        join(&url, "r").await,
+        ServerMessage::Error { code: ErrorCode::RateLimited, room: None }
+    );
 }
 
 fn turn() -> TurnConfig {
@@ -250,7 +277,7 @@ fn turn() -> TurnConfig {
 
 async fn open(url: &str, room: &str) -> Client {
     let mut host = Client::connect(url).await;
-    host.send(ClientMessage::Host { room: room.into() }).await;
+    host.send(ClientMessage::Host { room: room.into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     host
 }
@@ -288,7 +315,7 @@ async fn an_older_host_that_asks_just_before_opening_its_room_gets_credentials()
     let (url, _) = start_with(turn_config()).await;
     let mut host = Client::connect(&url).await;
     host.send(ClientMessage::TurnCredentials).await;
-    host.send(ClientMessage::Host { room: "r".into() }).await;
+    host.send(ClientMessage::Host { room: "r".into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     assert!(matches!(host.recv().await, ServerMessage::TurnCredentials { .. }));
 }
@@ -311,7 +338,10 @@ async fn an_older_viewer_that_waits_for_credentials_is_told_turn_is_unavailable(
     let mut viewer = Client::connect(&url).await;
     let asked = tokio::time::Instant::now();
     viewer.send(ClientMessage::TurnCredentials).await;
-    assert_eq!(viewer.recv().await, ServerMessage::Error { code: ErrorCode::TurnUnavailable });
+    assert_eq!(
+        viewer.recv().await,
+        ServerMessage::Error { code: ErrorCode::TurnUnavailable, room: None }
+    );
     assert!(asked.elapsed() >= Duration::from_millis(300));
     // It then joins, as against a service without TURN, and gets no credentials.
     viewer.send(ClientMessage::Join { room: "r".into() }).await;
@@ -324,7 +354,10 @@ async fn a_connection_that_never_joins_gets_no_credentials() {
     let (url, _) = start_with(turn_config()).await;
     let mut client = Client::connect(&url).await;
     client.send(ClientMessage::TurnCredentials).await;
-    assert_eq!(client.recv().await, ServerMessage::Error { code: ErrorCode::TurnUnavailable });
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::Error { code: ErrorCode::TurnUnavailable, room: None }
+    );
     client.expect_silence().await;
 }
 
@@ -346,7 +379,10 @@ async fn no_turn_relay_configured() {
     let (url, _) = start().await;
     let mut client = Client::connect(&url).await;
     client.send(ClientMessage::TurnCredentials).await;
-    assert_eq!(client.recv().await, ServerMessage::Error { code: ErrorCode::TurnUnavailable });
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::Error { code: ErrorCode::TurnUnavailable, room: None }
+    );
 }
 
 fn behind_a_proxy(config: Config) -> Config {
@@ -360,12 +396,15 @@ async fn connections_per_address_are_limited() {
     let first = Client::connect_from(&url, "203.0.113.7").await;
     let _second = Client::connect_from(&url, "203.0.113.7").await;
     let mut third = Client::connect_from(&url, "203.0.113.7").await;
-    assert_eq!(third.recv().await, ServerMessage::Error { code: ErrorCode::ServerBusy });
+    assert_eq!(
+        third.recv().await,
+        ServerMessage::Error { code: ErrorCode::ServerBusy, room: None }
+    );
     third.expect_closed().await;
 
     // Another address is not affected.
     let mut other = Client::connect_from(&url, "198.51.100.1").await;
-    other.send(ClientMessage::Host { room: "r".into() }).await;
+    other.send(ClientMessage::Host { room: "r".into(), claim: None }).await;
     assert!(matches!(other.recv().await, ServerMessage::RoomOpened { .. }));
 
     // A connection that closes gives its place back.
@@ -374,7 +413,7 @@ async fn connections_per_address_are_limited() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let mut again = Client::connect_from(&url, "203.0.113.7").await;
-    again.send(ClientMessage::Host { room: "again".into() }).await;
+    again.send(ClientMessage::Host { room: "again".into(), claim: None }).await;
     assert!(matches!(again.recv().await, ServerMessage::RoomOpened { .. }));
 }
 
@@ -384,7 +423,10 @@ async fn an_ipv6_client_counts_as_one_network() {
     let (url, _) = start_with(config).await;
     let _first = Client::connect_from(&url, "2001:db8:1:2::1").await;
     let mut second = Client::connect_from(&url, "2001:db8:1:2::2").await;
-    assert_eq!(second.recv().await, ServerMessage::Error { code: ErrorCode::ServerBusy });
+    assert_eq!(
+        second.recv().await,
+        ServerMessage::Error { code: ErrorCode::ServerBusy, room: None }
+    );
 }
 
 #[tokio::test]
@@ -394,7 +436,10 @@ async fn connections_in_total_are_limited() {
     let _first = Client::connect_from(&url, "203.0.113.1").await;
     let _second = Client::connect_from(&url, "203.0.113.2").await;
     let mut third = Client::connect_from(&url, "203.0.113.3").await;
-    assert_eq!(third.recv().await, ServerMessage::Error { code: ErrorCode::ServerBusy });
+    assert_eq!(
+        third.recv().await,
+        ServerMessage::Error { code: ErrorCode::ServerBusy, room: None }
+    );
     third.expect_closed().await;
 }
 
@@ -403,14 +448,14 @@ async fn a_host_holds_at_most_four_rooms() {
     let (url, service) = start().await;
     let mut host = open(&url, "r1").await;
     for room in ["r2", "r3", "r4"] {
-        host.send(ClientMessage::Host { room: room.into() }).await;
+        host.send(ClientMessage::Host { room: room.into(), claim: None }).await;
         assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     }
-    host.send(ClientMessage::Host { room: "r5".into() }).await;
-    assert_eq!(host.recv().await, ServerMessage::Error { code: ErrorCode::ServerBusy });
+    host.send(ClientMessage::Host { room: "r5".into(), claim: None }).await;
+    assert_eq!(host.recv().await, ServerMessage::Error { code: ErrorCode::ServerBusy, room: None });
     assert_eq!(service.room_count(), 4);
     // Opening a room it already holds is not a new room.
-    host.send(ClientMessage::Host { room: "r1".into() }).await;
+    host.send(ClientMessage::Host { room: "r1".into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
 }
 
@@ -418,10 +463,10 @@ async fn a_host_holds_at_most_four_rooms() {
 async fn replacing_the_code_again_and_again_keeps_working() {
     let (url, service) = start().await;
     let mut host = open(&url, "rejoin").await;
-    host.send(ClientMessage::Host { room: "code-0".into() }).await;
+    host.send(ClientMessage::Host { room: "code-0".into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     for i in 1..=3 {
-        host.send(ClientMessage::Host { room: format!("code-{i}") }).await;
+        host.send(ClientMessage::Host { room: format!("code-{i}"), claim: None }).await;
         assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
         host.send(ClientMessage::CloseRoom { room: format!("code-{}", i - 1) }).await;
     }
@@ -436,8 +481,8 @@ async fn rooms_in_total_are_limited() {
     let _a = open(&url, "a").await;
     let _b = open(&url, "b").await;
     let mut c = Client::connect(&url).await;
-    c.send(ClientMessage::Host { room: "c".into() }).await;
-    assert_eq!(c.recv().await, ServerMessage::Error { code: ErrorCode::ServerBusy });
+    c.send(ClientMessage::Host { room: "c".into(), claim: None }).await;
+    assert_eq!(c.recv().await, ServerMessage::Error { code: ErrorCode::ServerBusy, room: None });
 }
 
 #[tokio::test]
@@ -446,12 +491,18 @@ async fn a_long_room_id_is_refused_before_it_is_kept_anywhere() {
     let (url, service) = start_with(config).await;
     let long = "x".repeat(65);
     let mut client = Client::connect(&url).await;
-    client.send(ClientMessage::Host { room: long.clone() }).await;
-    assert_eq!(client.recv().await, ServerMessage::Error { code: ErrorCode::BadMessage });
+    client.send(ClientMessage::Host { room: long.clone(), claim: None }).await;
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::Error { code: ErrorCode::BadMessage, room: None }
+    );
     assert_eq!(service.room_count(), 0);
     // Not counted against the room either: the per-room limit of 1 still allows a real join.
     for _ in 0..2 {
-        assert_eq!(join(&url, &long).await, ServerMessage::Error { code: ErrorCode::BadMessage });
+        assert_eq!(
+            join(&url, &long).await,
+            ServerMessage::Error { code: ErrorCode::BadMessage, room: None }
+        );
     }
     let room = "x".repeat(64);
     let _host = open(&url, &room).await;
@@ -470,7 +521,10 @@ async fn a_host_takes_at_most_forty_viewers() {
         assert!(matches!(viewer.recv().await, ServerMessage::Joined { .. }));
         viewers.push(viewer);
     }
-    assert_eq!(join(&url, "r").await, ServerMessage::Error { code: ErrorCode::ServerBusy });
+    assert_eq!(
+        join(&url, "r").await,
+        ServerMessage::Error { code: ErrorCode::ServerBusy, room: None }
+    );
 }
 
 fn idle_config() -> Config {
@@ -509,7 +563,7 @@ async fn a_flood_of_set_up_messages_is_cut_off() {
     while let Ok(Some(message)) = tokio::time::timeout(quiet, viewer.0.next()).await {
         let message: ServerMessage =
             serde_json::from_str(message.unwrap().to_text().unwrap()).unwrap();
-        assert_eq!(message, ServerMessage::Error { code: ErrorCode::RateLimited });
+        assert_eq!(message, ServerMessage::Error { code: ErrorCode::RateLimited, room: None });
         limited += 1;
     }
     let mut relayed = 0;

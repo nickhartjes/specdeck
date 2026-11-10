@@ -263,7 +263,7 @@ impl Drop for Slot {
 }
 
 async fn refuse_busy(mut socket: WebSocket) {
-    let busy = ServerMessage::Error { code: ErrorCode::ServerBusy };
+    let busy = ServerMessage::Error { code: ErrorCode::ServerBusy, room: None };
     let text = serde_json::to_string(&busy).expect("server messages always encode");
     if socket.send(Message::Text(text.into())).await.is_ok() {
         let _ = socket.send(Message::Close(None)).await;
@@ -354,7 +354,7 @@ async fn handle(socket: WebSocket, service: Arc<Service>, slot: Slot) {
                     }
                     Err(_) => {
                         service.socket_error(SocketError::BadMessage);
-                        service.reply(&id, ServerMessage::Error { code: ErrorCode::BadMessage });
+                        service.reply(&id, ServerMessage::Error { code: ErrorCode::BadMessage, room: None });
                     }
                 },
                 Some(Err(error)) => {
@@ -425,7 +425,7 @@ impl Service {
         // The event that logs a refusal, for the messages whose refusals are logged.
         type Refused = Option<fn(Refusal) -> Burst>;
         let (result, refused): (_, Refused) = match message {
-            ClientMessage::Host { room } => (
+            ClientMessage::Host { room, claim: _ } => (
                 check_room(&room).and_then(|()| inner.open_room(from, room, now)),
                 Some(Burst::RoomRefused),
             ),
@@ -445,7 +445,7 @@ impl Service {
             if let (Some(burst), Some(reason)) = (refused, refusal(code)) {
                 inner.throttle.record(burst(reason), now);
             }
-            inner.send(from, ServerMessage::Error { code });
+            inner.send(from, ServerMessage::Error { code, room: None });
         }
     }
 
@@ -468,7 +468,7 @@ impl Service {
         let Some(connection) = inner.connections.get_mut(id) else { return };
         if connection.turn_wanted && !connection.is_member() {
             connection.turn_wanted = false;
-            inner.send(id, ServerMessage::Error { code: ErrorCode::TurnUnavailable });
+            inner.send(id, ServerMessage::Error { code: ErrorCode::TurnUnavailable, room: None });
         }
     }
 

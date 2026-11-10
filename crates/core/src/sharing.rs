@@ -925,8 +925,8 @@ impl Host {
                 *backoff = Duration::ZERO;
                 self.service_down = false;
                 diag::host_signalling_up();
-                sender.send(ClientMessage::Host { room: self.keys.room_id.clone() });
-                sender.send(ClientMessage::Host { room: self.rejoin_room.clone() });
+                sender.send(ClientMessage::Host { room: self.keys.room_id.clone(), claim: None });
+                sender.send(ClientMessage::Host { room: self.rejoin_room.clone(), claim: None });
                 // The service gives TURN credentials only to a connection that holds a room.
                 sender.send(ClientMessage::TurnCredentials);
                 self.signalling = Some(sender);
@@ -1036,11 +1036,11 @@ impl Host {
                     self.drop_slot(&connection, LeaveReason::Left);
                 }
             }
-            ServerMessage::Error { code: ErrorCode::RoomTaken } => {
+            ServerMessage::Error { code: ErrorCode::RoomTaken, .. } => {
                 // Practically impossible with 60-bit codes; pick another one.
                 self.rotate_code();
             }
-            ServerMessage::Error { code: ErrorCode::ServerBusy } => self.busy = true,
+            ServerMessage::Error { code: ErrorCode::ServerBusy, .. } => self.busy = true,
             _ => {}
         }
     }
@@ -1745,7 +1745,7 @@ impl Host {
         let old_room = std::mem::take(&mut self.keys.room_id);
         self.code = InviteCode::generate();
         self.keys = self.code.keys();
-        self.send_signalling(ClientMessage::Host { room: self.keys.room_id.clone() });
+        self.send_signalling(ClientMessage::Host { room: self.keys.room_id.clone(), claim: None });
         self.send_signalling(ClientMessage::CloseRoom { room: old_room });
     }
 

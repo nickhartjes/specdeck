@@ -113,7 +113,7 @@ async fn start_with(config: Config) -> String {
 
 async fn open(url: &str, room: &str) -> Client {
     let mut host = Client::connect(url).await;
-    host.send(ClientMessage::Host { room: room.into() }).await;
+    host.send(ClientMessage::Host { room: room.into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     host
 }
@@ -130,7 +130,7 @@ async fn join(url: &str, room: &str, host: &mut Client) -> (Client, String) {
 async fn refused(url: &str, message: ClientMessage) -> ErrorCode {
     let mut client = Client::connect(url).await;
     client.send(message).await;
-    let ServerMessage::Error { code } = client.recv().await else { panic!() };
+    let ServerMessage::Error { code, .. } = client.recv().await else { panic!() };
     code
 }
 
@@ -176,7 +176,7 @@ async fn a_host_replaces_its_code() {
     let url = start_with(Config::default()).await;
     let mut host = open(&url, "old").await;
     let _viewer = join(&url, "old", &mut host).await;
-    host.send(ClientMessage::Host { room: "new".into() }).await;
+    host.send(ClientMessage::Host { room: "new".into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     host.send(ClientMessage::CloseRoom { room: "old".into() }).await;
 
@@ -189,7 +189,7 @@ async fn a_host_replaces_its_code() {
         serde_json::json!({"event": "room.closed", "room": 1, "viewers": 1, "why": "closed"})
     );
     // Opening a room the host already holds is not a new room.
-    host.send(ClientMessage::Host { room: "new".into() }).await;
+    host.send(ClientMessage::Host { room: "new".into(), claim: None }).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     assert_eq!(log.named("room.opened").len(), 2);
 }
@@ -200,7 +200,7 @@ async fn refusals_and_their_reasons() {
     let _guard = log.capture(Level::INFO, Format::Json);
     let url = start_with(Config::default()).await;
     let _host = open(&url, "taken").await;
-    let host = ClientMessage::Host { room: "taken".into() };
+    let host = ClientMessage::Host { room: "taken".into(), claim: None };
     assert_eq!(refused(&url, host).await, ErrorCode::RoomTaken);
     // Wrong codes until this address is rate limited.
     loop {
@@ -236,7 +236,10 @@ async fn a_full_service() {
     let url = start_with(Config { max_connections: 1, ..Config::default() }).await;
     let _first = Client::connect(&url).await;
     let mut second = Client::connect(&url).await;
-    assert_eq!(second.recv().await, ServerMessage::Error { code: ErrorCode::ServerBusy });
+    assert_eq!(
+        second.recv().await,
+        ServerMessage::Error { code: ErrorCode::ServerBusy, room: None }
+    );
 
     let refused = log.named("peer.refused");
     assert_eq!(refused.len(), 1);
@@ -257,7 +260,10 @@ async fn socket_errors_by_kind() {
     let url = start_with(Config::default()).await;
     let mut client = Client::connect(&url).await;
     client.send_text("not a message".into()).await;
-    assert_eq!(client.recv().await, ServerMessage::Error { code: ErrorCode::BadMessage });
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::Error { code: ErrorCode::BadMessage, room: None }
+    );
     // Over the 64 KiB the service accepts.
     let mut large = Client::connect(&url).await;
     large.send_text("x".repeat(70_000)).await;
