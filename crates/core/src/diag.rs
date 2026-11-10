@@ -813,6 +813,12 @@ pub fn shell_changes_failed(step: &'static str) {
     warn!(step, "shell_changes.failed");
 }
 
+/// A file changed, and viewers get its path without its content: `reason` is `outside`,
+/// `private`, `ignored` or `check-failed`, never the path. Verbose only.
+pub fn file_not_shown(reason: &'static str) {
+    debug!(reason, "file.not-shown");
+}
+
 /// Payloads the timeline could not place, counted by hook event, tool and fault, and recorded
 /// as `timeline.unplaced` once a minute: one line per kind of payload, never its content.
 #[derive(Default)]
@@ -884,6 +890,16 @@ mod tests {
         let mut offenders = Vec::new();
         check(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut offenders);
         assert!(offenders.is_empty(), "emit events through crate::diag instead: {offenders:?}");
+    }
+
+    #[test]
+    fn a_file_not_shown_is_recorded_by_its_reason_only() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        file_not_shown("private");
+        let events = capture.named("file.not-shown");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].field("reason"), Some("private"));
+        assert_eq!(events[0].level.as_str(), "DEBUG");
     }
 
     #[test]

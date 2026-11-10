@@ -6,8 +6,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::file_rule::FileRule;
 use crate::hooks::HookPayload;
-use crate::session_folder::SessionFolder;
 
 /// Larger documents are announced without their text; their diffs are still sent.
 pub const MAX_DOCUMENT_BYTES: u64 = 200 * 1024;
@@ -30,32 +30,40 @@ pub fn is_document(path: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
 }
 
-/// The text of `path` on disk; `None` when it cannot be read (it was deleted, for example).
-pub fn read(path: &str) -> Option<DocumentText> {
+/// The text of `path` on disk, a path the rule resolved; `None` when it cannot be read (it was
+/// deleted, for example).
+pub fn read(path: &Path) -> Option<DocumentText> {
     let size = std::fs::metadata(path).ok()?.len();
     let text = if size > MAX_DOCUMENT_BYTES {
         None
     } else {
         Some(String::from_utf8_lossy(&std::fs::read(path).ok()?).into_owned())
     };
-    Some(DocumentText { path: path.to_owned(), text })
+    Some(DocumentText { path: path.to_string_lossy().into_owned(), text })
 }
 
 /// The document one of Claude Code's file tools just changed, read from disk. Must run before the
-/// hook is answered, so the text is the one the change produced. Only documents inside the
-/// session folder are read: elsewhere viewers learn only that the file changed.
-pub fn from_file_tool(payload: &HookPayload, folder: &SessionFolder) -> Option<DocumentText> {
+/// hook is answered, so the text is the one the change produced. Only documents whose content
+/// [`FileRule`] shows are read, and the file read is the one it checked: otherwise viewers learn
+/// only that the file changed. The text's path is the agent's, made absolute.
+pub fn from_file_tool(payload: &HookPayload, rule: &FileRule) -> Option<DocumentText> {
     let text = |key: &str| payload.get(key).and_then(Value::as_str);
     if text("hook_event_name")? != "PostToolUse" || !FILE_TOOLS.contains(&text("tool_name")?) {
         return None;
     }
     let path = payload.get("tool_input")?.get("file_path")?.as_str()?;
-    (is_document(path) && folder.contains(path)).then(|| read(path)).flatten()
+    if !is_document(path) {
+        return None;
+    }
+    let document = read(&rule.shown(path)?.real)?;
+    Some(DocumentText { path: rule.folder().absolute_path(path), ..document })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment::Environment;
+    use crate::session_folder::SessionFolder;
     use serde_json::json;
 
     fn post(tool: &str, path: &Path) -> HookPayload {
@@ -77,8 +85,81 @@ mod tests {
         assert!(!is_document("Makefile"));
     }
 
-    fn session(dir: &Path) -> SessionFolder {
-        SessionFolder::new(dir, None)
+    fn session(dir: &Path) -> FileRule {
+        FileRule::from(SessionFolder::new(dir, None))
+    }
+
+    fn with_git(dir: &Path) -> FileRule {
+        FileRule::new(dir, &Environment::from_process())
+    }
+
+    fn payload(tool: &str, path: &str) -> HookPayload {
+        json!({
+            "hook_event_name": "PostToolUse", "prompt_id": "p", "tool_use_id": "t",
+            "tool_name": tool, "tool_input": { "file_path": path }
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    }
+
+    #[test]
+    fn a_relative_path_is_read_in_the_session_folder() {
+        // A folder below the tests' working directory, as a session process's working directory
+        // can hold files with the same relative path as the agent reports.
+        let working = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let relative = working.path().file_name().unwrap().to_string_lossy().into_owned();
+        std::fs::create_dir(working.path().join("secret")).unwrap();
+        std::fs::write(working.path().join("secret/notes.md"), "# Private").unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let named = format!("{relative}/secret/notes.md");
+        assert!(Path::new(&named).exists(), "below the working directory");
+        assert_eq!(from_file_tool(&payload("Write", &named), &session(elsewhere.path())), None);
+
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("docs")).unwrap();
+        std::fs::write(project.path().join("docs/plan.md"), "# Plan").unwrap();
+        assert_eq!(
+            from_file_tool(&payload("Edit", "docs/plan.md"), &session(project.path())),
+            Some(DocumentText {
+                path: project.path().join("docs/plan.md").to_string_lossy().into(),
+                text: Some("# Plan".into())
+            })
+        );
+    }
+
+    #[test]
+    fn private_documents_are_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("credentials.md"), "token").unwrap();
+        let path = dir.path().join("credentials.md");
+        assert_eq!(from_file_tool(&post("Write", &path), &session(dir.path())), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignored_documents_are_not_read_tracked_ones_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.path().join(".gitignore"), "*.local.md\n").unwrap();
+        std::fs::write(dir.path().join("README.md"), "# Readme").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "first"]);
+        std::fs::write(dir.path().join("notes.local.md"), "# Mine").unwrap();
+        let rule = with_git(dir.path());
+        assert_eq!(from_file_tool(&post("Write", &dir.path().join("notes.local.md")), &rule), None);
+        let readme = from_file_tool(&post("Edit", &dir.path().join("README.md")), &rule);
+        assert_eq!(readme.and_then(|doc| doc.text).as_deref(), Some("# Readme"));
     }
 
     #[test]
@@ -143,8 +224,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("big.md");
         std::fs::write(&path, "x".repeat(MAX_DOCUMENT_BYTES as usize + 1)).unwrap();
-        assert_eq!(read(&path.to_string_lossy()).unwrap().text, None);
+        assert_eq!(read(&path).unwrap().text, None);
         std::fs::write(&path, "x".repeat(MAX_DOCUMENT_BYTES as usize)).unwrap();
-        assert!(read(&path.to_string_lossy()).unwrap().text.is_some());
+        assert!(read(&path).unwrap().text.is_some());
     }
 }

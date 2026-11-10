@@ -40,8 +40,8 @@ pub struct CommandChanges {
     pub tool_use_id: String,
     pub files: Vec<ChangedFile>,
     /// The text the command left in the documents it created or changed and, while the host
-    /// shares whole code files, in the other text files. Code files still have to pass
-    /// [`code_files::CodeFiles::may_send`].
+    /// shares whole code files, in the other text files. Each still has to pass
+    /// [`crate::file_rule::FileRule`].
     pub texts: Vec<DocumentText>,
 }
 

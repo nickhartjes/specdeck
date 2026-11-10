@@ -77,6 +77,7 @@ mod tests {
         for (name, source) in [
             ("status.rs", include_str!("status.rs")),
             ("shell_changes.rs", include_str!("shell_changes.rs")),
+            ("file_rule.rs", include_str!("file_rule.rs")),
         ] {
             let code = source.split("\nmod tests {").next().unwrap();
             let code = code.split("\npub(crate) mod tests {").next().unwrap();

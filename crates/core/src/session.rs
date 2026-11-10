@@ -26,6 +26,7 @@ use crate::code_files::CodeFiles;
 use crate::diag;
 use crate::documents::{self, DocumentText};
 use crate::environment::Environment;
+use crate::file_rule::FileRule;
 use crate::hooks::{self, HookEndpoint, HookPayload};
 use crate::launcher::{self, LaunchError, LaunchOptions, StartCommand};
 use crate::mirror::{Colors, Mirror, Responder};
@@ -491,6 +492,8 @@ impl HostSession {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let whole_files = Arc::new(AtomicBool::new(false));
         let io_error = |e: std::io::Error| LaunchError::Pty(e.to_string());
+        // One rule for which files' content viewers get, shared by the hooks and the timeline.
+        let file_rule = Arc::new(FileRule::new(&config.folder, env));
 
         // Claude Code reports its events through HTTP hooks registered with extra settings.
         let start = config.start.clone().filter(|_| config.agent == AgentId::ClaudeCode);
@@ -509,8 +512,8 @@ impl HostSession {
             std::fs::create_dir_all(&config.data_dir).map_err(io_error)?;
             let sender = commands.clone();
             let shell_changes = ShellChanges::new(&config.folder, &config.data_dir, env);
-            let folder = SessionFolder::from_environment(&config.folder, env);
-            let code_files = CodeFiles::new(&config.folder, env);
+            let rule = file_rule.clone();
+            let code_files = CodeFiles::new(file_rule.clone());
             let whole_files = whole_files.clone();
             let endpoint = HookEndpoint::start_with_browser(
                 move |payload| {
@@ -520,11 +523,10 @@ impl HostSession {
                         .and_then(|shell| shell.observe(&payload, whole_files));
                     let mut texts: Vec<DocumentText> =
                         changes.as_mut().map(|c| std::mem::take(&mut c.texts)).unwrap_or_default();
-                    // One rule for every code file's text, from a shell command or a file tool.
-                    texts.retain(|text| {
-                        documents::is_document(&text.path) || code_files.may_send(&text.path)
-                    });
-                    texts.extend(documents::from_file_tool(&payload, &folder));
+                    // One rule for every file's text, document or code, from a shell command or a
+                    // file tool.
+                    texts.retain(|text| rule.shown(&text.path).is_some());
+                    texts.extend(documents::from_file_tool(&payload, &rule));
                     texts.extend(code_files.from_file_tool(&payload, whole_files));
                     let _ = sender.send(Command::Hook(payload, changes, texts));
                 },
@@ -637,6 +639,7 @@ impl HostSession {
             rejected,
             unplaced: diag::Unplaced::default(),
             builder: TimelineBuilder::new(SessionFolder::from_environment(&config.folder, env))
+                .with_rule(file_rule)
                 .with_screenshots(config.screenshots),
             usage: config.agent.has_timeline().then(|| UsageReader::new(usage::projects_dir(env))),
             status_line: StatusLineReader::default(),
