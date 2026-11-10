@@ -23,6 +23,7 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tokio::sync::{Notify, oneshot};
 
+use crate::navigation::web_page;
 use crate::sessions::SessionId;
 
 /// What runs inside the page.
@@ -148,6 +149,8 @@ fn browser(app: &AppHandle, id: SessionId) -> tauri::Result<Arc<Browser>> {
     .focused(false)
     .skip_taskbar(true)
     .incognito(true)
+    // However the page is sent elsewhere: a redirect, a link, a script or going back.
+    .on_navigation(web_page)
     .initialization_script(format!("{}.installConsole();", call_on(&key)))
     .on_page_load(move |_, payload| seen.seen(payload.event()))
     .build()?;
@@ -229,8 +232,11 @@ impl Browser {
 
     async fn navigate(&self, address: &str) -> BrowserResult {
         let url = match Url::parse(address) {
-            Ok(url) if matches!(url.scheme(), "http" | "https") => url,
-            Ok(_) => return BrowserResult::error("Only http and https addresses can be opened."),
+            // The window's own rule, less the empty page it starts on.
+            Ok(url) if web_page(&url) && url.scheme() != "about" => url,
+            Ok(_) => {
+                return BrowserResult::error("Only web addresses (http and https) can be opened.");
+            }
             Err(error) => {
                 return BrowserResult::error(format!("`{address}` is not an address: {error}"));
             }

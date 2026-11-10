@@ -11,8 +11,11 @@ use crate::sessions::SessionId;
 #[cfg(target_os = "macos")]
 mod webkit;
 
-/// Labels of browser windows. No capability names them, so their pages get no IPC. Only the macOS
-/// browser makes windows; the tests check the labels everywhere.
+/// Labels of browser windows. Two things keep their pages away from SpecDeck: the window loads only
+/// web pages (`navigation::web_page`, checked on every navigation), so it never shows the app's
+/// own page; and the app's commands are granted by name in the capabilities, none of which names
+/// these labels, so a call from such a window fails whatever page it shows. Only the macOS browser
+/// makes windows; the tests check the labels everywhere.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const LABEL_PREFIX: &str = "browser-";
 
@@ -84,6 +87,51 @@ mod tests {
                 assert!(!matches, "{} grants IPC to {pattern}", entry.path().display());
             }
             assert!(capability.get("remote").is_none(), "{}", entry.path().display());
+        }
+    }
+
+    /// A window of Claude's browser is refused the app's commands even on the app's own page,
+    /// through the app manifest and the capabilities, which Tauri's mock runtime resolves as the
+    /// app does (`confine-window-navigation` task 3.4).
+    mod grants {
+        use tauri::ipc::{CallbackFn, InvokeBody};
+        use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder};
+        use tauri::webview::InvokeRequest;
+        use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+        /// Stands in for the app's `get_profile`: the grant is by name.
+        #[tauri::command]
+        fn get_profile() -> &'static str {
+            "profile"
+        }
+
+        #[test]
+        fn a_browser_window_may_call_no_app_command() {
+            let app = mock_builder()
+                .invoke_handler(tauri::generate_handler![get_profile])
+                .build(tauri::generate_context!())
+                .unwrap();
+            let own_page = crate::navigation::app_origin(app.handle());
+            let call = |label: &str| {
+                let window =
+                    WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into()))
+                        .build()
+                        .unwrap();
+                let request = InvokeRequest {
+                    cmd: "get_profile".into(),
+                    callback: CallbackFn(0),
+                    error: CallbackFn(1),
+                    url: own_page.join("index.html").unwrap(),
+                    body: InvokeBody::default(),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.to_string(),
+                };
+                get_ipc_response(&window, request)
+            };
+            assert!(call("main").is_ok(), "a session window may");
+            assert!(call("settings").is_ok(), "the settings window may");
+            let refused = call(&super::label(1)).unwrap_err();
+            assert!(refused.to_string().contains("not allowed"), "{refused}");
         }
     }
 }

@@ -1,7 +1,22 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "Permissions for the settings window",
+  "description": "Permissions for the settings window, with the app commands the settings screen calls",
   "windows": ["settings"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "allow-get-profile",
+    "allow-set-username",
+    "allow-set-notifications",
+    "allow-set-viewer-notifications",
+    "allow-set-host-notifications",
+    "allow-set-check-updates",
+    "allow-set-screen-reader",
+    "allow-set-verbose-logging",
+    "allow-set-browser",
+    "allow-set-screenshots",
+    "allow-set-appearance",
+    "allow-set-sharing-service",
+    "allow-check-sharing-service"
+  ]
 }
