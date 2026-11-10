@@ -326,6 +326,13 @@ button { font: inherit; color: inherit; }
 .recent .path { color: var(--text-faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent .remove { opacity: 0; }
 .recent li:hover .remove, .recent .remove:focus-visible { opacity: 1; }
+/* A folder's start command (`agent-sandbox`): its button shows on hover, or always once set. */
+.recent .start-command { font-family: var(--mono); }
+.recent .start-settings { opacity: 0; }
+.recent li:hover .start-settings, .recent .start-settings:focus-visible, .recent .start-settings.set { opacity: 1; }
+.start-through { justify-self: center; }
+.dialog.start-command { width: min(480px, 100%); }
+.dialog.start-command .field.mono { font-family: var(--mono); }
 /* Running sessions on the start screen: the row itself is not a button, Open and End are. */
 .running .open { cursor: default; }
 .running li { gap: 8px; padding-right: 8px; }

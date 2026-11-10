@@ -19,7 +19,7 @@ SpecDeck keeps a few files for each session in a folder of its own, `sessions/<n
 |---|---|
 | `session-….log` | The session's whole terminal output, so viewers who join late can catch up |
 | `snapshots-…` | In a git repository, copies of files in the session folder before and after Claude's shell commands, to show what a command changed |
-| `hooks-….json`, `mcp-….json`, `statusline-….sh` | The settings SpecDeck gives Claude Code, which name the session's local endpoint. They refer to the session's secret token, but do not contain it |
+| `hooks-….json`, `mcp-….json`, `statusline-….sh` | The settings SpecDeck gives Claude Code, which name the session's local endpoint. They refer to the session's secret token, but do not contain it. A session started through a [start command](/specdeck/guide/sandbox/) has none of these: Claude Code gets the same settings as arguments |
 
 SpecDeck deletes them when the session ends. If the session's process is killed instead, for example by a crash or a power cut, they can stay behind; see [Known limits](/specdeck/security/known-limits/#leftover-session-files). Shared files and the braindump are kept in memory only, and are written to disk only when you put a file in the session folder or give the braindump yourself. Prompt suggestions, waiting or kept for later, are kept in memory only and never written to disk.
 

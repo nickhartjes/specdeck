@@ -27,7 +27,7 @@ use crate::diag;
 use crate::documents::{self, DocumentText};
 use crate::environment::Environment;
 use crate::hooks::{self, HookEndpoint, HookPayload};
-use crate::launcher::{self, LaunchError, LaunchOptions};
+use crate::launcher::{self, LaunchError, LaunchOptions, StartCommand};
 use crate::mirror::{Colors, Mirror, Responder};
 use crate::output_log::{Batcher, OutputLog};
 use crate::plans::{self, ChangeRef, Plans};
@@ -51,6 +51,9 @@ pub struct HostConfig {
     pub data_dir: PathBuf,
     /// Images from MCP tools go into the timeline.
     pub screenshots: bool,
+    /// Starts Claude Code through this command, such as a sandbox script (`agent-sandbox`);
+    /// ignored for other agents.
+    pub start: Option<StartCommand>,
 }
 
 /// Something participants need to hear about.
@@ -437,16 +440,19 @@ pub struct HostSession {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     commands: mpsc::UnboundedSender<Command>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    /// The process group of an agent started through a start command, hung up on ending.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    group: Option<u32>,
     host_entered: Arc<Mutex<Option<Instant>>>,
     /// The id of the next shared link.
     next_link: AtomicU32,
     /// Held while the braindump is given, so two givings never write the same items.
     giving: Mutex<()>,
-    /// The endpoint, the settings file and the status-line relay script.
     /// Where shared files are put for the agent.
     folder: PathBuf,
-    /// The endpoint, the hook settings, the status-line relay and, with a browser, the MCP config.
-    _hooks: Option<(HookEndpoint, NamedTempFile, NamedTempFile, Option<NamedTempFile>)>,
+    /// The endpoint and the files Claude Code reads: the hook settings, the status-line relay
+    /// and, with a browser, the MCP config; none with a start command, which gets them inline.
+    _hooks: Option<(HookEndpoint, Vec<NamedTempFile>)>,
 }
 
 impl HostSession {
@@ -486,7 +492,8 @@ impl HostSession {
         let whole_files = Arc::new(AtomicBool::new(false));
         let io_error = |e: std::io::Error| LaunchError::Pty(e.to_string());
 
-        // Claude Code reports its events through HTTP hooks registered with an extra settings file.
+        // Claude Code reports its events through HTTP hooks registered with extra settings.
+        let start = config.start.clone().filter(|_| config.agent == AgentId::ClaudeCode);
         let mut options = LaunchOptions {
             agent: config.agent,
             folder: config.folder.clone(),
@@ -494,7 +501,9 @@ impl HostSession {
             rows: config.rows,
             extra_args: Vec::new(),
             extra_env: Vec::new(),
+            start: start.clone(),
         };
+        let mut rejected = None;
         let hooks = if config.agent.has_timeline() {
             let endpoint_serves_browser = browser.is_some();
             std::fs::create_dir_all(&config.data_dir).map_err(io_error)?;
@@ -523,27 +532,48 @@ impl HostSession {
             )
             .await
             .map_err(io_error)?;
-            // The status line is relayed to SpecDeck and then shown as the host set it up.
-            let host_line = status::host_status_line(&config.folder, env);
-            let relay = status::write_relay_script(&config.data_dir, &endpoint.status_url)
-                .map_err(io_error)?;
-            let status_line = status::status_line_setting(relay.path(), host_line.as_ref());
-            let settings =
-                hooks::write_hook_settings(&config.data_dir, &endpoint.url, Some(status_line))
-                    .map_err(io_error)?;
-            (options.extra_args, options.extra_env) = endpoint.launch_additions(settings.path());
-            let mcp = if endpoint_serves_browser {
-                let mcp = hooks::write_mcp_config(&config.data_dir, &endpoint.mcp_url)
-                    .map_err(io_error)?;
-                options.extra_args.extend(hooks::mcp_launch_args(mcp.path()));
-                Some(mcp)
+            let mut files = Vec::new();
+            if let Some(start) = &start {
+                // A sandbox cannot read files on this computer, and reaches the endpoint by
+                // another name (`agent-sandbox` design decisions 2 and 4). The settings still
+                // name the token's variable, never the token.
+                let host = start.host_address();
+                let mut settings = hooks::hook_settings(&endpoint.url_on(host, "/hooks"));
+                settings["statusLine"] =
+                    status::inline_status_line_setting(&endpoint.url_on(host, "/status"));
+                (options.extra_args, options.extra_env) =
+                    endpoint.launch_additions(settings.to_string());
+                options
+                    .extra_env
+                    .push((hooks::HOOK_PORT_ENV.into(), endpoint.port.to_string().into()));
+                if endpoint_serves_browser {
+                    let mcp = hooks::mcp_config(&endpoint.url_on(host, "/mcp"));
+                    options.extra_args.extend(hooks::mcp_launch_args(mcp.to_string()));
+                }
             } else {
-                None
-            };
-            if let Some(command) = host_line.as_ref().and_then(status::host_command) {
-                options.extra_env.push((status::HOST_STATUS_LINE_ENV.into(), command.into()));
+                // The status line is relayed to SpecDeck and then shown as the host set it up.
+                let host_line = status::host_status_line(&config.folder, env);
+                let relay = status::write_relay_script(&config.data_dir, &endpoint.status_url)
+                    .map_err(io_error)?;
+                let status_line = status::status_line_setting(relay.path(), host_line.as_ref());
+                let settings =
+                    hooks::write_hook_settings(&config.data_dir, &endpoint.url, Some(status_line))
+                        .map_err(io_error)?;
+                (options.extra_args, options.extra_env) =
+                    endpoint.launch_additions(settings.path());
+                if endpoint_serves_browser {
+                    let mcp = hooks::write_mcp_config(&config.data_dir, &endpoint.mcp_url)
+                        .map_err(io_error)?;
+                    options.extra_args.extend(hooks::mcp_launch_args(mcp.path()));
+                    files.push(mcp);
+                }
+                if let Some(command) = host_line.as_ref().and_then(status::host_command) {
+                    options.extra_env.push((status::HOST_STATUS_LINE_ENV.into(), command.into()));
+                }
+                files.extend([settings, relay]);
             }
-            Some((endpoint, settings, relay, mcp))
+            rejected = Some(endpoint.rejected.clone());
+            Some((endpoint, files))
         } else {
             None
         };
@@ -554,6 +584,7 @@ impl HostSession {
             if config.agent == AgentId::Terminal { process.child.process_id() } else { None };
         let log = Arc::new(OutputLog::create(&config.data_dir).map_err(io_error)?);
         let killer = process.child.clone_killer();
+        let group = start.as_ref().and_then(|_| process.child.process_id());
         spawn_reader(process.reader, commands.clone());
         spawn_exit_watcher(config.agent, process.child, commands.clone());
         spawn_git_watcher(config.folder.clone(), env.clone(), commands.clone());
@@ -583,6 +614,7 @@ impl HostSession {
             writer: Arc::new(Mutex::new(process.writer)),
             commands: commands.clone(),
             killer: Mutex::new(killer),
+            group,
             host_entered: Arc::default(),
             folder: config.folder.clone(),
             next_link: AtomicU32::new(1),
@@ -597,7 +629,12 @@ impl HostSession {
             batcher: Batcher::default(),
             responder: Responder::Mirror,
             writer: session.writer.clone(),
-            activity: Activity::new(config.agent),
+            activity: if start.is_some() {
+                Activity::new(config.agent).sandboxed()
+            } else {
+                Activity::new(config.agent)
+            },
+            rejected,
             unplaced: diag::Unplaced::default(),
             builder: TimelineBuilder::new(SessionFolder::from_environment(&config.folder, env))
                 .with_screenshots(config.screenshots),
@@ -861,6 +898,10 @@ impl HostSession {
     /// Ends the agent and the session where it is shared between threads. The output log and
     /// hook settings are deleted once the session is dropped too.
     pub fn stop(&self) {
+        #[cfg(unix)]
+        if let Some(group) = self.group {
+            launcher::hang_up_group(group);
+        }
         let _ = self.killer.lock().unwrap().kill();
         let _ = self.commands.send(Command::Close);
     }
@@ -884,6 +925,8 @@ struct Pump {
     responder: Responder,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     activity: Activity,
+    /// Set once the hook endpoint refused a request without the token.
+    rejected: Option<Arc<AtomicBool>>,
     builder: TimelineBuilder,
     /// Hook payloads the timeline could not place, for the log.
     unplaced: diag::Unplaced,
@@ -922,7 +965,11 @@ impl Pump {
                     if let Some(at) = self.host_entered.lock().unwrap().take() {
                         self.activity.on_host_enter(at);
                     }
-                    let mut changes = self.activity.poll(Instant::now());
+                    let mut changes = Vec::new();
+                    if self.rejected.as_ref().is_some_and(|rejected| rejected.load(Ordering::Relaxed)) {
+                        changes.extend(self.activity.on_rejected());
+                    }
+                    changes.extend(self.activity.poll(Instant::now()));
                     changes.extend(self.check_foreground());
                     self.apply(changes);
                     // The transcript can grow after the hook that named it, for example the
@@ -946,7 +993,7 @@ impl Pump {
                     if let Some(batch) = self.batcher.push(&bytes, Instant::now()) {
                         self.append_output(&batch);
                     }
-                    let mut changes = self.activity.on_output();
+                    let mut changes = self.activity.on_output(Instant::now());
                     for signal in signals {
                         changes.extend(self.program_signal(signal));
                     }
@@ -1063,6 +1110,8 @@ impl Pump {
         if payload.get("hook_event_name").and_then(|name| name.as_str())
             == Some(hooks::STATUS_LINE_EVENT)
         {
+            let changes = self.activity.on_status_line();
+            self.apply(changes);
             if let Some(entry) = self.status_line.on_payload(&payload) {
                 self.emit_entry(entry);
             }

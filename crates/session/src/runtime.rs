@@ -14,6 +14,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use specdeck_core::browser::BrowserHandler;
 use specdeck_core::environment::Environment;
+use specdeck_core::launcher::StartCommand;
 use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{GiveError, HostConfig, HostSession, SessionEvent};
@@ -394,6 +395,7 @@ pub struct StartOptions {
     /// Runs the agent's browser actions (`agent-browser`); `None` gives the agent no browser.
     pub browser: Option<BrowserHandler>,
     pub screenshots: bool,
+    pub start: Option<StartCommand>,
 }
 
 impl HostRuntime {
@@ -409,6 +411,7 @@ impl HostRuntime {
             rows: options.rows,
             data_dir: options.data_dir,
             screenshots: options.screenshots,
+            start: options.start,
         };
         let (session, mut session_events) =
             HostSession::start_with_browser(config, env, options.browser)

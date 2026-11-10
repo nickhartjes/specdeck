@@ -1,7 +1,8 @@
 //! Receives Claude Code's HTTP hooks (design decision 10).
 //!
-//! Claude Code starts with an extra `--settings` file that registers an HTTP hook for every
-//! timeline event. The endpoint listens on 127.0.0.1 only, accepts a request only with the
+//! Claude Code starts with extra `--settings`, a file or, through a start command, inline JSON,
+//! that registers an HTTP hook for every timeline event. The endpoint listens on 127.0.0.1 only,
+//! also when a sandbox on this computer reaches it (`agent-sandbox` design decision 4), accepts a request only with the
 //! session's bearer token, and answers every accepted request with an empty 204 at once, so it
 //! never influences what Claude Code decides.
 
@@ -10,6 +11,7 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::Router;
 use axum::body::Bytes;
@@ -28,6 +30,10 @@ use crate::diag;
 /// Environment variable through which Claude Code gets the endpoint's token, so the token never
 /// appears in the settings file.
 pub const HOOK_TOKEN_ENV: &str = "SPECDECK_HOOK_TOKEN";
+
+/// Environment variable with the endpoint's port, for a start command to allow in a sandbox's
+/// network policy.
+pub const HOOK_PORT_ENV: &str = "SPECDECK_HOOK_PORT";
 
 /// The hook events the timeline is built from. `SessionStart` is not among them: it supports
 /// only command and MCP tool hooks, and the engine knows when it started Claude Code.
@@ -121,8 +127,8 @@ pub fn write_mcp_config(dir: &Path, url: &str) -> io::Result<NamedTempFile> {
     Ok(file)
 }
 
-/// The argument that makes Claude Code load the browser's MCP config.
-pub fn mcp_launch_args(config: &Path) -> Vec<OsString> {
+/// The argument that makes Claude Code load the browser's MCP config, a file or inline JSON.
+pub fn mcp_launch_args(config: impl Into<OsString>) -> Vec<OsString> {
     vec!["--mcp-config".into(), config.into()]
 }
 
@@ -135,6 +141,11 @@ pub struct HookEndpoint {
     /// endpoint was started with a browser.
     pub mcp_url: String,
     pub token: String,
+    pub port: u16,
+    /// Set once a request without the token arrived: a sandbox that reaches the endpoint but does
+    /// not pass the token (`agent-sandbox` design decision 6). Only a hint: any process here can
+    /// send one.
+    pub rejected: Arc<AtomicBool>,
     stop: Option<oneshot::Sender<()>>,
 }
 
@@ -153,14 +164,17 @@ impl HookEndpoint {
     ) -> io::Result<Self> {
         let token = random_token()?;
         let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+        let port = listener.local_addr()?.port();
         let url = format!("http://{}/hooks", listener.local_addr()?);
         let status_url = format!("http://{}/status", listener.local_addr()?);
         let mcp_url = format!("http://{}/mcp", listener.local_addr()?);
         let serves_browser = browser.is_some();
+        let rejected = Arc::new(AtomicBool::new(false));
         let state = Arc::new(Handler {
             expected: format!("Bearer {token}"),
             on_payload: Box::new(on_payload),
             browser,
+            rejected: rejected.clone(),
         });
         let mut app = Router::new()
             .route("/hooks", post(receive))
@@ -181,11 +195,26 @@ impl HookEndpoint {
                 .await;
             scope.run(|| diag::hooks_stopped(served.err().as_ref().map(diag::Reason::from_io)));
         });
-        Ok(Self { url, status_url, mcp_url, token, stop: Some(stop) })
+        Ok(Self { url, status_url, mcp_url, token, port, rejected, stop: Some(stop) })
     }
 
-    /// Arguments and environment that make Claude Code send its hooks here.
-    pub fn launch_additions(&self, settings: &Path) -> (Vec<OsString>, Vec<(OsString, OsString)>) {
+    /// The URL of `path` (`/hooks`, `/status` or `/mcp`) as a sandbox reaches it through `host`,
+    /// whose traffic arrives on this computer's 127.0.0.1.
+    pub fn url_on(&self, host: &str, path: &str) -> String {
+        let host = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host.to_owned()
+        };
+        format!("http://{host}:{}{path}", self.port)
+    }
+
+    /// Arguments and environment that make Claude Code send its hooks here, with `settings` a
+    /// file or inline JSON.
+    pub fn launch_additions(
+        &self,
+        settings: impl Into<OsString>,
+    ) -> (Vec<OsString>, Vec<(OsString, OsString)>) {
         (
             vec!["--settings".into(), settings.into()],
             vec![(HOOK_TOKEN_ENV.into(), self.token.clone().into())],
@@ -205,6 +234,20 @@ struct Handler {
     expected: String,
     on_payload: Box<dyn Fn(HookPayload) + Send + Sync>,
     browser: Option<BrowserHandler>,
+    rejected: Arc<AtomicBool>,
+}
+
+impl Handler {
+    /// Whether the request carries the session's token; notes it when not.
+    fn authorized(&self, headers: &HeaderMap) -> bool {
+        let authorization =
+            headers.get(header::AUTHORIZATION).map(|v| v.as_bytes()).unwrap_or_default();
+        let authorized = constant_time_eq(authorization, self.expected.as_bytes());
+        if !authorized {
+            self.rejected.store(true, Ordering::Relaxed);
+        }
+        authorized
+    }
 }
 
 async fn receive(
@@ -212,9 +255,7 @@ async fn receive(
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let authorization =
-        headers.get(header::AUTHORIZATION).map(|v| v.as_bytes()).unwrap_or_default();
-    if !constant_time_eq(authorization, handler.expected.as_bytes()) {
+    if !handler.authorized(&headers) {
         return StatusCode::UNAUTHORIZED;
     }
     let Ok(Value::Object(payload)) = serde_json::from_slice::<Value>(&body) else {
@@ -237,9 +278,7 @@ async fn receive_status_line(
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let authorization =
-        headers.get(header::AUTHORIZATION).map(|v| v.as_bytes()).unwrap_or_default();
-    if !constant_time_eq(authorization, handler.expected.as_bytes()) {
+    if !handler.authorized(&headers) {
         return StatusCode::UNAUTHORIZED;
     }
     let Ok(Value::Object(mut payload)) = serde_json::from_slice::<Value>(&body) else {
@@ -261,9 +300,7 @@ async fn receive_mcp(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let authorization =
-        headers.get(header::AUTHORIZATION).map(|v| v.as_bytes()).unwrap_or_default();
-    if !constant_time_eq(authorization, handler.expected.as_bytes()) {
+    if !handler.authorized(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let Some(browser) = &handler.browser else {
@@ -387,9 +424,14 @@ mod tests {
     async fn refuses_missing_or_wrong_token() {
         let (endpoint, received) = endpoint().await;
         let body = r#"{"hook_event_name":"Stop"}"#;
+        // A request with the token is not noted as rejected.
+        let auth = format!("Bearer {}", endpoint.token);
+        assert_eq!(post_hook(&endpoint.url, Some(&auth), body).await, 204);
+        assert!(!endpoint.rejected.load(Ordering::Relaxed));
         assert_eq!(post_hook(&endpoint.url, None, body).await, 401);
+        assert!(endpoint.rejected.load(Ordering::Relaxed));
         assert_eq!(post_hook(&endpoint.url, Some("Bearer wrong"), body).await, 401);
-        assert!(received.lock().unwrap().is_empty());
+        assert_eq!(received.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -408,6 +450,37 @@ mod tests {
         let (b, _) = endpoint().await;
         assert_ne!(a.token, b.token);
         assert_eq!(a.token.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn urls_name_the_endpoint_as_a_sandbox_reaches_it() {
+        let (endpoint, _) = endpoint().await;
+        let port = endpoint.port;
+        assert_eq!(endpoint.url, format!("http://127.0.0.1:{port}/hooks"));
+        let url = endpoint.url_on("host.docker.internal", "/hooks");
+        assert_eq!(url, format!("http://host.docker.internal:{port}/hooks"));
+        let url = endpoint.url_on("host.containers.internal", "/mcp");
+        assert_eq!(url, format!("http://host.containers.internal:{port}/mcp"));
+        assert_eq!(
+            endpoint.url_on("fd00::1", "/status"),
+            format!("http://[fd00::1]:{port}/status")
+        );
+    }
+
+    /// Inline settings with every event, the status line and the browser stay a few KB, far below
+    /// the argument limits (`ARG_MAX` is 1 MB on macOS, and one argument may hold 128 KB on Linux).
+    #[test]
+    fn inline_settings_hold_the_variable_not_the_token_and_stay_small() {
+        let url = "http://host.docker.internal:65535";
+        let mut settings = hook_settings(&format!("{url}/hooks"));
+        settings["statusLine"] =
+            crate::status::inline_status_line_setting(&format!("{url}/status"));
+        let settings = settings.to_string();
+        let mcp = mcp_config(&format!("{url}/mcp")).to_string();
+        assert!(settings.contains("Bearer $SPECDECK_HOOK_TOKEN"));
+        assert!(mcp.contains("Bearer ${SPECDECK_HOOK_TOKEN}"));
+        assert!(settings.contains("http://host.docker.internal:65535/hooks"));
+        assert!(settings.len() + mcp.len() < 16 * 1024, "{} bytes", settings.len() + mcp.len());
     }
 
     #[test]
@@ -458,6 +531,8 @@ mod tests {
         assert_eq!(server["url"], "http://127.0.0.1:1/mcp");
         assert_eq!(server["headers"]["Authorization"], "Bearer ${SPECDECK_HOOK_TOKEN}");
         assert_eq!(mcp_launch_args(&path), [OsString::from("--mcp-config"), path.clone().into()]);
+        let inline = mcp_config("http://host.docker.internal:1/mcp").to_string();
+        assert_eq!(mcp_launch_args(&inline), [OsString::from("--mcp-config"), inline.into()]);
         drop(file);
         assert!(!path.exists());
     }

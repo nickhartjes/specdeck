@@ -6,6 +6,7 @@ import type { Bridge } from '../api/bridge';
 import type { Appearance, JoinLink, NoticeOpen, Profile, RequestOutcome, View, ViewEvent, ViewerNotifications } from '../api/types';
 import { DEFAULT_HOST_NOTIFICATIONS } from '../model/hostNotifications';
 import { DEFAULT_VIEWER_NOTIFICATIONS } from '../model/viewerNotices';
+import { SANDBOX_GUIDE_URL } from '../model/sandbox';
 import { asAppearance } from '../appearance';
 import { exportFileName } from '../model/diagnostics';
 import { Connection, type Platform, type ViewerCore } from './connection';
@@ -334,6 +335,11 @@ export function webBridge(options: WebBridgeOptions): Bridge {
     setSharingService: notInTheWebViewer,
     checkSharingService: notInTheWebViewer,
     removeRecentFolder: notInTheWebViewer,
+    setFolderStart: notInTheWebViewer,
+    openSandboxGuide: () => {
+      window.open(SANDBOX_GUIDE_URL, '_blank', 'noopener');
+      return Promise.resolve();
+    },
     // It hosts nothing, so nothing runs without a window.
     runningSessions: () => Promise.resolve([]),
     openRunningSession: notInTheWebViewer,

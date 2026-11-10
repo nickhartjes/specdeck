@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use specdeck_core::browser::{BrowserHandler, BrowserResult};
+use specdeck_core::launcher::StartCommand;
 use specdeck_local::{Compat, Frame, Frozen, Protocol, compat};
 use specdeck_protocol::AgentId;
 use specdeck_protocol::asks::{Card, CardSet, ReadTarget};
@@ -535,6 +536,8 @@ pub struct Launch {
     pub browser: Option<BrowserHandler>,
     /// Images from MCP tools go into the timeline.
     pub screenshots: bool,
+    /// Starts Claude Code through the host's command for the folder (`agent-sandbox`).
+    pub start: Option<StartCommand>,
 }
 
 /// Starts session `id` as a process of its own and starts its agent.
@@ -595,6 +598,7 @@ pub async fn launch(
             verbose: launch.verbose,
             browser,
             screenshots: launch.screenshots,
+            start: launch.start,
         })
         .await?;
     Ok(client)

@@ -10,6 +10,7 @@ export const sidebar = [
       'guide/documents',
       'guide/read-and-estimate',
       'guide/browser',
+      'guide/sandbox',
       'guide/settings',
       'guide/keyboard',
       'guide/troubleshooting',

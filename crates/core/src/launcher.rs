@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use serde::{Deserialize, Serialize};
 use specdeck_protocol::AgentId;
 
 use crate::agent::{self, Prerequisite};
@@ -22,6 +23,8 @@ pub enum LaunchError {
     FolderMissing(PathBuf),
     #[error("Could not start a terminal: {0}")]
     Pty(String),
+    #[error("Start commands work on macOS and Linux only.")]
+    StartCommandUnsupported,
 }
 
 impl LaunchError {
@@ -36,6 +39,7 @@ impl LaunchError {
             }
             LaunchError::FolderMissing(_) => ("folder_missing", None),
             LaunchError::Pty(_) => ("pty", None),
+            LaunchError::StartCommandUnsupported => ("start_command_unsupported", None),
         }
     }
 }
@@ -51,6 +55,39 @@ pub struct LaunchOptions {
     pub extra_args: Vec<OsString>,
     /// Variables added to the environment, for example the hook token.
     pub extra_env: Vec<(OsString, OsString)>,
+    /// Starts the agent through this command instead of its own program.
+    pub start: Option<StartCommand>,
+}
+
+/// A command the host set to start Claude Code with, such as a sandbox script (`agent-sandbox`
+/// design decision 1). It runs through `/bin/sh` with the arguments SpecDeck gives Claude Code
+/// appended, so a script that passes its arguments on to `claude` gets them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartCommand {
+    pub command: String,
+    /// How the sandbox reaches this computer; `None` for [`DEFAULT_HOST_ADDRESS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_address: Option<String>,
+}
+
+/// How Docker Sandboxes and Docker Desktop reach the computer they run on.
+pub const DEFAULT_HOST_ADDRESS: &str = "host.docker.internal";
+
+impl StartCommand {
+    /// The command and address as the host typed them, trimmed; `None` without a command.
+    pub fn new(command: &str, host_address: Option<&str>) -> Option<Self> {
+        let command = command.trim();
+        let host_address = host_address.map(str::trim).filter(|address| !address.is_empty());
+        (!command.is_empty()).then(|| Self {
+            command: command.to_owned(),
+            host_address: host_address.map(str::to_owned),
+        })
+    }
+
+    pub fn host_address(&self) -> &str {
+        self.host_address.as_deref().unwrap_or(DEFAULT_HOST_ADDRESS)
+    }
 }
 
 /// A running agent in a pseudo-terminal.
@@ -65,13 +102,26 @@ pub struct AgentProcess {
 
 /// Checks the agent can start, then starts it in a pty.
 pub fn launch(options: &LaunchOptions, env: &Environment) -> Result<AgentProcess, LaunchError> {
-    let program = agent::program(options.agent, env).ok_or(match options.agent {
-        AgentId::Terminal => LaunchError::NoShell,
-        agent => LaunchError::NotInstalled(agent),
-    })?;
-    if let Some(prerequisite) = agent::missing_prerequisite(options.agent, env) {
-        return Err(LaunchError::MissingPrerequisite { agent: options.agent, prerequisite });
-    }
+    let mut command = match &options.start {
+        // The agent may exist only where the command starts it, such as inside a sandbox, so
+        // whether it is installed here does not matter.
+        Some(start) => start_command(start)?,
+        None => {
+            let program = agent::program(options.agent, env).ok_or(match options.agent {
+                AgentId::Terminal => LaunchError::NoShell,
+                agent => LaunchError::NotInstalled(agent),
+            })?;
+            if let Some(prerequisite) = agent::missing_prerequisite(options.agent, env) {
+                return Err(LaunchError::MissingPrerequisite {
+                    agent: options.agent,
+                    prerequisite,
+                });
+            }
+            let mut command = command_for(&program.executable);
+            command.args(&program.args);
+            command
+        }
+    };
     if !options.folder.is_dir() {
         return Err(LaunchError::FolderMissing(options.folder.clone()));
     }
@@ -85,8 +135,6 @@ pub fn launch(options: &LaunchOptions, env: &Environment) -> Result<AgentProcess
         })
         .map_err(|e| LaunchError::Pty(e.to_string()))?;
 
-    let mut command = command_for(&program.executable);
-    command.args(&program.args);
     command.args(&options.extra_args);
     command.cwd(&options.folder);
     command.env_clear();
@@ -105,6 +153,29 @@ pub fn launch(options: &LaunchOptions, env: &Environment) -> Result<AgentProcess
     let reader = pty.master.try_clone_reader().map_err(|e| LaunchError::Pty(e.to_string()))?;
     let writer = pty.master.take_writer().map_err(|e| LaunchError::Pty(e.to_string()))?;
     Ok(AgentProcess { master: pty.master, child, reader, writer })
+}
+
+/// `/bin/sh -c '<command> "$@"' sh`, to which the agent's arguments are added. A POSIX shell
+/// whatever the host's login shell is: `"$@"` means something else in fish. The login shell's
+/// environment still applies, so tools on its `PATH`, such as `just`, are found.
+fn start_command(start: &StartCommand) -> Result<CommandBuilder, LaunchError> {
+    if cfg!(windows) {
+        return Err(LaunchError::StartCommandUnsupported);
+    }
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args(["-c", &format!("{} \"$@\"", start.command), "sh"]);
+    Ok(command)
+}
+
+/// Ends a process started through a start command and what it started in its process group: a
+/// script's own children may not stop when the script does. The pty made the process a session
+/// leader, so its process group has its id.
+#[cfg(unix)]
+pub fn hang_up_group(pid: u32) {
+    // SAFETY: killpg only sends a signal; a group that is gone gives ESRCH, which is fine.
+    unsafe {
+        libc::killpg(pid as libc::pid_t, libc::SIGHUP);
+    }
 }
 
 /// Variables a running Claude Code session sets for the processes it starts. When SpecDeck itself
@@ -157,7 +228,22 @@ mod tests {
             rows: 24,
             extra_args: vec!["--flag".into()],
             extra_env: vec![("SPECDECK_TEST".into(), "yes".into())],
+            start: None,
         }
+    }
+
+    fn started_through(folder: &Path, command: &str) -> LaunchOptions {
+        LaunchOptions {
+            extra_args: vec!["--settings".into(), r#"{"hooks": {}}"#.into()],
+            extra_env: vec![("SPECDECK_HOOK_PORT".into(), "4711".into())],
+            start: Some(StartCommand { command: command.into(), host_address: None }),
+            ..options(AgentId::ClaudeCode, folder)
+        }
+    }
+
+    fn running(pid: i32) -> bool {
+        // SAFETY: signal 0 only checks the process exists.
+        unsafe { libc::kill(pid, 0) == 0 }
     }
 
     fn read_until(reader: &mut dyn Read, needle: &str) -> String {
@@ -245,6 +331,68 @@ mod tests {
     }
 
     #[test]
+    fn a_start_command_gets_the_agents_arguments_and_the_port() {
+        let bin = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        // A script like a sandbox's, on the login shell's PATH; no `claude` is installed here.
+        fake_executable(
+            bin.path(),
+            "sandbox",
+            r#"for arg in "$@"; do printf '<%s>' "$arg"; done; echo " port=$SPECDECK_HOOK_PORT cwd=$(pwd) end""#,
+        );
+        // The login shell is fish, whose syntax the command does not depend on.
+        let env: Environment =
+            [("PATH", bin.path().as_os_str()), ("SHELL", "/opt/homebrew/bin/fish".as_ref())]
+                .into_iter()
+                .collect();
+
+        let mut process =
+            launch(&started_through(folder.path(), "sandbox --name 'my box'"), &env).unwrap();
+        let output = read_until(&mut process.reader, "end");
+        let folder = folder.path().canonicalize().unwrap();
+        // The command's own words first, then SpecDeck's arguments, each kept whole.
+        assert!(output.contains(r#"<--name><my box><--settings><{"hooks": {}}>"#), "{output}");
+        assert!(output.contains(" port=4711 "), "{output}");
+        assert!(output.contains(&format!("cwd={}", folder.display())), "{output}");
+        assert!(process.child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn a_start_command_that_fails_shows_its_output() {
+        let folder = tempfile::tempdir().unwrap();
+        let env: Environment = [("PATH", "/usr/bin:/bin")].into_iter().collect();
+        let mut process = launch(&started_through(folder.path(), "no-such-sandbox"), &env).unwrap();
+        let output = read_until(&mut process.reader, "not found");
+        assert!(output.contains("no-such-sandbox"), "{output}");
+        assert!(!process.child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn hanging_up_ends_what_the_start_command_started() {
+        let folder = tempfile::tempdir().unwrap();
+        let env: Environment = [("PATH", "/usr/bin:/bin")].into_iter().collect();
+        let mut process =
+            launch(&started_through(folder.path(), "sleep 300 & echo \"child=$!\"; wait; :"), &env)
+                .unwrap();
+        let output = read_until(&mut process.reader, "\n");
+        let child: i32 = output
+            .split("child=")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|pid| pid.parse().ok())
+            .unwrap_or_else(|| panic!("no child pid in {output:?}"));
+        assert!(running(child));
+
+        hang_up_group(process.child.process_id().unwrap());
+        let _ = process.child.wait();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while running(child) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!running(child), "the sleep the script started still runs");
+    }
+
+    #[test]
     fn reasons_hold_no_text() {
         let missing = LaunchError::FolderMissing("/Users/Marker/gone".into());
         assert_eq!(missing.reason(), ("folder_missing", None));
@@ -255,6 +403,8 @@ mod tests {
         };
         assert_eq!(prerequisite.reason(), ("missing_prerequisite", Some("git_bash")));
         assert_eq!(LaunchError::NotInstalled(AgentId::Codex).reason(), ("not_installed", None));
+        let unsupported = LaunchError::StartCommandUnsupported.reason();
+        assert_eq!(unsupported, ("start_command_unsupported", None));
     }
 
     #[test]

@@ -89,6 +89,8 @@ Claude Code gets the session's token in its environment, and every command it ru
 
 **What you can do:** nothing specific: those commands already run as you, with your files. Review what the agent runs, as you would anyway.
 
+The same holds [in a sandbox](/specdeck/guide/sandbox/): the start command passes the token in, so commands there can read it too. A sandbox keeps the agent away from your files, not from the session's timeline or Claude's browser.
+
 ### Notifications can show commands, paths and addresses
 
 When the agent waits for you, the notification can show the command it wants to run, a file path, an address, or its question. Notifications also show viewers' names as they chose them, and a viewer could choose a misleading one.

@@ -37,6 +37,7 @@ fn config(agent: AgentId, folder: &Path, data: &Path) -> HostConfig {
         rows: 24,
         data_dir: data.to_owned(),
         screenshots: true,
+        start: None,
     }
 }
 
@@ -194,6 +195,224 @@ exit 3"#,
     assert_eq!(session.status(), AgentStatus::Exited);
     assert!(session.log().path().exists());
     session.close();
+}
+
+/// A sandbox script: no `claude` is installed here, the settings come inline, and the sandbox's
+/// proxy turns `host.docker.internal` into this computer's 127.0.0.1 (`agent-sandbox` notes, 1.1).
+const SANDBOX_SCRIPT: &str = r#"for arg in "$@"; do
+  case "$arg" in *"$SPECDECK_HOOK_TOKEN"*) echo "token in arguments"; exit 9;; esac
+done
+[ "$1" = "--settings" ] || { echo "no settings"; exit 9; }
+case "$2" in "{"*) ;; *) echo "settings are not inline"; exit 9;; esac
+url=$(printf '%s' "$2" | sed -n 's/.*"url":"\(http[^"]*\/hooks\)".*/\1/p' | head -n 1)
+case "$url" in "http://host.docker.internal:$SPECDECK_HOOK_PORT/hooks") ;; *) echo "url $url"; exit 9;; esac
+url=$(printf '%s' "$url" | sed 's/host\.docker\.internal/127.0.0.1/')
+post() { curl -s -o /dev/null -w '%{http_code}' -X POST "$@" -H 'Content-Type: application/json' "$url"; }
+echo "port=$SPECDECK_HOOK_PORT"
+echo "without token: $(post -d '{"hook_event_name":"Stop"}')"
+post -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -d '{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"hi"}' >/dev/null
+post -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -d '{"hook_event_name":"Stop","prompt_id":"p1","last_assistant_message":"hello"}' >/dev/null
+echo posted
+read wait"#;
+
+#[tokio::test]
+async fn claude_code_in_a_sandbox_gets_inline_settings_and_the_token_by_environment() {
+    use specdeck_core::launcher::StartCommand;
+
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    fake_agent(bin.path(), "sandbox", SANDBOX_SCRIPT);
+    let start = StartCommand { command: "sandbox".into(), host_address: None };
+    let config =
+        HostConfig { start: Some(start), ..config(AgentId::ClaudeCode, bin.path(), data.path()) };
+
+    let (session, mut events) = HostSession::start(config, &env(bin.path())).await.unwrap();
+    wait_for_output(&session, &mut events, "posted").await;
+    let output = output_text(&session);
+    assert!(output.contains("without token: 401"), "{output}");
+    let entries = || -> Vec<Entry> {
+        session
+            .timeline()
+            .into_iter()
+            .map(|e| e.entry)
+            .filter(|e| !matches!(e, Entry::Git { .. }))
+            .collect()
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while entries().len() < 3 {
+            events.recv().await.expect("session ended");
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timeline {:?}, output {output:?}", entries()));
+    assert_eq!(
+        entries(),
+        [
+            Entry::SessionStarted,
+            Entry::Prompt { prompt_id: "p1".into(), text: "hi".into() },
+            Entry::Response { prompt_id: "p1".into(), text: "hello".into() },
+        ]
+    );
+    // No settings, relay or MCP file: the sandbox could not read them.
+    let written: Vec<_> = std::fs::read_dir(data.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            name.starts_with("hooks-")
+                || name.starts_with("statusline-")
+                || name.starts_with("mcp-")
+        })
+        .collect();
+    assert!(written.is_empty(), "{written:?}");
+
+    // The endpoint still listens on loopback only: this computer's other address is refused.
+    let port: u16 = output
+        .split("port=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|port| port.parse().ok())
+        .unwrap_or_else(|| panic!("no port in {output:?}"));
+    if let Some(address) = non_loopback_address() {
+        // Refused at once, or not answered where a firewall drops it.
+        let connect = tokio::net::TcpStream::connect((address, port));
+        let answered = tokio::time::timeout(Duration::from_secs(2), connect).await;
+        assert!(!matches!(answered, Ok(Ok(_))), "the endpoint answered on {address}");
+    }
+    session.close();
+}
+
+/// Starts Claude Code through a fake sandbox script whose body runs after `url`, `status` and
+/// `post` are set up as a sandbox reaches the endpoint.
+async fn sandbox_session(
+    bin: &Path,
+    data: &Path,
+    body: &str,
+) -> (HostSession, UnboundedReceiver<SessionEvent>) {
+    use specdeck_core::launcher::StartCommand;
+
+    let script = format!(
+        r#"url=$(printf '%s' "$2" | sed -n 's/.*"url":"\(http[^"]*\/hooks\)".*/\1/p' | head -n 1 | sed 's/host\.docker\.internal/127.0.0.1/')
+status=$(printf '%s' "$url" | sed 's/\/hooks$/\/status/')
+post() {{ curl -s -o /dev/null -X POST -H 'Content-Type: application/json' "$@"; }}
+echo ready
+{body}
+read wait"#
+    );
+    fake_agent(bin, "sandbox", &script);
+    let start = StartCommand { command: "sandbox".into(), host_address: None };
+    let config = HostConfig { start: Some(start), ..config(AgentId::ClaudeCode, bin, data) };
+    HostSession::start(config, &env(bin)).await.unwrap()
+}
+
+/// The sandbox's explanation once it shows, or `None` when it did not within the reach timeout
+/// and a little more.
+async fn sandbox_explanation(
+    session: &HostSession,
+    events: &mut UnboundedReceiver<SessionEvent>,
+) -> Option<String> {
+    use specdeck_core::activity::REACH_TIMEOUT;
+    use specdeck_protocol::timeline::Help;
+
+    let explanation = || {
+        session.timeline().into_iter().find_map(|event| match event.entry {
+            Entry::TimelineUnavailable { reason, help: Some(Help::Sandbox) } => Some(reason),
+            _ => None,
+        })
+    };
+    tokio::time::timeout(REACH_TIMEOUT + Duration::from_secs(8), async {
+        loop {
+            if let Some(reason) = explanation() {
+                return reason;
+            }
+            events.recv().await.expect("session ended");
+        }
+    })
+    .await
+    .ok()
+}
+
+#[tokio::test]
+async fn a_sandbox_that_does_not_reach_specdeck_is_explained_before_a_prompt() {
+    use specdeck_core::activity::NOT_REACHED;
+    let (bin, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (session, mut events) = sandbox_session(bin.path(), data.path(), ":").await;
+    assert_eq!(sandbox_explanation(&session, &mut events).await.as_deref(), Some(NOT_REACHED));
+    // The terminal keeps working.
+    session.input(b"still here\r").unwrap();
+    session.close();
+}
+
+#[tokio::test]
+async fn a_sandbox_that_does_not_pass_the_token_is_told_so() {
+    use specdeck_core::activity::TOKEN_NOT_PASSED;
+    let (bin, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let body = r#"post -d '{"hook_event_name":"Stop"}' "$url""#;
+    let (session, mut events) = sandbox_session(bin.path(), data.path(), body).await;
+    assert_eq!(sandbox_explanation(&session, &mut events).await.as_deref(), Some(TOKEN_NOT_PASSED));
+    session.close();
+}
+
+#[tokio::test]
+async fn a_sandbox_whose_status_line_arrives_needs_no_explanation() {
+    let (bin, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let body = r#"post -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -d '{"model":{"id":"m"}}' "$status""#;
+    let (session, mut events) = sandbox_session(bin.path(), data.path(), body).await;
+    assert_eq!(sandbox_explanation(&session, &mut events).await, None);
+    session.close();
+}
+
+#[tokio::test]
+async fn a_sandbox_whose_hooks_arrive_after_a_prompt_needs_no_explanation() {
+    let (bin, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    // No status line, as without curl's relay; the prompt's hooks arrive.
+    let body = r#"read line
+post -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -d '{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"hi"}' "$url""#;
+    let (session, mut events) = sandbox_session(bin.path(), data.path(), body).await;
+    wait_for_output(&session, &mut events, "ready").await;
+    session.input(b"hi\r").unwrap();
+    assert_eq!(sandbox_explanation(&session, &mut events).await, None);
+    assert!(session.timeline().iter().any(|e| matches!(e.entry, Entry::Prompt { .. })));
+    session.close();
+}
+
+#[tokio::test]
+async fn paths_only_inside_the_sandbox_do_not_stop_the_timeline() {
+    let (bin, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    // The session folder is mounted at the same path; the transcript and the plan are in the
+    // sandbox's own home, which this computer cannot read.
+    let body = r##"mkdir -p src && printf 'export {}\n' > src/server.ts
+t=/home/agent/.claude/projects/-work/s1.jsonl
+hook() { post -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -d "$1" "$url"; }
+hook "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt_id\":\"p1\",\"prompt\":\"serve\",\"transcript_path\":\"$t\"}"
+hook "{\"hook_event_name\":\"PostToolUse\",\"prompt_id\":\"p1\",\"tool_name\":\"Write\",\"tool_use_id\":\"t1\",\"tool_input\":{\"file_path\":\"/home/agent/.claude/plans/serve.md\"},\"tool_response\":{\"filePath\":\"/home/agent/.claude/plans/serve.md\",\"originalFile\":null,\"content\":\"# Plan\"}}"
+hook "{\"hook_event_name\":\"PostToolUse\",\"prompt_id\":\"p1\",\"tool_name\":\"Write\",\"tool_use_id\":\"t2\",\"tool_input\":{\"file_path\":\"$PWD/src/server.ts\"},\"tool_response\":{\"filePath\":\"$PWD/src/server.ts\",\"originalFile\":null,\"content\":\"export {}\"}}"
+hook "{\"hook_event_name\":\"Stop\",\"prompt_id\":\"p1\",\"last_assistant_message\":\"served\",\"transcript_path\":\"$t\"}"
+echo posted"##;
+    let (session, mut events) = sandbox_session(bin.path(), data.path(), body).await;
+    wait_for_output(&session, &mut events, "posted").await;
+    let found = |check: &dyn Fn(&Entry) -> bool| session.timeline().iter().any(|e| check(&e.entry));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !(found(&|e| matches!(e, Entry::Response { .. }))
+            && found(&|e| matches!(e, Entry::UsageUnavailable { .. })))
+        {
+            events.recv().await.expect("session ended");
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timeline {:?}", session.timeline()));
+    assert!(found(&|e| matches!(e, Entry::FileChange { path, .. } if path == "src/server.ts")));
+    assert!(!found(&|e| matches!(e, Entry::TimelineUnavailable { .. })));
+    // Still running.
+    session.input(b"next\r").unwrap();
+    assert_ne!(session.status(), AgentStatus::Exited);
+    session.close();
+}
+
+/// This computer's address on its default route, if it has one; finding it sends nothing.
+fn non_loopback_address() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    Some(socket.local_addr().ok()?.ip()).filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
 }
 
 #[tokio::test]

@@ -26,6 +26,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 use specdeck_core::agent;
 use specdeck_core::environment::{Environment, PROBE_TIMEOUT};
+use specdeck_core::launcher::StartCommand;
 use specdeck_core::peer::PeerConfig;
 
 use specdeck_protocol::invite::InviteCode;
@@ -131,6 +132,8 @@ struct AgentInfo {
 struct RecentFolder {
     path: PathBuf,
     name: String,
+    /// How Claude Code starts there, when not as `claude` (`agent-sandbox`).
+    start: Option<StartCommand>,
 }
 
 #[derive(Serialize)]
@@ -214,6 +217,7 @@ fn profile(state: &AppState, window: &str) -> Profile {
                     || path.to_string_lossy().into_owned(),
                     |name| name.to_string_lossy().into_owned(),
                 ),
+                start: settings.folder_start(&path).cloned(),
                 path,
             })
             .collect(),
@@ -309,6 +313,14 @@ async fn agent_versions(state: State<'_, AppState>) -> Result<Vec<AgentVersion>,
 async fn open_install_page(app: AppHandle, agent: AgentId) -> Result<(), String> {
     let page = agent::install_page(agent).ok_or("This choice needs nothing installed.")?;
     app.opener().open_url(page, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// The docs page on running Claude Code in a sandbox (`agent-sandbox`).
+const SANDBOX_GUIDE: &str = "https://nickhartjes.github.io/specdeck/guide/sandbox/";
+
+#[tauri::command]
+async fn open_sandbox_guide(app: AppHandle) -> Result<(), String> {
+    app.opener().open_url(SANDBOX_GUIDE, None::<&str>).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -784,6 +796,25 @@ async fn remove_recent_folder(
     Ok(profile(&state, window.label()))
 }
 
+/// Sets how Claude Code starts in `path`, or with an empty command clears it (`agent-sandbox`).
+#[tauri::command]
+async fn set_folder_start(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    path: PathBuf,
+    command: String,
+    host_address: Option<String>,
+) -> Result<Profile, String> {
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.set_folder_start(path, StartCommand::new(&command, host_address.as_deref()));
+        state.save(&settings);
+    }
+    refresh_menu(&app);
+    Ok(profile(&state, window.label()))
+}
+
 /// The name a folder goes by in titles, the tray and notifications.
 fn folder_name(folder: &Path) -> String {
     folder.file_name().map_or_else(
@@ -888,10 +919,13 @@ async fn start_hosting(
     if !state.sessions.lock().unwrap().is_free(window.label()) {
         return Err("This window already shows a session. Open a new window for another.".into());
     }
-    let (username, verbose, browser, screenshots) = {
+    let (username, verbose, browser, screenshots, start) = {
         let settings = state.settings.lock().unwrap();
         let username = settings.username.clone().ok_or("Set your name first.")?;
-        (username, settings.verbose_logging, settings.browser, settings.screenshots)
+        // Only Claude Code starts through a folder's command; other agents start as always.
+        let start =
+            settings.folder_start(&folder).filter(|_| agent == AgentId::ClaudeCode).cloned();
+        (username, settings.verbose_logging, settings.browser, settings.screenshots, start)
     };
     let id = state.sessions.lock().unwrap().next_id();
     let launch = client::Launch {
@@ -905,6 +939,7 @@ async fn start_hosting(
         verbose,
         browser: browser::offered(agent, browser).then(|| browser::runner(&app, id)).flatten(),
         screenshots,
+        start,
     };
     let name = folder_name(&folder);
     // The menu-bar or tray icon shows the session from the start, and follows it.
@@ -2619,6 +2654,8 @@ pub fn run() {
             check_sharing_service,
             read_join_link,
             remove_recent_folder,
+            set_folder_start,
+            open_sandbox_guide,
             start_hosting,
             host_attach,
             host_input,

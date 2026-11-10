@@ -1,13 +1,15 @@
 //! What the app remembers between runs: the user's name, recent folders, last used agent,
 //! which notifications to show, how the user arranges the session window, their sharing service, how
 //! far the main window is zoomed, whether to check for updates, whether the terminal works
-//! with screen readers, whether the diagnostic log is verbose, whether Claude gets a browser and
-//! whether the app is light, dark or follows the OS.
+//! with screen readers, whether the diagnostic log is verbose, whether Claude gets a browser,
+//! whether the app is light, dark or follows the OS, and the start commands of recent folders.
 //! Stored as JSON in the app's config directory.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use specdeck_core::launcher::StartCommand;
 use specdeck_protocol::AgentId;
 
 /// Recent folders listed on the start screen.
@@ -23,6 +25,10 @@ pub struct Settings {
     pub username: Option<String>,
     /// Newest first, each once.
     pub recent_folders: Vec<PathBuf>,
+    /// How Claude Code starts in a recent folder, when not as `claude` (`agent-sandbox` design
+    /// decision 1); dropped with the folder. Apart from `recent_folders`, so an older release
+    /// still reads the file.
+    pub folder_starts: BTreeMap<PathBuf, StartCommand>,
     pub last_agent: Option<AgentId>,
     pub notifications: bool,
     /// Which kinds of notification the user gets about sessions they watch, under `notifications`.
@@ -229,6 +235,7 @@ impl Default for Settings {
         Self {
             username: None,
             recent_folders: Vec::new(),
+            folder_starts: BTreeMap::new(),
             last_agent: None,
             notifications: true,
             viewer_notifications: ViewerNotifications::default(),
@@ -271,10 +278,32 @@ impl Settings {
         self.recent_folders.retain(|existing| existing != &folder);
         self.recent_folders.insert(0, folder);
         self.recent_folders.truncate(MAX_RECENT);
+        self.drop_unlisted_starts();
     }
 
     pub fn remove_recent(&mut self, folder: &Path) {
         self.recent_folders.retain(|existing| existing != folder);
+        self.drop_unlisted_starts();
+    }
+
+    /// How Claude Code starts in `folder`; `None` starts `claude`.
+    pub fn folder_start(&self, folder: &Path) -> Option<&StartCommand> {
+        self.folder_starts.get(folder)
+    }
+
+    /// Sets or, with `None`, clears how Claude Code starts in `folder`, putting it at the top of
+    /// the recent folders so it is kept.
+    pub fn set_folder_start(&mut self, folder: PathBuf, start: Option<StartCommand>) {
+        match start {
+            Some(start) => self.folder_starts.insert(folder.clone(), start),
+            None => self.folder_starts.remove(&folder),
+        };
+        self.add_recent(folder);
+    }
+
+    fn drop_unlisted_starts(&mut self) {
+        let listed = &self.recent_folders;
+        self.folder_starts.retain(|folder, _| listed.contains(folder));
     }
 
     /// Recent folders that still exist.
@@ -324,6 +353,60 @@ mod tests {
         assert!(settings.existing_recent().is_empty());
         // Removing from the list does not touch the folder.
         assert!(dir.path().exists());
+    }
+
+    #[test]
+    fn a_folder_start_is_kept_with_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Settings saved before start commands existed still load, with none.
+        std::fs::write(&path, r#"{"username":"nick","recentFolders":["/shop"]}"#).unwrap();
+        let mut settings = Settings::load(&path);
+        assert_eq!(settings.folder_start(Path::new("/shop")), None);
+
+        let start = StartCommand::new(" just sandbox ", Some("  ")).unwrap();
+        assert_eq!(start, StartCommand { command: "just sandbox".into(), host_address: None });
+        settings.set_folder_start("/shop".into(), Some(start.clone()));
+        settings.save(&path).unwrap();
+        let mut settings = Settings::load(&path);
+        assert_eq!(settings.folder_start(Path::new("/shop")), Some(&start));
+        // Kept in its own field: the recent folders stay a list of paths for older releases.
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["recentFolders"], serde_json::json!(["/shop"]));
+        assert_eq!(
+            saved["folderStarts"]["/shop"],
+            serde_json::json!({ "command": "just sandbox" })
+        );
+
+        // Kept when the folder moves to the top, and when other folders come and go.
+        settings.add_recent("/api".into());
+        settings.add_recent("/shop".into());
+        assert_eq!(settings.folder_start(Path::new("/shop")), Some(&start));
+
+        // Dropped with the folder, whether removed or pushed off the list.
+        settings.remove_recent(Path::new("/shop"));
+        assert!(settings.folder_starts.is_empty());
+        settings.set_folder_start("/old".into(), Some(start.clone()));
+        for name in ["a", "b", "c", "d", "e"] {
+            settings.add_recent(PathBuf::from(name));
+        }
+        assert!(settings.folder_starts.is_empty());
+    }
+
+    #[test]
+    fn a_folder_start_is_set_cleared_and_given_an_address() {
+        let mut settings = Settings::default();
+        assert_eq!(StartCommand::new("  ", Some("host.containers.internal")), None);
+        let start = StartCommand::new("./sandbox.sh", Some(" host.containers.internal ")).unwrap();
+        // Setting one for a new folder lists it, so it is remembered.
+        settings.set_folder_start("/shop".into(), Some(start));
+        assert_eq!(settings.recent_folders, [PathBuf::from("/shop")]);
+        let address = settings.folder_start(Path::new("/shop")).unwrap().host_address.as_deref();
+        assert_eq!(address, Some("host.containers.internal"));
+        settings.set_folder_start("/shop".into(), None);
+        assert_eq!(settings.folder_start(Path::new("/shop")), None);
+        assert_eq!(settings.recent_folders, [PathBuf::from("/shop")]);
     }
 
     #[test]

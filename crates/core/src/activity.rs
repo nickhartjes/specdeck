@@ -5,6 +5,12 @@
 //! [`EVENT_TIMEOUT`], or when a payload cannot be parsed. The next valid event makes it available
 //! again.
 //!
+//! Claude Code started through a start command, such as in a sandbox, may not reach SpecDeck at
+//! all (`agent-sandbox` design decision 6). Its status line posts to SpecDeck as soon as it shows
+//! its screen, so when neither that nor a hook event arrives within [`REACH_TIMEOUT`] of its first
+//! output, the timeline is unavailable before any prompt, with the likely cause: a request without
+//! the session's token means the sandbox reaches SpecDeck but does not pass the token.
+//!
 //! The status combines three sources (design decision 3 of `agent-status-signals`): hook events
 //! decide it while the timeline is available; otherwise the program's own status report (OSC
 //! 7501) does while one is in force; an agent without either has an unknown status. The process
@@ -12,13 +18,27 @@
 
 use std::time::{Duration, Instant};
 
-use specdeck_protocol::timeline::Entry;
+use specdeck_protocol::timeline::{Entry, Help};
 use specdeck_protocol::{AgentId, AgentStatus};
 
 use crate::program_status::{self, Kind, Report, State};
 
 /// How long after the host presses Enter a hook event must arrive.
 pub const EVENT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long after its first output Claude Code started through a start command must reach SpecDeck.
+/// Its status line did within about a second in a Docker Sandbox.
+pub const REACH_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Why the timeline is unavailable when a sandbox sends requests without the session's token.
+pub const TOKEN_NOT_PASSED: &str = "Claude Code in the sandbox reaches SpecDeck without its token: \
+the start command does not pass SPECDECK_HOOK_TOKEN into the sandbox (for example with \
+-e SPECDECK_HOOK_TOKEN).";
+
+/// Why the timeline is unavailable when nothing from a sandbox reached SpecDeck yet.
+pub const NOT_REACHED: &str = "SpecDeck has not been reached from the sandbox yet. Its network \
+policy may not allow SpecDeck's address, the host address may not suit the sandbox, or Claude \
+Code in it is not logged in.";
 
 /// A program's reports create at most one notice per this interval.
 pub const NOTICE_INTERVAL: Duration = Duration::from_secs(2);
@@ -51,6 +71,20 @@ pub struct Activity {
     /// The report that last created a notice, while the program stays blocked or failed.
     noticed: Option<(State, Option<Kind>, Option<String>)>,
     last_notice_at: Option<Instant>,
+    /// Started through a start command, such as in a sandbox.
+    sandboxed: bool,
+    /// When the agent first wrote output.
+    first_output_at: Option<Instant>,
+    /// A status-line post or hook event reached SpecDeck.
+    reached: bool,
+    /// A request without the session's token reached the endpoint.
+    rejected: bool,
+    /// The timeline is unavailable with a sandbox's explanation, which [`NOT_REACHED`] or
+    /// [`TOKEN_NOT_PASSED`] gave.
+    explained: Option<&'static str>,
+    /// The prompt whose turn ended. Claude Code 2.1.319 can send that turn's final message after
+    /// `Stop`, which must not make it look busy again (#108).
+    answered: Option<String>,
 }
 
 impl Activity {
@@ -68,7 +102,20 @@ impl Activity {
             program: None,
             noticed: None,
             last_notice_at: None,
+            sandboxed: false,
+            first_output_at: None,
+            reached: false,
+            rejected: false,
+            explained: None,
+            answered: None,
         }
+    }
+
+    /// The agent starts through a start command, such as in a sandbox: missing events get a
+    /// sandbox's explanation, before the first prompt when its status line does not arrive.
+    pub fn sandboxed(mut self) -> Self {
+        self.sandboxed = self.has_timeline;
+        self
     }
 
     pub fn status(&self) -> AgentStatus {
@@ -80,7 +127,8 @@ impl Activity {
     }
 
     /// The agent wrote to the terminal.
-    pub fn on_output(&mut self) -> Vec<Change> {
+    pub fn on_output(&mut self, now: Instant) -> Vec<Change> {
+        self.first_output_at.get_or_insert(now);
         if self.hook_status == AgentStatus::Starting {
             self.hook_status = AgentStatus::Waiting;
         }
@@ -98,6 +146,14 @@ impl Activity {
     pub fn on_entries(&mut self, entries: &[Entry]) -> Vec<Change> {
         let mut changes = self.on_hook_event();
         for entry in entries {
+            match entry {
+                Entry::Prompt { .. } => self.answered = None,
+                Entry::Response { prompt_id, .. } => self.answered = Some(prompt_id.clone()),
+                Entry::Message { prompt_id, .. } if self.answered.as_ref() == Some(prompt_id) => {
+                    continue;
+                }
+                _ => {}
+            }
             self.hook_status = match entry {
                 // The question or plan is on screen until its result arrives.
                 Entry::ToolCall { tool_name, .. }
@@ -125,6 +181,31 @@ impl Activity {
         self.hook_status = if started { AgentStatus::Working } else { AgentStatus::Waiting };
         changes.extend(self.update());
         changes
+    }
+
+    /// Claude Code's status line reached SpecDeck. It says nothing about the hooks, except in a
+    /// sandbox, where it shows the sandbox reaches SpecDeck with the token.
+    pub fn on_status_line(&mut self) -> Vec<Change> {
+        self.reached = true;
+        if self.explained.is_none() {
+            return Vec::new();
+        }
+        self.explained = None;
+        self.on_hook_event()
+    }
+
+    /// A request without the session's token reached the endpoint.
+    pub fn on_rejected(&mut self) -> Vec<Change> {
+        if !self.sandboxed || self.rejected {
+            return Vec::new();
+        }
+        self.rejected = true;
+        // A notice already shown said nothing arrived; now the cause is known.
+        if self.explained == Some(NOT_REACHED) {
+            self.explained = Some(TOKEN_NOT_PASSED);
+            return vec![Change::Timeline(Self::unavailable_entry(TOKEN_NOT_PASSED, true))];
+        }
+        Vec::new()
     }
 
     /// A hook payload could not be parsed.
@@ -159,14 +240,45 @@ impl Activity {
         self.update()
     }
 
-    /// Checks the event timeout; call at least once a second.
+    /// Checks the event timeouts; call at least once a second.
     pub fn poll(&mut self, now: Instant) -> Vec<Change> {
+        let unheard = self.sandboxed && !self.reached && !self.exited;
         match self.awaiting_event_since {
             Some(since) if now.duration_since(since) >= EVENT_TIMEOUT => {
                 self.awaiting_event_since = None;
+                if unheard {
+                    return self.explain();
+                }
                 self.mark_unavailable("No events arrived from the agent.".into())
             }
+            _ if unheard
+                && self
+                    .first_output_at
+                    .is_some_and(|at| now.duration_since(at) >= REACH_TIMEOUT) =>
+            {
+                self.explain()
+            }
             _ => Vec::new(),
+        }
+    }
+
+    /// Marks the timeline unavailable with a sandbox's likely cause.
+    fn explain(&mut self) -> Vec<Change> {
+        if !self.timeline_available {
+            return Vec::new();
+        }
+        let reason = if self.rejected { TOKEN_NOT_PASSED } else { NOT_REACHED };
+        self.explained = Some(reason);
+        self.timeline_available = false;
+        let mut changes = vec![Change::Timeline(Self::unavailable_entry(reason, true))];
+        changes.extend(self.update());
+        changes
+    }
+
+    fn unavailable_entry(reason: &str, sandbox: bool) -> Entry {
+        Entry::TimelineUnavailable {
+            reason: reason.to_owned(),
+            help: sandbox.then_some(Help::Sandbox),
         }
     }
 
@@ -181,6 +293,8 @@ impl Activity {
     /// Any valid hook event: it arrived in time, and the timeline works.
     fn on_hook_event(&mut self) -> Vec<Change> {
         self.awaiting_event_since = None;
+        self.reached = true;
+        self.explained = None;
         if self.timeline_available {
             return Vec::new();
         }
@@ -195,7 +309,7 @@ impl Activity {
             return Vec::new();
         }
         self.timeline_available = false;
-        let mut changes = vec![Change::Timeline(Entry::TimelineUnavailable { reason })];
+        let mut changes = vec![Change::Timeline(Self::unavailable_entry(&reason, false))];
         // Reports, if the program sends them, now decide the status.
         changes.extend(self.update());
         changes
@@ -287,12 +401,145 @@ mod tests {
         matches!(changes, [Change::Timeline(Entry::TimelineUnavailable { .. })])
     }
 
+    fn explained(changes: &[Change]) -> Option<(&str, Option<Help>)> {
+        match changes {
+            [Change::Timeline(Entry::TimelineUnavailable { reason, help }), ..] => {
+                Some((reason.as_str(), *help))
+            }
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_sandbox_that_never_reaches_specdeck_is_explained_before_a_prompt() {
+        let mut activity = Activity::new(AgentId::ClaudeCode).sandboxed();
+        let start = Instant::now();
+        // The clock starts at the agent's first output, not before.
+        assert!(activity.poll(start + REACH_TIMEOUT * 2).is_empty());
+        activity.on_output(start);
+        assert!(activity.poll(start + REACH_TIMEOUT - Duration::from_secs(1)).is_empty());
+        let changes = activity.poll(start + REACH_TIMEOUT);
+        assert_eq!(explained(&changes), Some((NOT_REACHED, Some(Help::Sandbox))));
+        assert!(!activity.timeline_available());
+        // Once.
+        assert!(activity.poll(start + REACH_TIMEOUT * 2).is_empty());
+        // A hook event restores it.
+        let changes = activity.on_entries(&[prompt()]);
+        assert_eq!(changes[0], Change::Timeline(Entry::TimelineAvailable));
+    }
+
+    #[test]
+    fn a_sandbox_without_the_token_is_told_so() {
+        let mut activity = Activity::new(AgentId::ClaudeCode).sandboxed();
+        let start = Instant::now();
+        activity.on_output(start);
+        assert!(activity.on_rejected().is_empty());
+        let changes = activity.poll(start + REACH_TIMEOUT);
+        assert_eq!(explained(&changes), Some((TOKEN_NOT_PASSED, Some(Help::Sandbox))));
+        assert!(TOKEN_NOT_PASSED.contains("-e SPECDECK_HOOK_TOKEN"));
+    }
+
+    #[test]
+    fn a_rejected_request_after_the_notice_names_the_token() {
+        let mut activity = Activity::new(AgentId::ClaudeCode).sandboxed();
+        let start = Instant::now();
+        activity.on_output(start);
+        assert_eq!(explained(&activity.poll(start + REACH_TIMEOUT)).unwrap().0, NOT_REACHED);
+        let changes = activity.on_rejected();
+        assert_eq!(explained(&changes), Some((TOKEN_NOT_PASSED, Some(Help::Sandbox))));
+        assert!(activity.on_rejected().is_empty());
+    }
+
+    #[test]
+    fn a_status_line_in_time_means_the_sandbox_is_set_up() {
+        let mut activity = Activity::new(AgentId::ClaudeCode).sandboxed();
+        let start = Instant::now();
+        activity.on_output(start);
+        assert!(activity.on_status_line().is_empty());
+        assert!(activity.poll(start + REACH_TIMEOUT * 2).is_empty());
+        assert!(activity.timeline_available());
+    }
+
+    #[test]
+    fn a_late_status_line_clears_the_explanation() {
+        let mut activity = Activity::new(AgentId::ClaudeCode).sandboxed();
+        let start = Instant::now();
+        activity.on_output(start);
+        assert!(explained(&activity.poll(start + REACH_TIMEOUT)).is_some());
+        let changes = activity.on_status_line();
+        assert_eq!(changes[0], Change::Timeline(Entry::TimelineAvailable));
+        assert!(activity.timeline_available());
+    }
+
+    #[test]
+    fn hook_events_after_a_prompt_need_no_status_line() {
+        let mut activity = Activity::new(AgentId::ClaudeCode).sandboxed();
+        let start = Instant::now();
+        activity.on_output(start);
+        activity.on_host_enter(start + Duration::from_secs(1));
+        activity.on_entries(&[prompt()]);
+        assert!(activity.poll(start + REACH_TIMEOUT * 2).is_empty());
+        assert!(activity.timeline_available());
+    }
+
+    #[test]
+    fn without_a_start_command_nothing_is_expected_before_a_prompt() {
+        let mut activity = Activity::new(AgentId::ClaudeCode);
+        let start = Instant::now();
+        activity.on_output(start);
+        assert!(activity.on_rejected().is_empty());
+        assert!(activity.poll(start + REACH_TIMEOUT * 2).is_empty());
+        // A status line says nothing about the hooks there.
+        assert!(activity.on_status_line().is_empty());
+        activity.on_host_enter(start);
+        let changes = activity.poll(start + EVENT_TIMEOUT);
+        assert_eq!(explained(&changes), Some(("No events arrived from the agent.", None)));
+        // Nor does it restore the timeline.
+        assert!(activity.on_status_line().is_empty());
+        // Other agents never wait for a sandbox.
+        let mut opencode = Activity::new(AgentId::OpenCode).sandboxed();
+        opencode.on_output(start);
+        assert!(opencode.poll(start + REACH_TIMEOUT * 2).is_empty());
+    }
+
+    fn message(prompt_id: &str) -> Entry {
+        Entry::Message {
+            prompt_id: prompt_id.into(),
+            message_id: "m".into(),
+            text: "done".into(),
+            r#final: true,
+        }
+    }
+
+    /// Claude Code 2.1.319 can send its final message after `Stop` (#108).
+    #[test]
+    fn a_message_after_the_turn_ended_keeps_the_status_waiting() {
+        let mut activity = Activity::new(AgentId::ClaudeCode);
+        activity.on_entries(&[prompt()]);
+        assert_eq!(activity.on_entries(&[response()]), [Change::Status(AgentStatus::Waiting)]);
+        assert!(activity.on_entries(&[message("p")]).is_empty());
+        assert_eq!(activity.status(), AgentStatus::Waiting);
+        // A message in a new turn still means work.
+        let next = Entry::Prompt { prompt_id: "q".into(), text: "again".into() };
+        assert_eq!(activity.on_entries(&[next]), [Change::Status(AgentStatus::Working)]);
+        activity.on_entries(&[Entry::Response { prompt_id: "q".into(), text: "ok".into() }]);
+        assert_eq!(activity.on_entries(&[message("r")]), [Change::Status(AgentStatus::Working)]);
+    }
+
+    #[test]
+    fn a_message_before_the_turn_ends_means_work() {
+        let mut activity = Activity::new(AgentId::ClaudeCode);
+        activity.on_output(Instant::now());
+        assert_eq!(activity.on_entries(&[message("p")]), [Change::Status(AgentStatus::Working)]);
+        assert_eq!(activity.on_entries(&[response()]), [Change::Status(AgentStatus::Waiting)]);
+    }
+
     #[test]
     fn status_follows_the_turn() {
         let mut activity = Activity::new(AgentId::ClaudeCode);
         assert_eq!(activity.status(), AgentStatus::Starting);
-        assert_eq!(activity.on_output(), [Change::Status(AgentStatus::Waiting)]);
-        assert!(activity.on_output().is_empty());
+        assert_eq!(activity.on_output(Instant::now()), [Change::Status(AgentStatus::Waiting)]);
+        assert!(activity.on_output(Instant::now()).is_empty());
         assert_eq!(activity.on_entries(&[prompt()]), [Change::Status(AgentStatus::Working)]);
         assert_eq!(activity.on_entries(&[response()]), [Change::Status(AgentStatus::Waiting)]);
         assert_eq!(activity.on_exit(), [Change::Status(AgentStatus::Exited)]);
@@ -356,7 +603,7 @@ mod tests {
         let mut activity = Activity::new(AgentId::OpenCode);
         assert_eq!(activity.status(), AgentStatus::Unknown);
         assert!(!activity.timeline_available());
-        assert!(activity.on_output().is_empty());
+        assert!(activity.on_output(Instant::now()).is_empty());
         activity.on_host_enter(start);
         assert!(activity.poll(start + EVENT_TIMEOUT * 2).is_empty());
         assert_eq!(activity.on_exit(), [Change::Status(AgentStatus::Exited)]);
@@ -420,7 +667,7 @@ mod tests {
     fn terminal_session_reports_and_then_ends() {
         let now = Instant::now();
         let mut activity = Activity::new(AgentId::Terminal);
-        assert!(activity.on_output().is_empty());
+        assert!(activity.on_output(Instant::now()).is_empty());
         activity.on_report(&report(State::Working), now);
         assert_eq!(activity.status(), AgentStatus::Working);
         assert_eq!(activity.on_program_ended(), [Change::Status(AgentStatus::Unknown)]);
@@ -444,7 +691,7 @@ mod tests {
     fn reports_decide_in_degraded_mode_until_hooks_return() {
         let now = Instant::now();
         let mut activity = Activity::new(AgentId::ClaudeCode);
-        activity.on_output();
+        activity.on_output(Instant::now());
         activity.on_report(&report(State::Working), now);
         assert_eq!(activity.status(), AgentStatus::Waiting);
 

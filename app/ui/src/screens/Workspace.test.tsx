@@ -200,6 +200,18 @@ describe('timeline panel', () => {
   it('shows when the timeline is paused', () => {
     renderWorkspace({ timeline: [...demoTimeline, { outputSeq: 99, at: 0, kind: 'timeline-unavailable', reason: 'No events arrived from the agent.' }] });
     expect(screen.getByText(/Timeline paused: No events arrived from the agent./)).toBeInTheDocument();
+    // Without a start command there is no sandbox to set up.
+    expect(screen.queryByRole('button', { name: 'Setting up a sandbox' })).not.toBeInTheDocument();
+  });
+
+  it('links the sandbox guide when a sandbox does not reach SpecDeck', async () => {
+    const reason = 'Claude Code in the sandbox reaches SpecDeck without its token: the start command does not pass SPECDECK_HOOK_TOKEN into the sandbox (for example with -e SPECDECK_HOOK_TOKEN).';
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    renderWorkspace({ timeline: [...demoTimeline, { outputSeq: 99, at: 0, kind: 'timeline-unavailable', reason, help: 'sandbox' }] });
+    expect(screen.getByText(/Timeline paused: Claude Code in the sandbox reaches SpecDeck without its token/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Setting up a sandbox' }));
+    expect(open).toHaveBeenCalledWith('https://nickhartjes.github.io/specdeck/guide/sandbox/', '_blank', 'noopener');
+    open.mockRestore();
   });
 });
 
