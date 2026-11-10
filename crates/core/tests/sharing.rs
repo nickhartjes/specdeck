@@ -556,8 +556,10 @@ async fn a_viewer_away_during_a_new_code_needs_the_new_code() {
     let mut seen = Seen::default();
     until(&mut events, &mut seen, |seen, _| seen.text.contains("ready")).await;
 
-    viewer.interrupt(Duration::from_secs(2));
+    viewer.interrupt(Duration::from_secs(5));
     until(&mut events, &mut seen, |_, e| *e == ViewerEvent::Reconnecting).await;
+    // Away as the host sees it: a viewer whose connection the host still holds is connected.
+    host_status(&hosted, |s| s.viewers.is_empty()).await;
     hosted.sharing.new_code();
     let new = ready(&mut hosted.events).await;
     assert_ne!(new, code);
