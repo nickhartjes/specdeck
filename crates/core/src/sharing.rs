@@ -93,6 +93,12 @@ const MAX_REMOVED: usize = 200;
 /// as a new code forgets them (design decision 9).
 const MAX_AWAY: usize = 100;
 
+/// Most suggestions waiting for the host in a session, from all viewers together.
+const MAX_WAITING_SUGGESTIONS: usize = 50;
+
+/// Most viewers' links waiting for the host in a session.
+const MAX_WAITING_LINKS: usize = 50;
+
 #[derive(Clone, Debug)]
 pub struct SharingConfig {
     /// `ws://` or `wss://…/signal`.
@@ -622,6 +628,10 @@ impl Requests {
             (Outcome::Off, None)
         } else if !self.buckets.entry(viewer).or_insert_with(|| Bucket::new(now)).take(now) {
             (Outcome::RateLimited, None)
+        } else if self.waiting_full(&request) {
+            // As many wait as the host will read: the viewer is told to wait, as for its own
+            // limit.
+            (Outcome::RateLimited, None)
         } else {
             match request {
                 ViewerRequest::Suggest { text } => {
@@ -651,6 +661,21 @@ impl Requests {
         };
         diag::host_viewer_request(viewer, kind, bytes, name);
         (outcome, added)
+    }
+
+    /// Whether as many requests of this kind wait for the host as a session holds.
+    fn waiting_full(&self, request: &ViewerRequest) -> bool {
+        match request {
+            ViewerRequest::Suggest { .. } => {
+                let waiting = |s: &&HostSuggestion| s.state == SuggestionState::Waiting;
+                self.suggestions.iter().filter(waiting).count() >= MAX_WAITING_SUGGESTIONS
+            }
+            ViewerRequest::ShareLink { .. } => {
+                let waiting = |l: &&HostLink| l.state == SentLinkState::Waiting;
+                self.links.iter().filter(waiting).count() >= MAX_WAITING_LINKS
+            }
+            _ => false,
+        }
     }
 
     /// Records the host's answer to a waiting link; the link as answered, or None when it was
@@ -2712,6 +2737,64 @@ mod tests {
         assert!(host.removed.contains(&token(1)));
     }
 
+    #[test]
+    fn at_most_fifty_suggestions_wait_for_the_host() {
+        let mut requests = Requests::new(AgentId::OpenCode);
+        let now = Instant::now();
+        let send = |requests: &mut Requests, viewer: u32| {
+            requests.receive(viewer, 1, suggest("an idea"), "v".into(), now).0
+        };
+        // From many viewers, each within its own limit.
+        for viewer in 0..MAX_WAITING_SUGGESTIONS as u32 {
+            assert_eq!(send(&mut requests, viewer), Outcome::Received);
+        }
+        assert_eq!(send(&mut requests, 100), Outcome::RateLimited);
+        assert_eq!(requests.suggestions.len(), MAX_WAITING_SUGGESTIONS, "not stored");
+
+        // Room again once the host answers one.
+        requests.answer(0, 1, &Answer::Declined).unwrap();
+        assert_eq!(send(&mut requests, 101), Outcome::Received);
+        assert_eq!(send(&mut requests, 102), Outcome::RateLimited);
+
+        // Kept ones do not count.
+        for viewer in 1..=10 {
+            requests.answer(viewer, 1, &Answer::Kept).unwrap();
+        }
+        for viewer in 200..210 {
+            assert_eq!(send(&mut requests, viewer), Outcome::Received);
+        }
+        assert_eq!(send(&mut requests, 300), Outcome::RateLimited);
+    }
+
+    #[test]
+    fn at_most_fifty_links_wait_for_the_host() {
+        let mut requests = Requests::new(AgentId::OpenCode);
+        let now = Instant::now();
+        let send = |requests: &mut Requests, viewer: u32| {
+            requests.receive(viewer, 1, link("https://example.com/"), "v".into(), now).0
+        };
+        for viewer in 0..MAX_WAITING_LINKS as u32 {
+            assert_eq!(send(&mut requests, viewer), Outcome::Received);
+        }
+        assert_eq!(send(&mut requests, 100), Outcome::RateLimited);
+        assert_eq!(requests.links.len(), MAX_WAITING_LINKS, "not stored");
+
+        // Declined and shared ones do not count.
+        requests.answer_link(0, 1, false).unwrap();
+        assert_eq!(send(&mut requests, 101), Outcome::Received);
+        assert_eq!(send(&mut requests, 102), Outcome::RateLimited);
+        for viewer in 1..=10 {
+            requests.answer_link(viewer, 1, true).unwrap();
+        }
+        for viewer in 200..210 {
+            assert_eq!(send(&mut requests, viewer), Outcome::Received);
+        }
+        assert_eq!(send(&mut requests, 300), Outcome::RateLimited);
+        // Waiting links do not hold back suggestions.
+        let suggestion = requests.receive(400, 2, suggest("an idea"), "v".into(), now).0;
+        assert_eq!(suggestion, Outcome::Received);
+    }
+
     fn suggest(text: &str) -> ViewerRequest {
         ViewerRequest::Suggest { text: text.into() }
     }
@@ -2803,10 +2886,12 @@ mod tests {
         assert!(requests.answer_link(2, 2, true).is_none(), "another viewer's id");
         assert_eq!(requests.answer_link(1, 2, false).unwrap().state, SentLinkState::Declined);
 
-        // Only the newest are listed, oldest first, so the list always fits in one message.
+        // Only the newest are listed, oldest first, so the list always fits in one message. The
+        // host answers each, so they do not reach the bound on waiting links.
         for id in 3..(MAX_LINKS_LISTED as u32 + 10) {
             let later = now + REQUEST_REFILL * id;
             requests.receive(1, id, link("https://c.example/"), "anna".into(), later);
+            requests.answer_link(1, id, false).unwrap();
         }
         let mine = requests.my_links(1);
         assert_eq!(mine.len(), MAX_LINKS_LISTED);
