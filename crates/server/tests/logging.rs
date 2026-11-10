@@ -390,3 +390,233 @@ async fn nothing_to_join_with_and_no_addresses() {
         }
     }
 }
+
+// Rooms kept for a host that is away (room-ownership).
+
+fn host_with(room: &str, claim: Option<&str>) -> ClientMessage {
+    ClientMessage::Host { room: room.into(), claim: claim.map(Into::into) }
+}
+
+async fn open_claimed(url: &str, room: &str, claim: &str) -> Client {
+    let mut host = Client::connect(url).await;
+    host.send(host_with(room, Some(claim))).await;
+    assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
+    host
+}
+
+/// Events without the fields a test does not name, and without `null`s for fields an event
+/// does not have.
+fn events(log: &Log, fields: &[&str]) -> Vec<Value> {
+    log.events()
+        .iter()
+        .map(|e| {
+            let mut e = event(e, fields);
+            e.as_object_mut().unwrap().retain(|_, value| !value.is_null());
+            e
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_host_goes_away_and_returns() {
+    let log = Log::default();
+    let _guard = log.capture(Level::INFO, Format::Json);
+    let url = start_with(Config::default()).await;
+    open_claimed(&url, "r", "secret").await.close().await;
+    log.until("room.away").await;
+    let mut viewer = Client::connect(&url).await;
+    viewer.send(ClientMessage::Join { room: "r".into() }).await;
+    log.until("peer.waiting").await;
+    let _host = open_claimed(&url, "r", "secret").await;
+    assert!(matches!(viewer.recv().await, ServerMessage::Joined { .. }));
+
+    let fields = ["room", "peer", "viewers", "rooms", "waiting", "away_s"];
+    let expected = serde_json::json!([
+        {"event": "room.opened", "room": 1},
+        {"event": "room.away", "room": 1, "viewers": 0, "rooms": 1},
+        {"event": "peer.waiting", "room": 1, "waiting": 1},
+        {"event": "room.reclaimed", "room": 1, "away_s": 0, "waiting": 1},
+        {"event": "peer.joined", "room": 1, "peer": 1},
+    ]);
+    assert_eq!(events(&log, &fields), expected.as_array().unwrap().clone());
+}
+
+#[tokio::test]
+async fn a_host_takes_its_room_from_a_connection_that_is_still_open() {
+    let log = Log::default();
+    let _guard = log.capture(Level::INFO, Format::Json);
+    let url = start_with(Config::default()).await;
+    let _old = open_claimed(&url, "r", "secret").await;
+    let _new = open_claimed(&url, "r", "secret").await;
+    let reclaimed = log.named("room.reclaimed");
+    assert_eq!(
+        event(&reclaimed[0], &["room", "away_s", "waiting"]),
+        serde_json::json!({"event": "room.reclaimed", "room": 1, "away_s": 0, "waiting": 0})
+    );
+    assert_eq!(log.named("room.opened").len(), 1);
+}
+
+#[tokio::test]
+async fn a_host_does_not_return() {
+    let log = Log::default();
+    let _guard = log.capture(Level::INFO, Format::Json);
+    let config = Config { room_hold: Duration::from_millis(200), ..Config::default() };
+    let url = start_with(config).await;
+    open_claimed(&url, "r", "secret").await.close().await;
+    log.until("room.closed").await;
+    let closed = log.named("room.closed");
+    assert_eq!(closed[0]["why"], "hold_expired");
+
+    // Released to make place for another room.
+    let log = Log::default();
+    let _guard = log.capture(Level::INFO, Format::Json);
+    let url = start_with(Config { max_rooms: 1, ..Config::default() }).await;
+    open_claimed(&url, "kept", "secret").await.close().await;
+    log.until("room.away").await;
+    let _new = open(&url, "new").await;
+    let closed = log.named("room.closed");
+    assert_eq!(
+        event(&closed[0], &["room", "why"]),
+        serde_json::json!({"event": "room.closed", "room": 1, "why": "evicted"})
+    );
+}
+
+#[tokio::test]
+async fn a_host_without_a_claim_leaves() {
+    let log = Log::default();
+    let _guard = log.capture(Level::INFO, Format::Json);
+    let url = start_with(Config::default()).await;
+    open(&url, "r").await.close().await;
+    log.until("room.closed").await;
+    assert_eq!(log.named("room.closed")[0]["why"], "host_left");
+    assert!(log.named("room.away").is_empty());
+}
+
+#[tokio::test]
+async fn a_connection_that_stops_answering() {
+    let log = Log::default();
+    let _guard = log.capture(Level::INFO, Format::Json);
+    let config = Config {
+        ping_interval: Duration::from_millis(50),
+        unresponsive_after: Duration::from_millis(200),
+        ..Config::default()
+    };
+    let url = start_with(config).await;
+    // Never read from again.
+    let _silent = open(&url, "r").await;
+    log.until("socket.error").await;
+    assert_eq!(log.named("socket.error")[0]["kind"], "unresponsive");
+}
+
+#[tokio::test]
+async fn limits_on_messages_and_waiting_viewers() {
+    let log = Log::default();
+    let _guard = log.capture(Level::INFO, Format::Json);
+    let config = Config { joins_per_room: 100, ..Config::default() };
+    let url = start_with(config).await;
+    open_claimed(&url, "r", "secret").await.close().await;
+    log.until("room.away").await;
+    let mut waiting = Vec::new();
+    for _ in 0..41 {
+        let mut viewer = Client::connect(&url).await;
+        viewer.send(ClientMessage::Join { room: "r".into() }).await;
+        waiting.push(viewer);
+    }
+    assert_eq!(
+        waiting[40].recv().await,
+        ServerMessage::Error { code: ErrorCode::ServerBusy, room: None }
+    );
+    let mut flood = Client::connect(&url).await;
+    for _ in 0..30 {
+        flood.send(ClientMessage::TurnCredentials).await;
+    }
+    log.until(r#""limit":"messages""#).await;
+    let limits: Vec<Value> =
+        log.named("limit.reached").iter().map(|e| e["limit"].clone()).collect();
+    assert_eq!(limits, ["waiting_per_room", "messages"]);
+}
+
+#[tokio::test]
+async fn kept_rooms_count_in_the_load_summary() {
+    let log = Log::default();
+    let _guard = log.capture(Level::INFO, Format::Json);
+    let config = Config { stats_interval: Duration::from_millis(100), ..Config::default() };
+    let url = start_with(config).await;
+    open_claimed(&url, "r", "secret").await.close().await;
+    log.until("room.away").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let stats = log.named("service.stats");
+    assert_eq!(
+        event(stats.last().unwrap(), &["connections", "rooms"]),
+        serde_json::json!({"event": "service.stats", "connections": 0, "rooms": 1})
+    );
+}
+
+#[tokio::test]
+async fn stop() {
+    let log = Log::default();
+    let _guard = log.capture(Level::INFO, Format::Json);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server =
+        tokio::spawn(specdeck_server::serve_until(listener, Arc::new(Service::default()), async {
+            let _ = stopped.await;
+        }));
+    let mut host = open(&url, "r").await;
+    let _viewer = join(&url, "r", &mut host).await;
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    let stopping = log.named("service.stopping");
+    assert_eq!(
+        event(&stopping[0], &["connections", "rooms"]),
+        serde_json::json!({"event": "service.stopping", "connections": 2, "rooms": 1})
+    );
+}
+
+/// A claim, and the ids of a host that goes away and returns and of a viewer that waits for it,
+/// at the debug level and in both formats: none of it may reach the log.
+#[tokio::test]
+async fn nothing_of_a_claim_and_no_ids_while_a_host_is_away() {
+    for format in [Format::Plain, Format::Json] {
+        let log = Log::default();
+        let _guard = log.capture(Level::DEBUG, format);
+        let url = start_with(Config::default()).await;
+        let room = "MARKER-ROOM-0123456789abcdef";
+        let claim = "MARKER-CLAIM-0123456789abcdef";
+        open_claimed(&url, room, claim).await.close().await;
+        log.until("room.away").await;
+        // Someone without the claim is refused.
+        assert_eq!(
+            refused(&url, host_with(room, Some("MARKER-GUESS"))).await,
+            ErrorCode::RoomTaken
+        );
+        let mut viewer = Client::connect(&url).await;
+        viewer.send(ClientMessage::Join { room: room.into() }).await;
+        log.until("peer.waiting").await;
+        let mut host = open_claimed(&url, room, claim).await;
+        let ServerMessage::Joined { connection } = viewer.recv().await else { panic!() };
+        assert!(matches!(host.recv().await, ServerMessage::ViewerJoined { .. }));
+        viewer.close().await;
+        host.close().await;
+        // The host goes away a second time.
+        for _ in 0..100 {
+            if log.text().matches("room.away").count() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let text = log.text();
+        assert!(text.contains("room.reclaimed"), "{text}");
+        for secret in ["MARKER", &connection, "127.0.0.1"] {
+            assert!(!text.contains(secret), "{secret} in the {format:?} log:\n{text}");
+        }
+        // Nor the claim's hash.
+        let hash: String = {
+            use sha2::Digest;
+            sha2::Sha256::digest(claim.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+        };
+        assert!(!text.contains(&hash[..16]), "the claim's hash in the {format:?} log:\n{text}");
+    }
+}

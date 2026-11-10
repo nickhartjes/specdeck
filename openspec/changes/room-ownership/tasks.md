@@ -4,7 +4,7 @@ Write each task's tests first and see them fail. Rust tests run with `cargo test
 
 ## 1. Protocol
 
-- [ ] 1.1 In `crates/protocol/src/signalling.rs`, add `claim: Option<String>` to `ClientMessage::Host` and `room: Option<String>` to `ServerMessage::Error`, both left out of the JSON when `None` and defaulting to `None` when absent. Update every place that builds or matches them (`crates/server`, `crates/core`, `crates/web` if it names them, and the hand-written `ServerMessage` type in `app/ui/src/web/connection.ts`). Verify with the JSON-shape test:
+- [x] 1.1 In `crates/protocol/src/signalling.rs`, add `claim: Option<String>` to `ClientMessage::Host` and `room: Option<String>` to `ServerMessage::Error`, both left out of the JSON when `None` and defaulting to `None` when absent. Update every place that builds or matches them (`crates/server`, `crates/core`, `crates/web` if it names them, and the hand-written `ServerMessage` type in `app/ui/src/web/connection.ts`). Verify with the JSON-shape test:
   - `{"type":"host","room":"r"}` decodes with no claim, and encodes back without a `claim` key;
   - `{"type":"host","room":"r","claim":"ab"}` round-trips;
   - `{"type":"error","code":"room-taken"}` decodes with no room, and `{"type":"error","code":"room-taken","room":"r"}` round-trips;
@@ -12,27 +12,27 @@ Write each task's tests first and see them fail. Rust tests run with `cargo test
 
 ## 2. The sharing service: ownership and reservations (`crates/server`)
 
-- [ ] 2.1 Room ownership (design decisions 1 and 2): keep the SHA-256 of the claim with the room, compare in constant time, refuse a claim over 64 bytes as `bad-message`, and move a held room to a connection that presents its claim. `room-taken` carries the room. Verify with tests in `crates/server/tests/rooms.rs`:
+- [x] 2.1 Room ownership (design decisions 1 and 2): keep the SHA-256 of the claim with the room, compare in constant time, refuse a claim over 64 bytes as `bad-message`, and move a held room to a connection that presents its claim. `room-taken` carries the room. Verify with tests in `crates/server/tests/rooms.rs`:
   - a second connection with the same claim gets `room-opened`, and a viewer who joins afterwards reaches the second connection, not the first;
   - a second connection with no claim, and one with another claim, get `room-taken` with the room's id;
   - a room opened without a claim cannot be taken with any claim;
   - a viewer that was in set-up with the first connection gets `peer-left` when the room moves;
   - a 65-byte claim is refused and leaves no room.
-- [ ] 2.2 Reservations (design decision 3): on disconnect, keep rooms that have a claim for `Config::room_hold` (5 minutes; 0 turns it off); remove them on `close-room`; expire them from the `report` task on a 5-second tick. Verify with tests in `rooms.rs` on tokio's paused clock:
+- [x] 2.2 Reservations (design decision 3): on disconnect, keep rooms that have a claim for `Config::room_hold` (5 minutes; 0 turns it off); remove them on `close-room`; expire them from the `report` task on a 5-second tick. Verify with tests in `rooms.rs` on tokio's paused clock:
   - the host returns after 30 seconds with its claim and gets `room-opened`; the room keeps its log number;
   - another connection without the claim gets `room-taken` while the room is reserved;
   - after the hold time, any connection can open the room;
   - a host that sent `close-room` before leaving reserves nothing, and a join gets `room-not-found`;
   - with `room_hold` 0, and for a room without a claim, the room is gone at once.
-- [ ] 2.3 Waiting viewers (design decision 4): park a `join` for a reserved room, at most 40 per room, and finish it when the host returns or the reservation ends. Verify with tests in `rooms.rs`:
+- [x] 2.3 Waiting viewers (design decision 4): park a `join` for a reserved room, at most 40 per room, and finish it when the host returns or the reservation ends. Verify with tests in `rooms.rs`:
   - a viewer that joins a reserved room gets nothing at first, then `joined`, and the host gets `viewer-joined`, when the host returns;
   - a waiting viewer that asked for relay credentials gets them after it is joined;
   - when the hold time ends, the waiting viewer gets `room-not-found`;
   - the 41st waiting viewer gets `server-busy`;
   - a waiting viewer that disconnected is not joined, and the host gets no `viewer-joined` for it;
   - the joins-per-room and failed-join limits apply to joins for a reserved room as for an open one.
-- [ ] 2.4 Reservations yield to live rooms (design decision 3): at the room total, opening a room removes the reservation with the earliest deadline; with no reservation left, `server-busy` as today. Verify with tests in `rooms.rs` with a small `max_rooms`: both cases, and that the evicted room's waiting viewer gets `room-not-found`.
-- [ ] 2.5 Read `SPECDECK_ROOM_HOLD_SECONDS` in `crates/server/src/main.rs`. Verify with a unit test of the parsing next to the existing settings (a number, 0, and not a number falling back to the default).
+- [x] 2.4 Reservations yield to live rooms (design decision 3): at the room total, opening a room removes the reservation with the earliest deadline; with no reservation left, `server-busy` as today. Verify with tests in `rooms.rs` with a small `max_rooms`: both cases, and that the evicted room's waiting viewer gets `room-not-found`.
+- [x] 2.5 Read `SPECDECK_ROOM_HOLD_SECONDS` in `crates/server/src/main.rs`. Verify with a unit test of the parsing next to the existing settings (a number, 0, and not a number falling back to the default).
 
 ## 3. The sharing service: liveness, rates, probing, stopping (`crates/server`)
 
@@ -40,11 +40,11 @@ Write each task's tests first and see them fail. Rust tests run with `cargo test
   - a raw socket that never reads or answers is closed after the deadline, and its connection slot and rooms are handled as for any disconnect (a room with a claim becomes reserved);
   - a client that only answers pings stays open for many intervals;
   - `signalling_client::connect` from `crates/core` (as a dev-dependency test, or in `crates/core/tests/sharing.rs`) stays connected to a service with 1-second pings for 10 seconds without sending anything itself.
-- [ ] 3.2 Message rate (design decision 6): one bucket per connection for every message but `signal`, 20 at once then 2 a second; drop over the limit, answer `rate-limited` once per run, and report `limit.reached` `messages`. Verify with tests in `rooms.rs`:
+- [x] 3.2 Message rate (design decision 6): one bucket per connection for every message but `signal`, 20 at once then 2 a second; drop over the limit, answer `rate-limited` once per run, and report `limit.reached` `messages`. Verify with tests in `rooms.rs`:
   - a connection that sends 100 `host` messages at once has at most 20 acted on and gets one `rate-limited`;
   - a host that connects and replaces its code three times in a row is never limited;
   - `signal` messages are not counted against this bucket.
-- [ ] 3.3 Probing (design decision 7): record every `room-taken` as a failed join for the network, and answer `host` with `rate-limited` while the network is over the limit. Verify with tests in `rooms.rs`:
+- [x] 3.3 Probing (design decision 7): record every `room-taken` as a failed join for the network, and answer `host` with `rate-limited` while the network is over the limit. Verify with tests in `rooms.rs`:
   - after 10 `room-taken` answers from one network in a minute, `host` for an existing room and for a missing one both get `rate-limited`, and so does `join`;
   - a host on another network opens a room meanwhile;
   - a host that takes its room back with its claim records no failed join.
@@ -52,8 +52,8 @@ Write each task's tests first and see them fail. Rust tests run with `cargo test
 
 ## 4. The sharing service: logging (`crates/server/src/log.rs`)
 
-- [ ] 4.1 Add the events and reasons of design decision 12: `room.away`, `room.reclaimed`, `peer.waiting`, `service.stopping`; `room.closed` reasons `hold_expired` and `evicted`; `socket.error` kind `unresponsive`; limits `messages` and `waiting_per_room`. Count reserved rooms as rooms in the load summary. Verify with tests in `crates/server/tests/logging.rs` that follow the scenarios in the `sharing-service-logging` delta, one per scenario.
-- [ ] 4.2 Extend the marker test in `logging.rs` ("Markers do not leak"): open a room with a claim that contains a known marker, let the host go away and return, and let a viewer wait. Verify that neither the claim, the room id nor a connection id appears, in plain text or JSON, at the debug level.
+- [x] 4.1 Add the events and reasons of design decision 12: `room.away`, `room.reclaimed`, `peer.waiting`, `service.stopping`; `room.closed` reasons `hold_expired` and `evicted`; `socket.error` kind `unresponsive`; limits `messages` and `waiting_per_room`. Count reserved rooms as rooms in the load summary. Verify with tests in `crates/server/tests/logging.rs` that follow the scenarios in the `sharing-service-logging` delta, one per scenario.
+- [x] 4.2 Extend the marker test in `logging.rs` ("Markers do not leak"): open a room with a claim that contains a known marker, let the host go away and return, and let a viewer wait. Verify that neither the claim, the room id nor a connection id appears, in plain text or JSON, at the debug level.
 
 ## 5. The host (`crates/core`)
 
