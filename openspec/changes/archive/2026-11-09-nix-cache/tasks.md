@@ -26,7 +26,7 @@
 
 ## 5. After merge
 
-- [ ] 5.1 Verify the first push to main after merge saves one `nix-deps-` entry, and the next push restores it and finishes in a few minutes; check with `gh cache list` that the Rust caches of `ci.yml` are still there, and note any eviction in the issue
+- [x] 5.1 Verify the first push to main after merge saves one `nix-deps-` entry, and the next push restores it and finishes in a few minutes; check with `gh cache list` that the Rust caches of `ci.yml` are still there, and note any eviction in the issue (run 42626739026 on b64eb3d saved one 560 MB entry in 17 min; the next three pushes restored it, 4 min 34 s to 4 min 49 s; no entry evicted yet, total 10.52 GB)
 
 ## Workflow follow-up
 
