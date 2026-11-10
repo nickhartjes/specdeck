@@ -84,12 +84,12 @@ Write each task's tests first and see them fail. Rust tests run with `cargo test
 
 No README overview line and no video: there is no new feature to use or show, only one notice and a service that behaves better (proposal, Impact).
 
-- [ ] 8.1 `docs/site` `self-host/configuration.md`: `SPECDECK_ROOM_HOLD_SECONDS` under Limits with what it protects against; the liveness rule and the message limit; the new events, reasons and limit names under Logs. Verify that every event and reason in `crates/server/src/log.rs` is in the page.
-- [ ] 8.2 `docs/site` `security/sharing-service.md`: only the host that opened a room can open it again while the service holds or keeps it; what the service keeps while a host is away (a hash of a random value, in memory, for the hold time); probing with room requests is limited like wrong codes. Correct "Guessing on the service is limited" accordingly.
-- [ ] 8.3 `docs/site` `security/known-limits.md`: add "A code can be used by someone else after the host was away": what it means, that the host's app replaces the code and says so, and what to do (make a new code after a long absence; end sessions that are done).
-- [ ] 8.4 `docs/site` `guide/host.md`: the "code was replaced" notice, next to New code. `guide/troubleshooting.md`: a viewer who joins or rejoins while the host is away keeps connecting and gets in when the host is back.
-- [ ] 8.5 `crates/protocol/README.md`: the `claim` and `room` fields, if the page lists the service messages.
-- [ ] 8.6 Run `just docs-build` and see it pass.
+- [x] 8.1 `docs/site` `self-host/configuration.md`: `SPECDECK_ROOM_HOLD_SECONDS` under Limits with what it protects against; the liveness rule and the message limit; the new events, reasons and limit names under Logs. Verify that every event and reason in `crates/server/src/log.rs` is in the page.
+- [x] 8.2 `docs/site` `security/sharing-service.md`: only the host that opened a room can open it again while the service holds or keeps it; what the service keeps while a host is away (a hash of a random value, in memory, for the hold time); probing with room requests is limited like wrong codes. Correct "Guessing on the service is limited" accordingly.
+- [x] 8.3 `docs/site` `security/known-limits.md`: add "A code can be used by someone else after the host was away": what it means, that the host's app replaces the code and says so, and what to do (make a new code after a long absence; end sessions that are done).
+- [x] 8.4 `docs/site` `guide/host.md`: the "code was replaced" notice, next to New code. `guide/troubleshooting.md`: a viewer who joins or rejoins while the host is away keeps connecting and gets in when the host is back.
+- [x] 8.5 `crates/protocol/README.md`: the `claim` and `room` fields, if the page lists the service messages.
+- [x] 8.6 Run `just docs-build` and see it pass.
 
 ## 9. Whole-system check
 

@@ -19,6 +19,12 @@ There is no step where the host lets each viewer in. Whoever has the code joins,
 
 **What you can do:** share the code only with the people you mean, in a private channel; make a new code once everyone has joined; lower the viewer limit to the number of people you expect.
 
+### A code can be used by someone else after the host was away
+
+When the host's connection to the sharing service drops, the service keeps the code's room for the host for 5 minutes by default. Once the host has been away longer than that, someone who has the code can open its room. People who use the old code or link meanwhile reach that other session instead of the host's. When the host comes back and finds the room taken, the app makes a new code and says so.
+
+**What you can do:** make a new code after a long absence, such as when your laptop slept, and share it again; end sessions that are done. See [While the host is away](/specdeck/security/sharing-service/#while-the-host-is-away).
+
 ### Codes do not expire
 
 A code works until the host makes a new one or ends the session, however long that is.
