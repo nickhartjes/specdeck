@@ -15,6 +15,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 # Line tables are enough for test backtraces; full debug info made the Rust caches 2 GB per
 # platform, close to GitHub's 10 GB for all caches, and slowed linking.
 env:
@@ -28,7 +31,9 @@ jobs:
         os: [macos-latest, windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Linux packages for Tauri
         if: runner.os == 'Linux'
@@ -37,12 +42,12 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       # Tools pinned in mise.toml: Rust, Node, pnpm, just, cmake.
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
 
       # Also saved when a later step fails: otherwise every failing run starts cold.
       # Saved from main only: PRs restore main's cache. Each OS's cache is 1.2-1.7 GB, so PR copies
       # pushed the total past GitHub's 10 GB and got caches evicted, which made runs start cold.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -82,7 +87,7 @@ jobs:
         shell: bash
         run: scripts/check-session-binary.sh target/release/bundle
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installers-${{ matrix.os }}
           path: |
@@ -97,7 +102,9 @@ jobs:
   image:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - run: docker build -f docker/server.Dockerfile -t specdeck-server:ci .
 
@@ -115,7 +122,9 @@ jobs:
   relay:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Start the Compose relay
         working-directory: deploy/compose

@@ -23,6 +23,17 @@ check:
     pnpm typecheck
     pnpm test
     node --test 'scripts/*.test.mjs'
+    just check-scripts
+
+# Check the workflows' pins and permissions (release-integrity). Shell scripts, so not on Windows,
+# where CI's macOS and Linux runs cover them.
+[unix]
+check-scripts:
+    scripts/check-workflows.sh
+
+[windows]
+check-scripts:
+    @echo "The shell checks run on macOS and Linux."
 
 # Build the web viewer's WebAssembly package (crates/web/pkg) with the wasm-bindgen CLI from mise.toml
 web-wasm:

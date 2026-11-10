@@ -2,9 +2,9 @@
 
 ## 1. Checks that guard the workflows
 
-- [ ] 1.1 Add `scripts/check-workflows.sh`: fail when a `uses:` line in `.github/workflows/*.yml` that is not a local path has no 40-character hexadecimal reference, or when a workflow has no top-level `permissions:` (design decisions 3 and 4); add it to `just check`; verify it fails on the workflows as they are now and names each line
-- [ ] 1.2 Pin every third-party action in all seven workflows to a commit SHA with the version in a comment (design decision 3). Take each SHA from the action's release page for the version in use now; verify with 1.1 and `actionlint`
-- [ ] 1.3 Add `helpers:pinGitHubActionDigests` to `extends` in `renovate.json`; verify with `npx --yes renovate-config-validator renovate.json`
+- [x] 1.1 Add `scripts/check-workflows.sh`: fail when a `uses:` line in `.github/workflows/*.yml` that is not a local path has no 40-character hexadecimal reference, or when a workflow has no top-level `permissions:` (design decisions 3 and 4); add it to `just check`; verify it fails on the workflows as they are now and names each line
+- [x] 1.2 Pin every third-party action in all seven workflows to a commit SHA with the version in a comment (design decision 3). Take each SHA from the action's release page for the version in use now; verify with 1.1 and `actionlint`
+- [x] 1.3 Add `helpers:pinGitHubActionDigests` to `extends` in `renovate.json`; verify with `npx --yes renovate-config-validator renovate.json`
 - [ ] 1.4 Add `permissions: contents: read` to `ci.yml` and `docs.yml`, move `actions: write` in `nix.yml` to the job with a comment saying why it is not narrower, and set `persist-credentials: false` on every checkout except the tap checkout in `homebrew.yml` and the one in `renovate-nix-hash.yml` (design decision 4); verify with 1.1, `actionlint`, and that CI, Docs and Nix pass on the pull request
 
 ## 2. The update key out of the build

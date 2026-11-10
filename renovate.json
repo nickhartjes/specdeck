@@ -1,7 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
   ],
   "minimumReleaseAge": "1 day",
   "description": "Updates once a week, also rebases: every push to a Renovate branch runs CI on three platforms and the Nix build. Security updates still come at once.",
