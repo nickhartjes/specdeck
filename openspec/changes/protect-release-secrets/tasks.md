@@ -30,8 +30,8 @@
 
 ## 5. Renovate without the token
 
-- [ ] 5.1 In `renovate-nix-hash.yml`, check out with `persist-credentials: false`, push with the workflow token passed to `git push` in that step only, always start `ci.yml` and `nix.yml` for the new commit, and remove `HAS_TOKEN`, the secret and the warning (design decision 5); rewrite the header comment; verify with `actionlint` and 1.1
-- [ ] 5.2 Remove the token from `README.md`'s CI section (what it was for, and that it expires)
+- [x] 5.1 In `renovate-nix-hash.yml`, check out with `persist-credentials: false`, push with the workflow token passed to `git push` in that step only, always start `ci.yml` and `nix.yml` for the new commit, and remove `HAS_TOKEN`, the secret and the warning (design decision 5); rewrite the header comment; verify with `actionlint` and 1.1
+- [x] 5.2 Remove the token from `README.md`'s CI section (what it was for, and that it expires)
 - [ ] 5.3 On the next Renovate pull request that changes the npm dependencies, verify the hash commit is pushed, CI and Nix run for it, and their checks show on the pull request and satisfy any required checks; if they do not, stop and raise the fallback in design decision 5 with the maintainer
 
 ## 6. Relay manifests and tool versions
