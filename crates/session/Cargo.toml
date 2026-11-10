@@ -24,3 +24,6 @@ tracing = "0.1"
 [dev-dependencies]
 tempfile = "3"
 specdeck-server = { path = "../server" }
+# A scripted sharing service, for answers the real one gives only by chance.
+futures-util = "0.3"
+tokio-tungstenite = "0.30"

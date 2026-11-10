@@ -499,6 +499,8 @@ export type HostEvent =
       asks?: HostAsks;
     }
   | { type: 'sharing'; state: SharingState; code: string | null }
+  /** The invite code was replaced without the host asking: someone else held its room on the sharing service. */
+  | { type: 'code-replaced'; reason: 'in-use' }
   /** What viewers may send, after the host changed it. */
   | { type: 'allowed'; suggestions: boolean }
   /** Every suggestion in the session, oldest first, on every change. */

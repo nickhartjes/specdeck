@@ -4869,6 +4869,7 @@ name = "specdeck-session"
 version = "1.8.0"
 dependencies = [
  "base64 0.23.1",
+ "futures-util",
  "serde",
  "serde_json",
  "specdeck-core",
@@ -4878,6 +4879,7 @@ dependencies = [
  "specdeck-server",
  "tempfile",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "tracing",
 ]
 

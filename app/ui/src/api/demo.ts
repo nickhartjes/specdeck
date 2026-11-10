@@ -658,6 +658,11 @@ export function demoBridge(screen: string): Bridge {
       });
       hostEvents = events;
       setTimeout(() => terminal(terminalStream()), 50);
+      // ?scene=code-replaced: someone else held the invite code's room, so the host got a new code.
+      if (new URLSearchParams(globalThis.location?.search ?? '').get('scene') === 'code-replaced') {
+        events({ type: 'code-replaced', reason: 'in-use' });
+        events({ type: 'sharing', state: 'ready', code: 'R8WN3CJD6FQE' });
+      }
     },
     hostInput: async () => {},
     hostResize: async (cols, rows) => {

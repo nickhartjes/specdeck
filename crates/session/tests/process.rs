@@ -431,6 +431,81 @@ async fn a_session_without_its_app_ends_itself_after_the_grace_period() {
     assert!(!process.entry().exists());
 }
 
+/// A sharing service on which another connection holds the first room the host asks for: the
+/// room of its invite code.
+async fn signalling_with_the_code_taken() -> String {
+    use futures_util::{SinkExt, StreamExt};
+    use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut first = true;
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(message)) = socket.next().await {
+                let Message::Text(text) = message else { continue };
+                let Ok(ClientMessage::Host { room, .. }) = serde_json::from_str(&text) else {
+                    continue;
+                };
+                let answer = if std::mem::take(&mut first) {
+                    ServerMessage::Error { code: ErrorCode::RoomTaken, room: Some(room) }
+                } else {
+                    ServerMessage::RoomOpened { room }
+                };
+                let json = serde_json::to_string(&answer).unwrap();
+                socket.send(Message::Text(json.into())).await.unwrap();
+            }
+        }
+    });
+    url
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_code_someone_else_holds_is_replaced_and_the_window_is_told_once() {
+    let url = signalling_with_the_code_taken().await;
+    let folder = tempfile::tempdir().unwrap();
+    let mut process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let code = started(&mut app, folder.path(), &url).await;
+
+    // No window was open: the first one to attach hears it, after the snapshot with the new code.
+    let mut terminal = String::new();
+    app.send(&Command::Attach).await;
+    let snapshot = app
+        .until(
+            &mut terminal,
+            |event| matches!(event, Event::HostEvent { event } if event["type"] == "snapshot"),
+        )
+        .await;
+    let Event::HostEvent { event: snapshot } = snapshot else { unreachable!() };
+    let shown = InviteCode::parse(snapshot["code"].as_str().unwrap()).unwrap();
+    assert_eq!(shown, code);
+    let replaced = app.until(&mut terminal, |event| matches!(event, Event::HostEvent { .. })).await;
+    let Event::HostEvent { event: replaced } = replaced else { unreachable!() };
+    assert_eq!(replaced, serde_json::json!({ "type": "code-replaced", "reason": "in-use" }));
+
+    // A window that attaches later does not hear it again.
+    app.send(&Command::Detach).await;
+    app.send(&Command::Attach).await;
+    app.until(
+        &mut terminal,
+        |event| matches!(event, Event::HostEvent { event } if event["type"] == "snapshot"),
+    )
+    .await;
+    app.send(&Command::End).await;
+    let ended = app
+        .until(&mut terminal, |event| {
+            matches!(event, Event::Ended)
+                || matches!(event, Event::HostEvent { event } if event["type"] == "code-replaced")
+        })
+        .await;
+    assert!(matches!(ended, Event::Ended), "{ended:?}");
+    process.exits().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_app_back_in_time_keeps_the_session_and_hears_what_it_missed() {
     let url = signalling().await;
