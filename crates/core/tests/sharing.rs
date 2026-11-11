@@ -670,6 +670,8 @@ async fn removing_a_viewer_drops_its_reconnection_in_progress() {
 
     hosted.sharing.remove(id);
     raw.until_closed().await;
+    // Closed by the removal itself, before it says hello.
+    assert!(!returning.stays_open(Duration::from_secs(5)).await, "still joining after removal");
     returning.hello(Some(token));
     let messages = returning.until_closed().await;
     assert!(!messages.iter().any(|m| matches!(m, HostMessage::Welcome { .. })), "{messages:?}");
