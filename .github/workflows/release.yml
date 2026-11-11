@@ -523,9 +523,10 @@ jobs:
           # Git Bash on Windows may mark names with `*` (binary mode); the same hash either way.
           sed 's/^\([0-9a-f]\{64\}\) [ *]/\1  /' sums/*.txt > recorded.txt
           mkdir -p files
-          # Every asset but the signatures and latest.json, which are not attested.
+          # Every asset but the signatures and latest.json, which are not attested, and SHA256SUMS
+          # from an earlier attempt of this job.
           gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' |
-            grep -v -e '\.sig$' -e '^latest\.json$' > names.txt
+            grep -v -e '\.sig$' -e '^latest\.json$' -e '^SHA256SUMS$' > names.txt
           if [ ! -s names.txt ]; then
             echo "::error::The draft has no installers"
             exit 1
@@ -544,10 +545,12 @@ jobs:
           done < names.txt
           LC_ALL=C sort -k 2 -o SHA256SUMS SHA256SUMS
           cat SHA256SUMS
-          gh release upload "$GITHUB_REF_NAME" SHA256SUMS --clobber
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: SHA256SUMS
+      # After the attestation, so the draft never has checksums without provenance.
+      - name: Upload SHA256SUMS
+        run: gh release upload "$GITHUB_REF_NAME" SHA256SUMS --clobber
 
   publish:
     name: Publish release
