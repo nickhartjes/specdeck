@@ -583,7 +583,7 @@ mod tests {
     fn trap(repo: &Repo) -> (String, PathBuf) {
         let marker = repo.data.path().join("ran");
         let trap = repo.dir.path().join(".git/trap.sh");
-        std::fs::write(&trap, format!("#!/bin/sh\ncat >/dev/null\touch '{}'\n", marker.display()))
+        std::fs::write(&trap, format!("#!/bin/sh\ncat >/dev/null\ntouch '{}'\n", marker.display()))
             .unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&trap, std::fs::Permissions::from_mode(0o755)).unwrap();
