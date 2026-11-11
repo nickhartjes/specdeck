@@ -35,10 +35,7 @@ use specdeck_protocol::service;
 use specdeck_protocol::{AgentId, AgentStatus};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::menu::MenuEvent;
-use tauri::{
-    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
-};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -2005,9 +2002,7 @@ fn open_session_window(app: &AppHandle, label: &str, attach: Option<SessionId>) 
         running_changed(app);
     }
     let appearance = state.settings.lock().unwrap().appearance;
-    let origin = navigation::app_origin(app);
-    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::default())
-        .on_navigation(move |url| navigation::own_page(url, &origin))
+    let mut builder = navigation::app_window(app, label, WebviewUrl::default())
         .initialization_script(appearance_script(appearance))
         .title(session_window_title(name.as_deref()))
         .inner_size(1200.0, 800.0)
@@ -2411,13 +2406,11 @@ fn open_settings_window(app: &AppHandle) {
     }
     let title = if cfg!(target_os = "macos") { "Settings" } else { "SpecDeck Settings" };
     let appearance = app.state::<AppState>().settings.lock().unwrap().appearance;
-    let origin = navigation::app_origin(app);
-    let _ = WebviewWindowBuilder::new(
+    let _ = navigation::app_window(
         app,
         "settings",
         WebviewUrl::App("index.html?window=settings".into()),
     )
-    .on_navigation(move |url| navigation::own_page(url, &origin))
     .initialization_script(appearance_script(appearance))
     .title(title)
     .inner_size(460.0, 420.0)

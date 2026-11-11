@@ -3,7 +3,30 @@
 //! pages. Each window refuses everything else in its `on_navigation` handler; links leave the app
 //! through `open_content_link` instead, so there is one way to the system browser.
 
-use tauri::{AppHandle, Runtime, Url};
+use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindowBuilder};
+
+/// A builder for a window that shows the app's own page, `url`: a session window or the settings
+/// window. It refuses every other page. Every such window is built here; a test checks that no
+/// other code builds one.
+pub fn app_window<'a, R: Runtime, M: Manager<R>>(
+    app: &'a M,
+    label: &str,
+    url: WebviewUrl,
+) -> WebviewWindowBuilder<'a, R, M> {
+    let origin = app_origin(app.app_handle());
+    WebviewWindowBuilder::new(app, label, url).on_navigation(move |url| own_page(url, &origin))
+}
+
+/// A builder for a window of Claude's browser, on its empty start page. It loads only web pages,
+/// however it is sent elsewhere: a redirect, a link, a script or going back.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn browser_window<'a, R: Runtime, M: Manager<R>>(
+    app: &'a M,
+    label: &str,
+) -> WebviewWindowBuilder<'a, R, M> {
+    let start = WebviewUrl::External(Url::parse("about:blank").unwrap());
+    WebviewWindowBuilder::new(app, label, start).on_navigation(web_page)
+}
 
 /// The origin the app's own page is served from: the `devUrl` in a development build, otherwise
 /// the address Tauri serves the bundled page at on this platform.
@@ -35,6 +58,53 @@ mod tests {
 
     fn url(text: &str) -> Url {
         Url::parse(text).unwrap()
+    }
+
+    /// The app's own source files, without their tests: `path` and text.
+    fn sources() -> Vec<(String, String)> {
+        let mut files = Vec::new();
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let code = text.split("#[cfg(test)]").next().unwrap().to_owned();
+                    files.push((path.display().to_string(), code));
+                }
+            }
+        }
+        files
+    }
+
+    /// A window built without a navigation rule could be led to another page, which would then
+    /// receive the session. So windows are built only by `app_window` and `browser_window`, and
+    /// each of those sets one.
+    #[test]
+    fn every_window_gets_a_navigation_rule() {
+        let builders: Vec<(String, String)> = sources()
+            .into_iter()
+            .flat_map(|(path, code)| {
+                code.match_indices("WebviewWindowBuilder::new(")
+                    .map(|(at, _)| {
+                        // The builder's statement: up to the end of the expression it starts.
+                        let rest = &code[at..];
+                        let end = rest.find("\n}").unwrap_or(rest.len());
+                        (path.clone(), rest[..end].to_owned())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(!builders.is_empty());
+        for (path, builder) in builders {
+            assert!(path.ends_with("navigation.rs"), "{path} builds a window: use app_window");
+            assert!(builder.contains(".on_navigation("), "{path}: a window without a rule");
+        }
+        let navigation = sources().into_iter().find(|(path, _)| path.ends_with("navigation.rs"));
+        let builds = navigation.unwrap().1.matches("WebviewWindowBuilder::new(").count();
+        assert_eq!(builds, 2, "app_window and browser_window");
     }
 
     #[test]
