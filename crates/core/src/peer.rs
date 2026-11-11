@@ -22,9 +22,9 @@ use crate::diag::{self, CandidateType, Reason};
 /// Queued bytes per channel below which `BufferedLow` is reported.
 pub const BUFFERED_LOW: usize = 256 * 1024;
 
-/// Most of the other side's candidates kept while local gathering runs; an honest side sends
-/// about ten.
-const MAX_PENDING_CANDIDATES: usize = 64;
+/// Most of the other side's candidates a connection takes, before and after local gathering
+/// completes; an honest side sends about ten.
+const MAX_REMOTE_CANDIDATES: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Channel {
@@ -157,6 +157,8 @@ pub struct Peer {
     number: u32,
     state: Arc<Mutex<LinkState>>,
     candidates: Arc<Mutex<Candidates>>,
+    /// The other side's candidates taken so far, at most [`MAX_REMOTE_CANDIDATES`].
+    remote_candidates: usize,
 }
 
 /// The address and type of every candidate either side offered, to tell the type of the
@@ -258,7 +260,7 @@ impl Peer {
             candidates: candidates.clone(),
         };
         let pc = RtcPeerConnection::new(&config.rtc(), handler)?;
-        Ok(Self { pc, channels, gathered, number, state, candidates })
+        Ok(Self { pc, channels, gathered, number, state, candidates, remote_candidates: 0 })
     }
 
     /// This connection's number in diagnostic events.
@@ -287,21 +289,22 @@ impl Peer {
             .map_err(|e| e.to_string())
     }
 
-    /// Adds the other side's candidate, or keeps it until local gathering is complete. Keeps at
-    /// most [`MAX_PENDING_CANDIDATES`]; an honest side sends about ten, so more are dropped.
+    /// Adds the other side's candidate, or keeps it until local gathering is complete. Takes at
+    /// most [`MAX_REMOTE_CANDIDATES`] in all; an honest side sends about ten, so more are
+    /// dropped.
     pub fn add_remote_candidate(&mut self, candidate: String, mid: String) -> Result<(), String> {
+        if self.remote_candidates >= MAX_REMOTE_CANDIDATES {
+            return Ok(());
+        }
+        self.remote_candidates += 1;
+        self.candidates.lock().unwrap().add(Side::Remote, &candidate);
         {
             let mut gathered = self.gathered.lock().unwrap();
             if !gathered.complete {
-                if gathered.pending.len() >= MAX_PENDING_CANDIDATES {
-                    return Ok(());
-                }
-                self.candidates.lock().unwrap().add(Side::Remote, &candidate);
                 gathered.pending.push(IceCandidate { candidate, mid });
                 return Ok(());
             }
         }
-        self.candidates.lock().unwrap().add(Side::Remote, &candidate);
         let candidate = IceCandidate { candidate, mid };
         self.pc.add_remote_candidate(&candidate).map_err(|e| e.to_string())
     }
@@ -537,8 +540,27 @@ mod tests {
                 format!("a=candidate:1 1 UDP 2122317823 127.0.0.1 {} typ host", 40000 + port);
             host.add_remote_candidate(candidate, "0".into()).unwrap();
         }
-        assert_eq!(host.gathered.lock().unwrap().pending.len(), MAX_PENDING_CANDIDATES);
-        assert_eq!(host.candidates.lock().unwrap().remote.len(), MAX_PENDING_CANDIDATES);
+        assert_eq!(host.gathered.lock().unwrap().pending.len(), MAX_REMOTE_CANDIDATES);
+        assert_eq!(host.candidates.lock().unwrap().remote.len(), MAX_REMOTE_CANDIDATES);
+
+        // Once gathering is complete, candidates go to the connection, within the same bound.
+        let (tx, _events) = unbounded_channel();
+        let mut host = Peer::answer(&loopback(), tx).unwrap();
+        for port in 0..10 {
+            let candidate =
+                format!("a=candidate:1 1 UDP 2122317823 127.0.0.1 {} typ host", 41000 + port);
+            let _ = host.add_remote_candidate(candidate, "0".into());
+        }
+        host.gathered.lock().unwrap().complete = true;
+        for port in 10..100 {
+            let candidate =
+                format!("a=candidate:1 1 UDP 2122317823 127.0.0.1 {} typ host", 41000 + port);
+            // Without the other side's description the connection itself refuses it; only the
+            // count matters here.
+            let _ = host.add_remote_candidate(candidate, "0".into());
+        }
+        assert_eq!(host.candidates.lock().unwrap().remote.len(), MAX_REMOTE_CANDIDATES);
+        assert_eq!(host.remote_candidates, MAX_REMOTE_CANDIDATES);
     }
 
     #[tokio::test]
