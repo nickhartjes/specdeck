@@ -7,8 +7,17 @@
 import type { AgentId, AgentStatus, BraindumpItemInfo, Card, EndReason, LinkState, Participant, ReadAnswer, ReadView, RequestOutcome, SentLink, SharedFileInfo, Suggestion, TimelineEvent, ViewEvent, VoteView } from '../api/types';
 import { DiagnosticLog, outcomeName, type AttemptEnd, type CandidateType, type Channel } from './diagnostics';
 
-/** How long joining may take, and one reconnection attempt; as `CONNECT_TIMEOUT` in the app. */
+/**
+ * How long joining may take from the service's first answer, one reconnection attempt, and one
+ * attempt to join that gets no answer; as `CONNECT_TIMEOUT` in the app.
+ */
 export const CONNECT_TIMEOUT_MS = 20_000;
+/**
+ * How many connect timeouts a viewer joining for the first time waits for a host that is away
+ * (`room-ownership` design decision 4): 5 minutes, the time the service keeps a host's room by
+ * default. As `HOST_AWAY_ATTEMPTS` in the app.
+ */
+export const HOST_AWAY_ATTEMPTS = 15;
 const FIRST_RETRY_MS = 250;
 const MAX_RETRY_MS = 5_000;
 
@@ -169,8 +178,11 @@ type SignalPayload =
   | { type: 'description'; kind: 'offer' | 'answer'; sdp: string; mac: string }
   | { type: 'candidate'; candidate: string; mid: string };
 
-/** How one attempt ended. */
-type Outcome = { final: EndReason } | { retry: AttemptEnd } | { left: true };
+/**
+ * How one attempt ended. `noAnswer`: joining for the first time, the service did not answer, as it
+ * waits for the host to come back; try again, as it closes a connection that idles longer.
+ */
+type Outcome = { final: EndReason } | { retry: AttemptEnd } | { noAnswer: true } | { left: true };
 
 /** Numbers this page's peer connections in the diagnostic log, as `next_peer_number` in the app. */
 let nextPeer = 1;
@@ -219,6 +231,10 @@ export class Connection {
   private readonly timeoutMs: number;
   private readonly log: DiagnosticLog;
   private readonly joinedAt = Date.now();
+  /** When the service first answered this viewer's join; joining may take the timeout from then. */
+  private answeredAt: number | null = null;
+  /** Whether an attempt to join got no answer: the service parks a join while the host is away. */
+  private waited = false;
   /** Connection attempts so far, the current one included. */
   private attempts = 0;
   /** When the current attempt's control channel opened. */
@@ -462,17 +478,18 @@ export class Connection {
       this.connectedAt = null;
       // `leave` recorded its own end.
       if ('left' in outcome || this.left) return;
-      this.log.attemptEnded(this.attempts, 'final' in outcome ? 'final' : outcome.retry, connectedMs);
+      this.log.attemptEnded(this.attempts, 'final' in outcome ? 'final' : 'retry' in outcome ? outcome.retry : 'timeout', connectedMs);
       if ('final' in outcome) {
         this.end(outcome.final);
         return;
       }
-      const admitted = this.options.core.admittedOnce();
-      // Joining keeps failing, for example because no relay address can be had.
-      if (!admitted && Date.now() - this.joinedAt >= this.timeoutMs) {
-        this.end('network-blocked');
+      if ('noAnswer' in outcome) this.waited = true;
+      const givenUp = this.joinGivenUp();
+      if (givenUp) {
+        this.end(givenUp);
         return;
       }
+      const admitted = this.options.core.admittedOnce();
       // Back off only while attempts keep failing.
       if (admitted && !admittedBefore) retry = FIRST_RETRY_MS;
       const wait = retry;
@@ -490,14 +507,28 @@ export class Connection {
     }
   }
 
+  /** Whether a viewer that was never admitted stops trying after a failed attempt, and why. */
+  private joinGivenUp(): EndReason | null {
+    if (this.options.core.admittedOnce()) return null;
+    const now = Date.now();
+    // Joining keeps failing, for example because no relay address can be had.
+    if (this.answeredAt !== null) return now - this.answeredAt >= this.timeoutMs ? 'network-blocked' : null;
+    // The host did not come back while the service kept its room, or longer: by then the service
+    // has ended the room and the host's app may have made a new code.
+    if (this.waited) return now - this.joinedAt >= this.timeoutMs * HOST_AWAY_ATTEMPTS ? 'invalid-code' : null;
+    // Never answered, and not by waiting: for example the service closes each attempt.
+    return now - this.joinedAt >= this.timeoutMs ? 'network-blocked' : null;
+  }
+
   /** One connection: signalling, peer connection, then the session until it ends or drops. */
   private attempt(): Promise<Outcome> {
     const { core, username, onRecords, onEvent } = this.options;
     const admitted = core.admittedOnce();
     // A new viewer joins with the code; an admitted one returns through the rejoin room.
     const room = core.startAttempt();
-    // Joining has one deadline across attempts; each reconnection attempt has its own.
-    const deadline = (admitted ? Date.now() : this.joinedAt) + this.timeoutMs;
+    // Joining has one deadline across attempts, from the service's first answer; each
+    // reconnection attempt, and each attempt to join that is not answered yet, has its own.
+    const deadline = (!admitted && this.answeredAt !== null ? this.answeredAt : Date.now()) + this.timeoutMs;
 
     return new Promise<Outcome>((resolve) => {
       const log = this.log;
@@ -537,10 +568,10 @@ export class Connection {
         }
         resolve(outcome);
       };
-      const timer = setTimeout(
-        () => finish(core.admittedOnce() ? { retry: 'timeout' } : { final: 'network-blocked' }),
-        Math.max(0, deadline - Date.now()),
-      );
+      const timedOut = () =>
+        // Silence, not a refusal: the service waits for the host to come back.
+        finish(core.admittedOnce() ? { retry: 'timeout' } : this.answeredAt !== null ? { final: 'network-blocked' } : { noAnswer: true });
+      let timer = setTimeout(timedOut, Math.max(0, deadline - Date.now()));
       this.stop = () => {
         if (control?.readyState === 'open') control.send(new Uint8Array(core.leave()));
         finish({ left: true });
@@ -760,11 +791,18 @@ export class Connection {
             if (message.code === 'turn-unavailable') startPeerOnceJoined();
             // After the host closed the session its room is gone.
             else if (message.code === 'room-not-found') finish({ final: core.admittedOnce() ? 'closed' : 'invalid-code' });
-            else if (message.code === 'rate-limited') finish({ final: 'too-many-attempts' });
+            // Waiting for the host, each attempt counts as a join of its room; the code was
+            // right, so keep waiting.
+            else if (message.code === 'rate-limited') finish(this.waited && !core.admittedOnce() ? { noAnswer: true } : { final: 'too-many-attempts' });
             // Before the first admission a full service is final; later, keep trying.
             else if (message.code === 'server-busy') finish(core.admittedOnce() ? { retry: 'service_busy' } : { final: 'service-busy' });
             break;
           case 'joined':
+            if (!core.admittedOnce() && this.answeredAt === null) {
+              this.answeredAt = Date.now();
+              clearTimeout(timer);
+              if (!connected) timer = setTimeout(timedOut, this.timeoutMs);
+            }
             joinedAs = message.connection;
             send({ type: 'turn-credentials' });
             break;

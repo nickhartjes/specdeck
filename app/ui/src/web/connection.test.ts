@@ -451,6 +451,59 @@ describe('web viewer connection', () => {
     expect(events).toEqual([{ type: 'ended', reason: 'network-blocked' }]);
   });
 
+  it('keeps joining while the service waits for the host, and gets in once the host is back', async () => {
+    const { sockets, peers, events, core } = setup();
+    // The host is away: the service answers nothing for longer than the connect timeout.
+    sockets[0]!.open();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sockets[0]!.closed).toBe(true);
+    expect(events).toEqual([{ type: 'reconnecting' }]);
+    // Each attempt joins with the code again; the service limits joins of a room, which does
+    // not end the wait either.
+    await vi.advanceTimersByTimeAsync(250);
+    sockets[1]!.open();
+    expect(sockets[1]!.sent).toEqual([{ type: 'join', room: 'code-room' }]);
+    sockets[1]!.receive({ type: 'error', code: 'rate-limited' });
+    await vi.advanceTimersByTimeAsync(500);
+    sockets[2]!.open();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(events.filter((event) => event.type === 'ended')).toEqual([]);
+
+    // The host is back: the service answers the waiting join, and joining gets its own 20 s.
+    core.controls.push(welcome);
+    const { peer } = await reachHost(sockets, peers);
+    await vi.advanceTimersByTimeAsync(19_000);
+    peer.channel('control').open();
+    peer.channel('control').receive([0]);
+    expect(events.at(-1)).toMatchObject({ type: 'joined', viewerId: 2 });
+  });
+
+  it('stops waiting for a host that does not come back after 5 minutes, without blaming the network', async () => {
+    const { sockets, events } = setup();
+    for (let elapsed = 0; elapsed < 5 * 60_000 + 30_000 && !events.some((event) => event.type === 'ended'); elapsed += 1_000) {
+      const socket = sockets.at(-1)!;
+      if (!socket.onopen || socket.closed) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        continue;
+      }
+      socket.open();
+      socket.onopen = null;
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(events.filter((event) => event.type === 'ended')).toEqual([{ type: 'ended', reason: 'invalid-code' }]);
+  });
+
+  it('after the service answered, says the network blocks the connection even if a later join is not answered', async () => {
+    const { sockets, peers, events } = setup();
+    const { peer } = await reachHost(sockets, peers);
+    await vi.advanceTimersByTimeAsync(5_000);
+    peer.fail();
+    await vi.advanceTimersByTimeAsync(250);
+    sockets[1]!.open();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(events.at(-1)).toEqual({ type: 'ended', reason: 'network-blocked' });
+  });
+
   it('says the service cannot be reached when the first socket never opens', async () => {
     const { sockets, events } = setup();
     sockets[0]!.onclose?.();

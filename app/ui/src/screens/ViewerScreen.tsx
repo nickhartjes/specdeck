@@ -46,6 +46,13 @@ import { createNoticeList, type ListOpen } from '../model/noticeList';
 import { createSharedNotices } from '../model/sharedNotices';
 import { NotificationBell } from '../components/NotificationBell';
 
+/**
+ * How long joining takes before the screen says it is waiting for the host: the connect timeout,
+ * after which only a join the service has not answered, because the host is away, is still
+ * being tried (`room-ownership` design decision 4).
+ */
+export const HOST_AWAY_AFTER_MS = 20_000;
+
 /** What to tell the viewer when their session ends, and whether they can still read it. */
 export const END_MESSAGES: Record<EndReason, { title: string; text: string; keepReading?: boolean; retry?: boolean }> = {
   closed: { title: 'The host ended the session', text: 'You can keep reading what was shared until you leave.', keepReading: true },
@@ -183,8 +190,9 @@ export function viewerReducer(state: State, event: ViewerAction | { type: 'batch
     }
     case 'joined':
       return { ...state, phase: 'live', viewerId: event.viewerId, agent: event.agent, timelineSupported: event.timelineSupported };
+    // Before the first welcome an attempt that failed is still joining, not a lost connection.
     case 'reconnecting':
-      return state.phase === 'ended' ? state : { ...state, phase: 'reconnecting' };
+      return state.phase === 'ended' || state.phase === 'joining' ? state : { ...state, phase: 'reconnecting' };
     case 'reconnected':
       return { ...state, phase: 'live' };
     case 'timeline':
@@ -273,6 +281,13 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
   // each event arrives (`replay-batching` design decision 2).
   const [queue] = useState(() => createViewQueue<ViewerAction>((events) => dispatch({ type: 'batch', events })));
   useEffect(() => () => queue.dispose(), [queue]);
+  // Joining for longer than a join normally takes: the host is probably away.
+  const [joiningLong, setJoiningLong] = useState(false);
+  useEffect(() => {
+    if (state.phase !== 'joining') return;
+    const timer = setTimeout(() => setJoiningLong(true), HOST_AWAY_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [state.phase]);
   // When this screen first joined; reconnecting is not joining again (`catch-up`).
   const [joinedAt, setJoinedAt] = useState<number | null>(null);
   useEffect(() => setTimelineEvents(state.timeline.length), [state.timeline.length]);
@@ -585,8 +600,17 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
           <div className="overlay" style={{ position: 'absolute', background: 'var(--window)' }}>
             <div className="box" style={{ display: 'grid', gap: 12, justifyItems: 'center', textAlign: 'center' }} role="status">
               <span className="spinner" />
-              <strong>Joining the session…</strong>
-              <span className="field-hint">Connecting to the host. This usually takes a few seconds.</span>
+              {joiningLong ? (
+                <>
+                  <strong>Waiting for the host…</strong>
+                  <span className="field-hint">The host seems to be away, for example because their connection dropped. You join as soon as they are back.</span>
+                </>
+              ) : (
+                <>
+                  <strong>Joining the session…</strong>
+                  <span className="field-hint">Connecting to the host. This usually takes a few seconds.</span>
+                </>
+              )}
             </div>
           </div>
         )}

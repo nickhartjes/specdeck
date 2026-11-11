@@ -9,11 +9,11 @@ SpecDeck says why on the start screen:
 
 | Message | What it means |
 |---|---|
-| That code does not work | Check the code with the host. Codes stop working when the host ends the session or makes a new code |
+| That code does not work | Check the code with the host. Codes stop working when the host ends the session or makes a new code. You also see this after waiting 5 minutes for a host that did not come back (see [Sharing is unavailable](#sharing-is-unavailable)) |
 | This session is full | The host reached their viewer limit |
 | Too many attempts | Several wrong codes were tried from your network. Wait a minute |
 | SpecDeck cannot reach its sharing service | Check your internet connection, and the [sharing service in Settings](/specdeck/guide/settings/#sharing-service) |
-| Your network does not allow the connection | Your network blocks UDP. Try another network, such as your phone's hotspot. It can also mean the host's connection to the sharing service dropped: the service then waits for the host instead of answering. Try again in a minute |
+| Your network does not allow the connection | Your network blocks UDP. Try another network, such as your phone's hotspot |
 | Update SpecDeck to join / The host needs to update | You and the host use versions that do not match. Versions that offer Codex, Grok and pi as agents cannot connect to older versions, in either direction |
 | This web viewer needs to be updated | In the [web viewer](/specdeck/guide/join/#watch-in-a-browser): the host uses a newer SpecDeck than the page the sharing service serves. Ask whoever runs the service to update it, or watch in the app |
 | This browser blocks the connection | In the [web viewer](/specdeck/guide/join/#watch-in-a-browser): the browser has WebRTC turned off, as LibreWolf can. Allow WebRTC (`media.peerconnection.enabled` in `about:config` for LibreWolf and Firefox), use another browser, or watch in the app |
@@ -32,7 +32,7 @@ Sessions you host keep running through an update in the version that started the
 
 When the host sees a banner that sharing is unavailable, SpecDeck cannot reach its sharing service. The session keeps running on the host's computer, and the invite code appears as soon as the service is back. If it does not come back, check the address in [Settings](/specdeck/guide/settings/#sharing-service).
 
-While the host is away from the service, viewers cannot get in. A viewer who was watching keeps reconnecting, and is back in the session once the host returns. A viewer who joins with the code meanwhile waits up to 20 seconds, then sees *Your network does not allow the connection*; joining again once the host is back works. The service keeps the host's code for 5 minutes by default. After that, the host's app may [make a new code](/specdeck/guide/host/#while-you-host).
+While the host is away from the service, viewers cannot get in. A viewer who was watching keeps reconnecting, and is back in the session once the host returns. A viewer who joins with the code meanwhile sees *Waiting for the host…* after 20 seconds, and gets in as soon as the host is back, without entering the code again. The service keeps the host's code for 5 minutes by default; a viewer waits as long, then sees *That code does not work*. After that, the host's app may [make a new code](/specdeck/guide/host/#while-you-host).
 
 ## See what the connection is doing
 
