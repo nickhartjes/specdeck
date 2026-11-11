@@ -26,7 +26,7 @@ use crate::code_files::CodeFiles;
 use crate::diag;
 use crate::documents::{self, DocumentText};
 use crate::environment::Environment;
-use crate::file_rule::FileRule;
+use crate::file_rule::{Decided, FileRule};
 use crate::hooks::{self, HookEndpoint, HookPayload};
 use crate::launcher::{self, LaunchError, LaunchOptions, StartCommand};
 use crate::mirror::{Colors, Mirror, Responder};
@@ -92,8 +92,9 @@ enum Command {
     HostWindow(bool),
     Colors(Colors),
     /// A hook payload, with what its handler saw right after the change: what a finished shell
-    /// command changed (decision 10b) and the text of changed documents.
-    Hook(HookPayload, Option<CommandChanges>, Vec<DocumentText>),
+    /// command changed (decision 10b), the text of changed documents, and the file rule's answers
+    /// for those files.
+    Hook(HookPayload, Option<CommandChanges>, Vec<DocumentText>, Decided),
     Git(Entry),
     /// A link shared with everyone, already checked.
     Link(Entry),
@@ -524,11 +525,22 @@ impl HostSession {
                     let mut texts: Vec<DocumentText> =
                         changes.as_mut().map(|c| std::mem::take(&mut c.texts)).unwrap_or_default();
                     // One rule for every file's text, document or code, from a shell command or a
-                    // file tool.
-                    texts.retain(|text| rule.shown(&text.path).is_some());
+                    // file tool. Decided here, off the session's loop, with one git call for each
+                    // repository; the timeline uses these answers for the same files.
+                    let file_tool_path = payload
+                        .get("tool_response")
+                        .and_then(|response| response.get("filePath"))
+                        .and_then(|path| path.as_str());
+                    let changed = changes.iter().flat_map(|c| &c.files).map(|f| f.path.as_str());
+                    let paths: Vec<&str> = changed
+                        .chain(texts.iter().map(|text| text.path.as_str()))
+                        .chain(file_tool_path)
+                        .collect();
+                    let decided = rule.decided(&paths);
+                    texts.retain(|text| decided.get(&text.path).is_some_and(Result::is_ok));
                     texts.extend(documents::from_file_tool(&payload, &rule));
                     texts.extend(code_files.from_file_tool(&payload, whole_files));
-                    let _ = sender.send(Command::Hook(payload, changes, texts));
+                    let _ = sender.send(Command::Hook(payload, changes, texts, decided));
                 },
                 browser,
             )
@@ -1024,10 +1036,10 @@ impl Pump {
                         if attached { Responder::HostWindow } else { Responder::Mirror };
                 }
                 Some(Command::Colors(colors)) => self.mirror.set_colors(colors),
-                Some(Command::Hook(payload, changes, texts)) => {
+                Some(Command::Hook(payload, changes, texts, decided)) => {
                     // Entries link to the output before them, so append any pending batch first.
                     self.flush();
-                    self.handle_hook(payload, changes, texts);
+                    self.handle_hook(payload, changes, texts, decided);
                 }
                 Some(Command::Plan(entry)) => {
                     if let Entry::Plan { change, .. } = &entry
@@ -1105,6 +1117,7 @@ impl Pump {
         payload: HookPayload,
         changes: Option<CommandChanges>,
         texts: Vec<DocumentText>,
+        decided: Decided,
     ) {
         if let Some(usage) = &mut self.usage {
             usage.on_hook(&payload);
@@ -1119,7 +1132,7 @@ impl Pump {
                 self.emit_entry(entry);
             }
         } else {
-            self.handle_timeline(payload, changes, texts);
+            self.handle_timeline(payload, changes, texts, decided);
         }
         self.poll_usage();
     }
@@ -1135,8 +1148,10 @@ impl Pump {
         payload: HookPayload,
         changes: Option<CommandChanges>,
         texts: Vec<DocumentText>,
+        decided: Decided,
     ) {
         let compact = timeline::manual_compact(&payload);
+        self.builder.use_decided(decided);
         match self.builder.handle(payload) {
             Ok(mut entries) => {
                 entries.extend(
@@ -1164,6 +1179,8 @@ impl Pump {
                 self.apply(changes);
             }
         }
+        // The answers were for this hook's files, at this moment.
+        self.builder.use_decided(Decided::new());
     }
 
     /// Asks for the plan of every OpenSpec change these entries changed a file of.

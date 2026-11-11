@@ -15,7 +15,7 @@ use specdeck_protocol::timeline::{
 use crate::browser_targets::{self, Acts, Browser, Targets};
 use crate::diag;
 use crate::documents::{self, DocumentText};
-use crate::file_rule::FileRule;
+use crate::file_rule::{Decided, FileRule, NotShown};
 use crate::hooks::HookPayload;
 use crate::screenshots;
 use crate::session_folder::SessionFolder;
@@ -214,6 +214,9 @@ pub struct TimelineBuilder {
     /// Which files' content is shared (the session folder's files that may be shown), and the
     /// folder paths are shown by.
     rule: Arc<FileRule>,
+    /// The rule's answers for the hook being handled, decided by its handler; other paths are
+    /// asked of the rule.
+    decided: Decided,
     /// Tool calls without a result yet, in call order.
     open_calls: Vec<OpenCall>,
     /// Helpers running in the background: agent id → (tool_use_id, prompt_id) of their call.
@@ -232,6 +235,7 @@ impl TimelineBuilder {
     pub fn new(folder: SessionFolder) -> Self {
         Self {
             rule: Arc::new(FileRule::from(folder)),
+            decided: Decided::new(),
             open_calls: Vec::new(),
             background_helpers: HashMap::new(),
             requested_notice: false,
@@ -247,9 +251,37 @@ impl TimelineBuilder {
         self
     }
 
-    /// Whether a file's content may be shown, recording why not when it may not.
+    /// The rule's answers for the hook about to be handled, so that its files are not asked about
+    /// again on the session's loop; until the next call.
+    pub fn use_decided(&mut self, decided: Decided) {
+        self.decided = decided;
+    }
+
+    /// Whether each file's content may be shown: as decided for this hook, otherwise asked of the
+    /// rule, once for all of them.
+    fn decisions(&self, paths: &[&str]) -> Vec<Result<(), NotShown>> {
+        let undecided: Vec<&str> =
+            paths.iter().copied().filter(|path| !self.decided.contains_key(*path)).collect();
+        let asked = self.rule.decided(&undecided);
+        paths
+            .iter()
+            .map(|path| {
+                let decision = self.decided.get(*path).or_else(|| asked.get(*path));
+                decision.copied().unwrap_or(Err(NotShown::CheckFailed))
+            })
+            .collect()
+    }
+
+    /// Whether each file's content may be shown, recording why not when it may not.
+    fn shown_all(&self, paths: &[&str]) -> Vec<bool> {
+        let decisions = self.decisions(paths).into_iter();
+        decisions
+            .map(|d| d.inspect_err(|reason| diag::file_not_shown(reason.as_str())).is_ok())
+            .collect()
+    }
+
     fn shown(&self, path: &str) -> bool {
-        self.rule.decide(path).inspect_err(|reason| diag::file_not_shown(reason.as_str())).is_ok()
+        self.shown_all(&[path]).pop().unwrap_or(false)
     }
 
     /// Whether images from MCP tools are kept (`session-timeline`, *Show screenshots in the
@@ -506,29 +538,33 @@ impl TimelineBuilder {
         if texts.is_empty() {
             return entries;
         }
+        let paths: Vec<&str> = texts.iter().map(|text| text.path.as_str()).collect();
+        let shown = self.decisions(&paths);
+        let texts: Vec<&DocumentText> = texts
+            .iter()
+            .zip(shown)
+            .filter(|(_, shown)| shown.is_ok())
+            .map(|(text, _)| text)
+            .collect();
         let mut out = Vec::with_capacity(entries.len() + texts.len());
         for entry in entries {
             let document = match &entry {
                 Entry::FileChange { prompt_id, tool_use_id, path, change, .. }
                     if *change != FileChangeKind::Deleted =>
                 {
-                    texts
-                        .iter()
-                        .filter(|doc| self.rule.shown(&doc.path).is_some())
-                        .find(|doc| self.display_path(&doc.path) == *path)
-                        .map(|doc| {
-                            let (prompt_id, tool_use_id, path, text) = (
-                                prompt_id.clone(),
-                                tool_use_id.clone(),
-                                path.clone(),
-                                doc.text.clone(),
-                            );
-                            if documents::is_document(&doc.path) {
-                                Entry::Document { prompt_id, tool_use_id, path, text }
-                            } else {
-                                Entry::FileText { prompt_id, tool_use_id, path, text }
-                            }
-                        })
+                    texts.iter().find(|doc| self.display_path(&doc.path) == *path).map(|doc| {
+                        let (prompt_id, tool_use_id, path, text) = (
+                            prompt_id.clone(),
+                            tool_use_id.clone(),
+                            path.clone(),
+                            doc.text.clone(),
+                        );
+                        if documents::is_document(&doc.path) {
+                            Entry::Document { prompt_id, tool_use_id, path, text }
+                        } else {
+                            Entry::FileText { prompt_id, tool_use_id, path, text }
+                        }
+                    })
                 }
                 _ => None,
             };
@@ -540,13 +576,16 @@ impl TimelineBuilder {
 
     /// Entries for the files a shell command changed, after its result (decision 10b).
     pub fn command_changes(&self, changes: CommandChanges) -> Vec<Entry> {
+        let paths: Vec<&str> = changes.files.iter().map(|file| file.path.as_str()).collect();
+        let shown = self.shown_all(&paths);
         changes
             .files
             .into_iter()
-            .map(|file| Entry::FileChange {
+            .zip(shown)
+            .map(|(file, shown)| Entry::FileChange {
                 prompt_id: changes.prompt_id.clone(),
                 tool_use_id: changes.tool_use_id.clone(),
-                hunks: if self.shown(&file.path) { file.hunks } else { Vec::new() },
+                hunks: if shown { file.hunks } else { Vec::new() },
                 path: self.display_path(&file.path),
                 change: file.change,
             })
@@ -1388,6 +1427,42 @@ mod tests {
             })
             .collect();
         assert_eq!(hunks, [0, 0, 0, 1]);
+    }
+
+    /// The hook handler's answers are used for its files: git is not asked again on the loop.
+    #[test]
+    fn the_handler_s_answers_are_used() {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        builder.use_decided(
+            [
+                ("/work/build/out.txt".to_owned(), Err(NotShown::Ignored)),
+                ("/work/notes.md".to_owned(), Err(NotShown::CheckFailed)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let file = |path: &str| crate::shell_changes::ChangedFile {
+            path: path.into(),
+            change: FileChangeKind::Edited,
+            hunks: vec![added_file("x")],
+        };
+        let entries = builder.command_changes(CommandChanges {
+            prompt_id: "p".into(),
+            tool_use_id: "b".into(),
+            files: vec![file("/work/build/out.txt"), file("/work/a.rs")],
+            texts: Vec::new(),
+        });
+        let hunks: Vec<usize> = entries
+            .iter()
+            .map(|entry| match entry {
+                Entry::FileChange { hunks, .. } => hunks.len(),
+                other => panic!("not a file change: {other:?}"),
+            })
+            .collect();
+        assert_eq!(hunks, [0, 1]);
+        let entries = vec![change("notes.md", FileChangeKind::Edited)];
+        let texts = vec![DocumentText { path: "/work/notes.md".into(), text: Some("x".into()) }];
+        assert_eq!(builder.with_texts(entries.clone(), texts), entries);
     }
 
     #[test]

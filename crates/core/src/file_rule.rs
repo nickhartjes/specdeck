@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Mutex;
 
 use crate::environment::Environment;
@@ -76,10 +77,15 @@ impl NotShown {
     }
 }
 
+/// The rule's answers for paths as they were named, without the files: decided where git may
+/// take its time (the hook handler), and used where it may not (the session's loop).
+pub type Decided = HashMap<String, Result<(), NotShown>>;
+
 /// Whether a folder is in a git repository, as git answered for it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Repository {
-    Yes,
+    /// In the repository whose work tree is this folder: where git is asked about its files.
+    Yes(PathBuf),
     No,
 }
 
@@ -117,9 +123,54 @@ impl FileRule {
         self.decide(path).ok()
     }
 
-    /// [`shown`](Self::shown), with the reason when the content may not be sent. The cheap checks
-    /// come first, so git is asked only for files that pass them.
+    /// [`shown`](Self::shown), with the reason when the content may not be sent.
     pub fn decide(&self, path: &str) -> Result<Shown, NotShown> {
+        self.decide_all(&[path]).pop().unwrap_or(Err(NotShown::CheckFailed))
+    }
+
+    /// [`decide`](Self::decide) for several files at once, in their order, asking git once for
+    /// each repository rather than once for each file, as for the files of one shell command.
+    /// The cheap checks come first, so git is asked only about files that pass them.
+    pub fn decide_all(&self, paths: &[&str]) -> Vec<Result<Shown, NotShown>> {
+        let mut decisions: Vec<_> = paths.iter().map(|path| self.named(path)).collect();
+        let Some((git, env)) = &self.git else { return decisions };
+        // The files still shown, by the repository that answers for them (design decision 3).
+        let mut asks: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+        for (index, decision) in decisions.iter_mut().enumerate() {
+            let Ok(shown) = decision else { continue };
+            let dir = existing_parent(&shown.real);
+            match dir.and_then(|dir| self.repository(git, env, &dir)) {
+                Some(Repository::No) => {}
+                Some(Repository::Yes(top)) => asks.entry(top).or_default().push(index),
+                None => *decision = Err(NotShown::CheckFailed),
+            }
+        }
+        for (top, indices) in asks {
+            let files: Vec<&Path> = indices
+                .iter()
+                .filter_map(|&index| decisions[index].as_ref().ok().map(|s| s.real.as_path()))
+                .collect();
+            let ignored = ignored(git, env, &top, &files);
+            for (n, index) in indices.into_iter().enumerate() {
+                match ignored.as_ref().map(|ignored| ignored[n]) {
+                    Some(false) => {}
+                    Some(true) => decisions[index] = Err(NotShown::Ignored),
+                    None => decisions[index] = Err(NotShown::CheckFailed),
+                }
+            }
+        }
+        decisions
+    }
+
+    /// [`decide_all`](Self::decide_all) as [`Decided`] answers, by path.
+    pub fn decided(&self, paths: &[&str]) -> Decided {
+        let decisions = self.decide_all(paths).into_iter().map(|decision| decision.map(drop));
+        paths.iter().map(|path| (*path).to_owned()).zip(decisions).collect()
+    }
+
+    /// The checks without git: inside the folder with symlinks resolved, and not private by the
+    /// agent's name nor by the real one.
+    fn named(&self, path: &str) -> Result<Shown, NotShown> {
         let real = self.folder.inside(path).ok_or(NotShown::Outside)?;
         let inside = real.strip_prefix(self.folder.root()).unwrap_or(&real);
         // Both names count, the agent's and the real one: a symlink `.ssh` → `keys/` too.
@@ -131,63 +182,78 @@ impl FileRule {
         {
             return Err(NotShown::Private);
         }
-        match self.ignored(&real) {
-            Some(false) => Ok(Shown { real }),
-            Some(true) => Err(NotShown::Ignored),
-            None => Err(NotShown::CheckFailed),
-        }
-    }
-
-    /// Whether git ignores `real` (design decision 3), asked of the repository the file itself is
-    /// in. `None` when git cannot say for a file in a repository. Without git, or in no
-    /// repository, nothing is ignored; a tracked file is never ignored, as for git itself.
-    fn ignored(&self, real: &Path) -> Option<bool> {
-        let Some((git, env)) = &self.git else { return Some(false) };
-        let dir = existing_parent(real)?;
-        match self.repository(git, env, &dir)? {
-            Repository::No => Some(false),
-            Repository::Yes => {
-                let status = git::command(git, env, &dir)
-                    .args(["check-ignore", "-q", "--"])
-                    .arg(real)
-                    .stdout(std::process::Stdio::null())
-                    .status()
-                    .ok()?;
-                // 1: not ignored. 0 is ignored, and anything else is git failing to say.
-                match status.code() {
-                    Some(1) => Some(false),
-                    Some(0) => Some(true),
-                    _ => None,
-                }
-            }
-        }
+        Ok(Shown { real })
     }
 
     /// Whether `dir` is in a repository, cached for the session. `None` when git fails although a
     /// `.git` is there: a damaged repository stays on the closed side. "No repository" is trusted
     /// only while no `.git` has appeared since, so a `git init` during the session is asked about.
     fn repository(&self, git: &Path, env: &Environment, dir: &Path) -> Option<Repository> {
-        let known = self.repositories.lock().unwrap_or_else(|e| e.into_inner()).get(dir).copied();
+        let known = self.repositories.lock().unwrap_or_else(|e| e.into_inner()).get(dir).cloned();
         match known {
-            Some(Repository::Yes) => return Some(Repository::Yes),
-            Some(Repository::No) if !has_git_entry(dir) => return Some(Repository::No),
-            _ => {}
+            Some(Repository::No) if has_git_entry(dir) => {}
+            Some(known) => return Some(known),
+            None => {}
         }
-        let found = git::command(git, env, dir)
-            .args(["rev-parse", "--git-dir"])
-            .stdout(std::process::Stdio::null())
-            .status()
-            .ok()?;
-        let answer = if found.success() {
-            Repository::Yes
+        let answer = if let Some(top) = rev_parse(git, env, dir, "--show-toplevel") {
+            Repository::Yes(PathBuf::from(top))
+        } else if rev_parse(git, env, dir, "--git-dir").is_some() {
+            // A repository without a work tree, such as a bare one: asked in `dir`, where git
+            // fails to answer, so its files stay on the closed side.
+            Repository::Yes(dir.to_owned())
         } else if has_git_entry(dir) {
             return None;
         } else {
             Repository::No
         };
-        self.repositories.lock().unwrap_or_else(|e| e.into_inner()).insert(dir.to_owned(), answer);
+        let mut repositories = self.repositories.lock().unwrap_or_else(|e| e.into_inner());
+        repositories.insert(dir.to_owned(), answer.clone());
         Some(answer)
     }
+}
+
+/// What `git rev-parse <option>` prints in `dir`; `None` when it fails.
+fn rev_parse(git: &Path, env: &Environment, dir: &Path, option: &str) -> Option<String> {
+    let output = git::command(git, env, dir).args(["rev-parse", option]).output().ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    output.status.success().then(|| text.trim_end_matches(['\n', '\r']).to_owned())
+}
+
+/// Whether git ignores each of `files` (design decision 3), asked once of the repository whose
+/// work tree is `top`; `None` when git cannot say. A tracked file is never ignored, as for git
+/// itself. git answers each file in its order, so the answers are matched by place, not by name.
+fn ignored(git: &Path, env: &Environment, top: &Path, files: &[&Path]) -> Option<Vec<bool>> {
+    use std::io::Write;
+    let mut input = Vec::new();
+    for file in files {
+        input.extend_from_slice(file.as_os_str().as_encoded_bytes());
+        input.push(0);
+    }
+    let mut child = git::command(git, env, top)
+        .args(["check-ignore", "--stdin", "-z", "--verbose", "--non-matching"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let mut stdin = child.stdin.take()?;
+    // Written while the answers are read, so neither side waits for the other with a full pipe.
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let output = child.wait_with_output().ok()?;
+    writer.join().ok()?.ok()?;
+    // 0: some file is ignored, 1: none is. Anything else is git failing to say.
+    if !matches!(output.status.code(), Some(0 | 1)) {
+        return None;
+    }
+    // Each answer is the source, line, pattern and file, each ended by a NUL. The pattern is
+    // empty when no pattern matched, and starts with `!` when it keeps the file.
+    let fields: Vec<&[u8]> = output.stdout.split(|byte| *byte == 0).collect();
+    let answers: Vec<bool> = fields
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|[_, _, pattern, _]| !pattern.is_empty() && !pattern.starts_with(b"!"))
+        .collect();
+    (answers.len() == files.len() && fields.len() == 4 * files.len() + 1).then_some(answers)
 }
 
 /// Whether `path`'s name marks it as holding secrets.
@@ -402,6 +468,63 @@ mod tests {
         assert_eq!(rule.decide("api/local.json"), Err(NotShown::Ignored));
         assert!(rule.shown("api/server.ts").is_some());
         assert!(rule.shown("notes.txt").is_some(), "in no repository: nothing is ignored");
+    }
+
+    /// A shell command's files are decided together, each with its own answer, with one git call
+    /// for each repository.
+    #[cfg(unix)]
+    #[test]
+    fn many_files_are_decided_at_once() {
+        let base = tempfile::tempdir().unwrap();
+        let lib = base.path().join("lib");
+        std::fs::create_dir(&lib).unwrap();
+        git(&lib, &["init", "-q"]);
+        write(&lib, ".gitignore", "build/\n");
+        git(&lib, &["add", "."]);
+        git(&lib, &["commit", "-q", "-m", "lib"]);
+        let project = base.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        git(&project, &["init", "-q"]);
+        write(&project, ".gitignore", "*.log\n!keep.log\n");
+        write(&project, "tracked.log", "kept");
+        git(&project, &["add", "-f", ".gitignore", "tracked.log"]);
+        git(&project, &["submodule", "add", "-q", &lib.to_string_lossy(), "vendor/lib"]);
+        let mut paths = Vec::new();
+        for (name, text) in [
+            ("a.txt", "a"),
+            ("run.log", "log"),
+            ("keep.log", "kept"),
+            ("vendor/lib/build/out.txt", "out"),
+            ("vendor/lib/src.txt", "src"),
+            (".env", "TOKEN=1"),
+            ("dir with space/b.txt", "b"),
+        ] {
+            write(&project, name, text);
+            paths.push(name.to_owned());
+        }
+        paths.push("tracked.log".into());
+        paths.push("../outside.txt".into());
+        let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let rule = rule(&project);
+        let reasons: Vec<Option<NotShown>> =
+            rule.decide_all(&paths).into_iter().map(Result::err).collect();
+        assert_eq!(
+            reasons,
+            [
+                None,
+                Some(NotShown::Ignored),
+                None,
+                Some(NotShown::Ignored),
+                None,
+                Some(NotShown::Private),
+                None,
+                None,
+                Some(NotShown::Outside),
+            ]
+        );
+        let one_by_one: Vec<Option<NotShown>> =
+            paths.iter().map(|path| rule.decide(path).err()).collect();
+        assert_eq!(reasons, one_by_one);
     }
 
     #[cfg(unix)]
