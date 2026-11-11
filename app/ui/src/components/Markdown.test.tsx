@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
@@ -62,8 +62,38 @@ describe('links in markdown', () => {
 
   it('never carry an address that runs script', () => {
     links('[run](javascript:alert(1)) [page](data:text/html,x)');
-    expect(screen.getByText('run').closest('a')).toHaveAttribute('href', '');
-    expect(screen.getByText('page').closest('a')).toHaveAttribute('href', '');
+    expect(screen.getByText('run').closest('a')).not.toHaveAttribute('href');
+    expect(screen.getByText('page').closest('a')).not.toHaveAttribute('href');
+  });
+
+  it('carry only a web address as something the browser could follow', () => {
+    links('[join](specdeck://join/AAAA-BBBB-CCCC) [file](file:///etc/passwd) [office](ms-officecmd:x) [web](https://example.com/)');
+    for (const name of ['join', 'file', 'office']) {
+      const link = screen.getByRole('link', { name });
+      expect(link).not.toHaveAttribute('href');
+      expect(link).toHaveAttribute('tabindex', '0');
+    }
+    expect(screen.getByRole('link', { name: 'office' })).toHaveAttribute('title', 'ms-officecmd:x');
+    const web = screen.getByRole('link', { name: 'web' });
+    expect(web).toHaveAttribute('href', 'https://example.com/');
+    expect(web).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(web).toHaveAttribute('referrerpolicy', 'no-referrer');
+  });
+
+  it('open through the app on a middle-click, which the browser does not follow', () => {
+    const open = links('[the docs](https://example.com/guide)');
+    const link = screen.getByRole('link', { name: 'the docs' });
+    const prevented = !fireEvent(link, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+    expect(prevented).toBe(true);
+    expect(open).toHaveBeenCalledWith('https://example.com/guide');
+  });
+
+  it('that are not web addresses still ask with Enter', async () => {
+    const open = links('[file](file:///etc/passwd)', vi.fn(async () => Promise.reject("This link can't be opened.")));
+    screen.getByRole('link', { name: 'file' }).focus();
+    await userEvent.keyboard('{Enter}');
+    expect(open).toHaveBeenCalledWith('file:///etc/passwd');
+    expect(await screen.findByRole('status')).toHaveTextContent("This link can't be opened.");
   });
 
   it('pass the accessibility check, with a refusal shown', async () => {
