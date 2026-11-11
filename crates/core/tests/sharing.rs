@@ -1932,6 +1932,39 @@ async fn host_links(
 const ROOM: &str = "https://excalidraw.com/#room=5c1e2a9b,Q3h9vX2m";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_hosts_own_link_reaches_viewers_while_fifty_viewers_links_wait() {
+    let url = signalling().await;
+    let mut hosted = host(&url, "nick").await;
+    let code = ready(&mut hosted.events).await;
+    let (_viewer, mut events) = join(&url, &code, "anna");
+    let mut seen = Seen::default();
+    until(&mut events, &mut seen, |seen, _| seen.welcome.is_some()).await;
+
+    // Three links each, the most a viewer may send at once, from 17 viewers: 50 wait and the
+    // 51st is refused.
+    let mut senders = Vec::new();
+    for sender in 0..17 {
+        let mut raw = RawViewer::join(&url, &code).await;
+        raw.hello(None);
+        raw.welcome().await.unwrap();
+        for id in 1..=3 {
+            let url = format!("https://example.com/{sender}/{id}");
+            let request = ViewerRequest::ShareLink { url, title: None, session_only: false };
+            raw.send(&ViewerMessage::Send { id, request });
+        }
+        senders.push(raw);
+    }
+    host_links(&mut hosted.events, |links| links.len() == 50).await;
+
+    assert_eq!(hosted.session.share_link(ROOM, None, "nick", false), Ok(1));
+    let shared = until(&mut events, &mut seen, |_, e| link_entry(e).is_some()).await;
+    assert!(
+        matches!(link_entry(&shared), Some(Entry::Link { id: 1, url: Some(url), .. }) if url == ROOM),
+        "{shared:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn links_reach_viewers() {
     let url = signalling().await;
     let mut hosted = host(&url, "nick").await;
