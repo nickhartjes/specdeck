@@ -1878,6 +1878,7 @@ impl Host {
         for connection in joining {
             self.drop_slot(&connection, LeaveReason::Removed);
         }
+        // Defence in depth: every way out of `slots` already freed its own upload's room.
         self.view.release_viewer(identity.id);
     }
 
@@ -2720,6 +2721,30 @@ mod tests {
         // Joining with the new code works.
         announced(&mut host, "new");
         assert!(host.slots.contains_key("new"));
+    }
+
+    #[tokio::test]
+    async fn refusing_an_admitted_viewer_frees_its_unfinished_upload() {
+        use crate::shared_files::MAX_SESSION_BYTES;
+
+        let (_dir, mut host) = host();
+        host.view.allow_viewer_files();
+        announced(&mut host, "anna");
+        admit(&mut host, "anna", 1);
+        let size = MAX_SESSION_BYTES / 5;
+        let reserve = |host: &Host, viewer: u32| {
+            host.view.reserve_upload(viewer, "big.txt".into(), size, [7; 32], Purpose::Share)
+        };
+        let id = reserve(&host, 1).unwrap();
+        let assembly = Assembly::new(size, [7; 32]);
+        let upload = Upload { id, assembly, last: Instant::now(), group: "shared" };
+        host.slots.get_mut("anna").unwrap().admitted.as_mut().unwrap().upload = Some(upload);
+
+        // Refused on its own, without `revoke` freeing the viewer's room afterwards.
+        host.refuse("anna", RefusalReason::Removed);
+        for viewer in 2..7 {
+            assert!(reserve(&host, viewer).is_ok(), "viewer {viewer}: the session's room is free");
+        }
     }
 
     #[tokio::test]

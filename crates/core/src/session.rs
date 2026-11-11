@@ -393,6 +393,12 @@ impl SessionView {
         }
     }
 
+    /// Lets viewers share files in a view without a running agent, as the host's switch does.
+    #[cfg(test)]
+    pub(crate) fn allow_viewer_files(&self) {
+        self.files.lock().unwrap().viewers_allowed = true;
+    }
+
     /// A view of a log without a running agent, for replaying a recording and for tests.
     pub fn from_log(agent: AgentId, log: Arc<OutputLog>) -> Self {
         Self {
