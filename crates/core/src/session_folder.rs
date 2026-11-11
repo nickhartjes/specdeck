@@ -57,6 +57,15 @@ impl SessionFolder {
         self.resolved.as_deref().unwrap_or(&self.folder)
     }
 
+    /// `path` relative to the folder by its text, as the agent named it, symlinks not resolved;
+    /// `None` when it is not below the folder by its text.
+    pub fn relative(&self, path: &str) -> Option<PathBuf> {
+        let full = self.absolute(path);
+        below(&full, &self.folder)
+            .or_else(|| below(&full, self.resolved.as_deref()?))
+            .map(Path::to_owned)
+    }
+
     /// `path` made absolute: a relative path joined to the session folder.
     pub fn absolute_path(&self, path: &str) -> String {
         self.absolute(path).to_string_lossy().into_owned()

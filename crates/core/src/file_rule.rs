@@ -122,7 +122,13 @@ impl FileRule {
     pub fn decide(&self, path: &str) -> Result<Shown, NotShown> {
         let real = self.folder.inside(path).ok_or(NotShown::Outside)?;
         let inside = real.strip_prefix(self.folder.root()).unwrap_or(&real);
-        if is_private(path) || is_private(&real.to_string_lossy()) || in_private_folder(inside) {
+        // Both names count, the agent's and the real one: a symlink `.ssh` → `keys/` too.
+        let named = self.folder.relative(path);
+        if is_private(path)
+            || is_private(&real.to_string_lossy())
+            || in_private_folder(inside)
+            || named.is_some_and(|named| in_private_folder(&named))
+        {
             return Err(NotShown::Private);
         }
         match self.ignored(&real) {
@@ -420,6 +426,19 @@ mod tests {
         write(dir.path(), "secret.json", "{}");
         assert_eq!(rule.decide("secret.json"), Err(NotShown::Ignored));
         assert!(rule.shown("notes.txt").is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_folder_reached_through_a_symlink_is_private() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "keys/config", "Host x");
+        std::os::unix::fs::symlink(dir.path().join("keys"), dir.path().join(".ssh")).unwrap();
+        let rule = FileRule::from(SessionFolder::new(dir.path(), None));
+        assert_eq!(rule.decide(".ssh/config"), Err(NotShown::Private));
+        let absolute = dir.path().join(".ssh/config");
+        assert_eq!(rule.decide(&absolute.to_string_lossy()), Err(NotShown::Private));
+        assert!(rule.shown("keys/config").is_some(), "by its own name, the folder is not private");
     }
 
     #[test]
