@@ -57,24 +57,24 @@ Write each task's tests first and see them fail. Rust tests run with `cargo test
 
 ## 5. The host (`crates/core`)
 
-- [ ] 5.1 The claim (design decision 1): make 32 random bytes per session and send them hex-encoded with every `host`, also after a new code and after reconnecting. Verify with a test in `crates/core/tests/sharing.rs` against the real service: drop the host's service connection, let it reconnect, and check that the invite code is unchanged, a new viewer joins with it, and a viewer that lost its connection rejoins.
-- [ ] 5.2 The pending-`host` queue and the split between rooms (design decision 8). Verify with unit tests of `handle_server` in `sharing.rs`, or tests in `crates/core/tests/sharing.rs` with a scripted service:
+- [x] 5.1 The claim (design decision 1): make 32 random bytes per session and send them hex-encoded with every `host`, also after a new code and after reconnecting. Verify with a test in `crates/core/tests/sharing.rs` against the real service: drop the host's service connection, let it reconnect, and check that the invite code is unchanged, a new viewer joins with it, and a viewer that lost its connection rejoins.
+- [x] 5.2 The pending-`host` queue and the split between rooms (design decision 8). Verify with unit tests of `handle_server` in `sharing.rs`, or tests in `crates/core/tests/sharing.rs` with a scripted service:
   - `room-taken` naming the code room: a new code, `CodeReplaced { reason: InUse }`, then `Ready` with the new code;
   - `room-taken` naming the rejoin room: the code is unchanged, no `CodeReplaced`, and `host` for the rejoin room is sent again after 30 seconds;
   - `room-taken` without a room, as the second answer after `room-opened` for the code room: treated as the rejoin room;
   - `room-taken` without a room, as the first answer: treated as the code room;
   - `room-taken` for an old code's room: ignored.
-- [ ] 5.3 Add `SharingEvent::CodeReplaced` and a diagnostic event for a rejoin room that is taken (fixed fields only, in `crates/core/src/diag.rs`). Verify that `crates/core/tests/diagnostics_leak.rs` still passes with the new event exercised.
-- [ ] 5.4 Connect off the main loop (design decision 9): spawn the connection attempt under a 10-second timeout and select on its result. Verify with tests in `crates/core/tests/sharing.rs` on the paused clock, with a listener that accepts TCP and never answers the WebSocket handshake:
+- [x] 5.3 Add `SharingEvent::CodeReplaced` and a diagnostic event for a rejoin room that is taken (fixed fields only, in `crates/core/src/diag.rs`). Verify that `crates/core/tests/diagnostics_leak.rs` still passes with the new event exercised.
+- [x] 5.4 Connect off the main loop (design decision 9): spawn the connection attempt under a 10-second timeout and select on its result. Verify with tests in `crates/core/tests/sharing.rs` on the paused clock, with a listener that accepts TCP and never answers the WebSocket handshake:
   - a connected viewer keeps receiving terminal output while the attempt hangs;
   - `Remove` and `Close` take effect while the attempt hangs;
   - `Unavailable` is sent after 10 seconds, and the next attempt follows the usual backoff.
-- [ ] 5.5 Against an older service: run the tests of 5.1 and 5.2 against a service built without this change's server side, or a scripted one that ignores `claim` and names no room. Verify that the host opens its rooms and that no code is replaced because of the rejoin room.
+- [x] 5.5 Against an older service: run the tests of 5.1 and 5.2 against a service built without this change's server side, or a scripted one that ignores `claim` and names no room. Verify that the host opens its rooms and that no code is replaced because of the rejoin room.
 
 ## 6. The app: the notice (`crates/session`, `app/src-tauri`, `app/ui`)
 
-- [ ] 6.1 Pass `CodeReplaced` from the session process to the app as a notice, next to the other sharing events in `crates/session/src/messages.rs` and `runtime.rs`, and add it to `app/ui/src/api/types.ts`. An app of the previous release drops it. Verify with a test in `crates/session/tests/process.rs` that the notice arrives, and that the transcript tests in `app/src-tauri/src/adapter.rs` still pass.
-- [ ] 6.2 Show the notice in the host's window where sharing problems are shown, with the text of design decision 8, until the host dismisses it; announce it to screen readers as the other notices are. Add it to `app/ui/src/api/demo.ts`. Verify with a test next to `HostScreen` that the notice appears on the event, names no code, and goes away when dismissed, and that the axe pass stays clean.
+- [x] 6.1 Pass `CodeReplaced` from the session process to the app as a notice, next to the other sharing events in `crates/session/src/messages.rs` and `runtime.rs`, and add it to `app/ui/src/api/types.ts`. An app of the previous release drops it. Verify with a test in `crates/session/tests/process.rs` that the notice arrives, and that the transcript tests in `app/src-tauri/src/adapter.rs` still pass.
+- [x] 6.2 Show the notice in the host's window where sharing problems are shown, with the text of design decision 8, until the host dismisses it; announce it to screen readers as the other notices are. Add it to `app/ui/src/api/demo.ts`. Verify with a test next to `HostScreen` that the notice appears on the event, names no code, and goes away when dismissed, and that the axe pass stays clean.
 
 ## 7. Deployments
 
@@ -96,3 +96,21 @@ No README overview line and no video: there is no new feature to use or show, on
 - [ ] 9.1 Run `just check` and see it pass.
 - [ ] 9.2 By hand, with a local service and a host and a viewer app: start a session, stop the host's network for a minute (or pause the service's port), bring it back, and check that the code is the same, a second viewer joins with it, and the first viewer, disconnected meanwhile, rejoins. Then restart the service and check that the host comes back with the same code.
 - [ ] 9.3 By hand, with a released app of the previous version as host against the new service, and the new app against a service of the previous version: host, join, drop the host's connection and return. Check that both work as design decision 11 says.
+
+## Implementation notes
+
+- **Clock in the service tests (2.2–2.4, 3.1).** The tests use the real clock with short `Config` durations (`room_hold`, `ping_interval`, `unresponsive_after`), not tokio's paused clock. The service measures time with `std::time::Instant` and the tests talk to it over real sockets, like the existing `rooms.rs` tests do.
+- **`serve` and `serve_until` (3.4).** `serve(listener, service)` keeps its signature, so the many callers in `crates/core` tests stay unchanged. The new `serve_until(listener, service, shutdown)` takes the shutdown future, and `serve` calls it with one that never completes. `serve_until` logs `service.stopping` itself, not `main.rs`, so `logging.rs` can test it. It returns once every connection has closed, and `main.rs` gives it at most 5 seconds.
+- **Expiry tick (2.2).** The `report` task ticks at the shortest of 5 seconds, the stats interval and the hold time. A request that names a room also ends that room's hold time when it is over. This is what lets tests use a hold time of a few hundred milliseconds.
+- **Eviction (2.4).** The service releases the reservation with the earliest deadline. The hold time is the same for every room, so that is also the room kept longest.
+- **Moving a room (2.1).** A viewer's state records the room it joined through. When a room moves, the viewers that joined through it get `peer-left`, the old connection gets `peer-left` for them too, and neither side can relay set-up to the other after that.
+- **Relay credentials while waiting (2.3).** The 2-second grace for credentials asked before joining does not refuse a viewer that is waiting for a kept room. Its credentials are sent once it is joined.
+- **Log enum (4.1).** `Closed::Closed` became `Closed::ByHost`, because clippy's `enum_variant_names` fires once the enum has four variants. The logged word is still `closed`.
+- **3.1 app test** is in its own file, `crates/core/tests/signalling_liveness.rs`, to keep `tests/sharing.rs` merges small.
+- **The notice (6.1).** `CodeReplaced` travels as a `HostEvent` (window event, JSON `{"type":"code-replaced","reason":"in-use"}`), not as a tray `HostNotice`. An app of the previous release decodes `HostNotice` itself and would fail on a variant it does not know. An unknown `HostEvent` type passes through as JSON, and the UI ignores it. If no window is attached, the session keeps the event and sends it once to the next window that attaches.
+- **Host details (5.2–5.4).** When the code's room is taken, the host makes a new code without `close-room` for the taken room, which it does not hold. `rate-limited` and `bad-message` only take a room off the pending queue. A connect timeout is logged as `signalling.connect_failed` with reason `timeout`. The extra diagnostic event `host.code_in_use` has no fields. The rejoin-room retry is dropped when the connection is lost, because a reconnect asks for both rooms anyway.
+- **First-time viewers while the host is away.** A viewer that joins with the code for the first time has a single 20-second limit across its attempts (`viewer.rs`, `connection.ts`), not the retry the design assumes (decision 4). If the host is back within 20 seconds it gets in, which covers the spec scenario of 10 seconds. After that it sees "Your network does not allow the connection". `guide/troubleshooting.md` says so. A "host is away" message for viewers is left for a later change.
+- **8.5:** `crates/protocol/README.md` does not list the service messages, so it needed no change.
+- **3.4, left unticked:** `docker stop` on the built image was not run, because this run allowed no Docker. The `rooms.rs` shutdown test passes. The service binary (debug build) was checked by hand: it logs `service.stopping` and exits about 1 second after SIGTERM.
+- **9.2, 9.3, left unticked:** manual checks with real apps, a network drop and a released app of the previous version. They were not run here.
+- **9.1, left unticked:** `just check` was run inside `nix develop .#specdeck`, with rustup's 1.99.1 cargo and clippy first on PATH, because the nix shell has no clippy. Formatting, clippy, lint, type-check and the node script tests pass, and so does every Rust test but one: `host_session::files_a_shell_command_changes_reach_the_timeline` fails on this machine, and fails the same way on the base commit `be38c82`. One vitest test in `TimelinePanel.test.tsx` (untouched by this change) timed out at a load average of about 26, and passes when run alone.
