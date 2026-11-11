@@ -1188,3 +1188,25 @@ async fn one_network_cannot_push_out_a_kept_room() {
     back.send(host_with("code", Some(SECRET))).await;
     assert_eq!(back.recv().await, ServerMessage::RoomOpened { room: "code".into() });
 }
+
+/// The failed-join limit holds for a host that presents its claim, too: its app asks again later
+/// (room-ownership decision 7).
+#[tokio::test]
+async fn a_returning_host_on_a_network_over_the_limit_is_refused() {
+    let config = behind_a_proxy(Config { failed_joins_per_ip: 2, ..Config::default() });
+    let (url, _) = start_with(config).await;
+    let mut host = Client::connect_from(&url, "203.0.113.7").await;
+    host.send(host_with("code", Some(SECRET))).await;
+    assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
+    drop(host);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Someone on the same network uses up its attempts.
+    for guess in ["a", "b"] {
+        let mut viewer = Client::connect_from(&url, "203.0.113.7").await;
+        viewer.send(ClientMessage::Join { room: guess.into() }).await;
+        assert_eq!(viewer.recv().await, NOT_FOUND);
+    }
+    let mut back = Client::connect_from(&url, "203.0.113.7").await;
+    back.send(host_with("code", Some(SECRET))).await;
+    assert_eq!(back.recv().await, LIMITED);
+}
