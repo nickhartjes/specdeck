@@ -75,7 +75,7 @@ The archive must have the layout the updater expects: one `SpecDeck.app` folder 
 ### 3. Actions pinned by SHA, kept current by Renovate
 
 - Every `uses:` of a third-party action, in all seven workflows, becomes `owner/action@<40-character SHA> # vX.Y.Z`. The local `./.github/workflows/homebrew.yml` reference stays.
-- `renovate.json` adds `helpers:pinGitHubActionDigests` to `extends`. Renovate then updates the SHA and the comment together, inside the existing "GitHub Actions" group and the Monday schedule. The group's rule matches `matchDatasources: ["github-tags"]`; task 3.2 checks that digest updates still land in that group, and drops the datasource condition if not.
+- `renovate.json` adds `helpers:pinGitHubActionDigests` to `extends`. Renovate then updates the SHA and the comment together, inside the existing "GitHub Actions" group and the Monday schedule. The group's rule matches `matchDatasources: ["github-tags"]`; the first Renovate pull request for the workflows' actions after the merge shows whether digest updates still land in that group; if they do not, the datasource condition goes. No task covers this: it needs Renovate on GitHub, and a separate pull request is the only harm.
 - A check in `just check` (a few lines of shell: every `uses:` line that is not a local path has a 40-character hexadecimal reference) fails a workflow change that adds a tag. The same script fails a workflow without a top-level `permissions:` (decision 4).
 
 Alternative: the repository setting "Require actions to be pinned to a full-length commit SHA" does the same on GitHub's side. It is listed as a manual task as well; the script is what a pull request sees first.
