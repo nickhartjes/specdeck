@@ -23,6 +23,8 @@ There is no step where the host lets each viewer in. Whoever has the code joins,
 
 When the host's connection to the sharing service drops, the service keeps the code's room for the host for 5 minutes by default. Once the host has been away longer than that, someone who has the code can open its room. People who use the old code or link meanwhile reach that other session instead of the host's. When the host comes back and finds the room taken, the app makes a new code and says so.
 
+A kept room can also be released before its time when the whole service is full. One network can keep only a few rooms and open only a few new rooms a minute, so this takes many addresses at once; on a busy shared service it can also happen without anyone trying.
+
 **What you can do:** make a new code after a long absence, such as when your laptop slept, and share it again; end sessions that are done. See [While the host is away](/specdeck/security/sharing-service/#while-the-host-is-away).
 
 ### Codes do not expire

@@ -1105,3 +1105,86 @@ async fn a_flood_of_signals_for_no_connection_is_cut_off() {
     assert!((21..=23).contains(&answers), "{answers} answers");
     assert_eq!(limited, 1);
 }
+
+#[tokio::test]
+async fn a_network_opens_a_limited_number_of_rooms() {
+    let config = behind_a_proxy(Config { rooms_per_ip: 3, ..Config::default() });
+    let (url, _) = start_with(config).await;
+    let mut host = Client::connect_from(&url, "203.0.113.7").await;
+    for room in ["a", "b", "c"] {
+        host.send(host_with(room, None)).await;
+        assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
+    }
+    // A room it already holds is not a new room.
+    host.send(host_with("a", None)).await;
+    assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
+    let mut more = Client::connect_from(&url, "203.0.113.7").await;
+    more.send(host_with("d", None)).await;
+    assert_eq!(more.recv().await, LIMITED);
+    // Another network is not affected.
+    let mut other = Client::connect_from(&url, "198.51.100.1").await;
+    other.send(host_with("d", None)).await;
+    assert!(matches!(other.recv().await, ServerMessage::RoomOpened { .. }));
+}
+
+#[tokio::test]
+async fn a_network_keeps_a_limited_number_of_rooms() {
+    let config = behind_a_proxy(Config { max_kept_rooms_per_ip: 2, ..Config::default() });
+    let (url, service) = start_with(config).await;
+    for room in ["a", "b", "c"] {
+        let mut host = Client::connect_from(&url, "203.0.113.7").await;
+        host.send(host_with(room, Some(SECRET))).await;
+        assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
+        drop(host);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    until_rooms(&service, 2).await;
+    // The third was closed: anyone can open it.
+    let mut other = Client::connect_from(&url, "198.51.100.1").await;
+    other.send(host_with("c", None)).await;
+    assert!(matches!(other.recv().await, ServerMessage::RoomOpened { .. }));
+}
+
+/// The room of a host that went away cannot be pushed out by one network filling the service.
+#[tokio::test]
+async fn one_network_cannot_push_out_a_kept_room() {
+    let config = behind_a_proxy(Config {
+        max_rooms: 10,
+        rooms_per_ip: 5,
+        max_kept_rooms_per_ip: 2,
+        ..Config::default()
+    });
+    let (url, service) = start_with(config).await;
+    let mut victim = Client::connect_from(&url, "198.51.100.1").await;
+    victim.send(host_with("code", Some(SECRET))).await;
+    assert!(matches!(victim.recv().await, ServerMessage::RoomOpened { .. }));
+    drop(victim);
+    until_rooms(&service, 1).await;
+
+    // Rooms held open, and rooms kept for hosts that left, as fast as the limits allow.
+    let mut held = Vec::new();
+    let mut refused = 0;
+    for i in 0..20 {
+        let mut attacker = Client::connect_from(&url, "203.0.113.7").await;
+        attacker.send(host_with(&format!("junk-{i}"), Some(OTHER))).await;
+        match attacker.recv().await {
+            ServerMessage::RoomOpened { .. } if i % 2 == 0 => drop(attacker),
+            ServerMessage::RoomOpened { .. } => held.push(attacker),
+            message => {
+                assert_eq!(message, LIMITED);
+                refused += 1;
+            }
+        }
+    }
+    assert!(refused >= 15, "{refused} refused");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(service.room_count() < 10, "{} rooms", service.room_count());
+    let mut taker = Client::connect_from(&url, "203.0.113.7").await;
+    taker.send(host_with("code", None)).await;
+    assert!(matches!(taker.recv().await, ServerMessage::Error { .. }));
+
+    // The host comes back to its room.
+    let mut back = Client::connect_from(&url, "198.51.100.1").await;
+    back.send(host_with("code", Some(SECRET))).await;
+    assert_eq!(back.recv().await, ServerMessage::RoomOpened { room: "code".into() });
+}

@@ -77,7 +77,9 @@ See proposal.md for why. What the code does today:
 
 **Why 5 minutes, not the 60 seconds of the earlier plan:** the cases that matter are a laptop waking up and a network change, and both often take longer than a minute. A reservation costs a few hundred bytes and can never keep a live room out, so a longer time is cheap. It is still short enough that a code nobody is hosting stops being "taken" soon.
 
-**Alternative considered:** a cap on reservations per client network. Dropped: eviction already bounds the harm of someone creating reservations in bulk to "the service behaves as it does today", and a cap would hit an office whose uplink blips with many hosts behind one address.
+- **Per network**, at most `max_kept_rooms_per_ip` reservations (16, `SPECDECK_MAX_KEPT_ROOMS_PER_IP`): a host from a network over that has its rooms closed when it leaves, as for a room without a claim. And at most `rooms_per_ip` new rooms a minute (30, `SPECDECK_ROOMS_PER_IP`), answered `rate-limited` above it. Opening a room the connection holds, or taking one back with its claim, is not a new room.
+
+**Why the per-network bounds:** eviction takes the earliest deadline, which is the host that went away first. Without a bound, someone who holds a code could fill the room table from one address, so the next room evicts that host's reservation, and then open the code's room: exactly what reservations are for. With the bounds, one network holds at most 4 rooms on each of its 100 connections plus 16 reservations, and opens 30 rooms a minute, far from the 4,000 total; filling the table takes many networks. An office behind one address keeps up to 16 hosts' rooms through an uplink blip, which covers the case the earlier plan worried about.
 
 ### 4. Viewers wait for a host that is away
 
@@ -113,7 +115,7 @@ The existing 30-second idle rule for connections that never became members stays
 
 - `room-taken` records a failed join for the network, in the same `failed_joins` limiter as a `join` for an unknown room.
 - `open_room` checks `failed_joins.exceeded` first and answers `rate-limited`, as `join` does.
-- So someone asking "does room X exist?" with `host` gets the same 10 attempts a minute per network as with `join`, and the message bucket bounds it per connection too.
+- So someone asking "does room X exist?" with `host` gets the same 10 *hits* a minute per network as with `join`. A miss opens the room, which counts toward the 30 new rooms a minute per network (decision 3), so misses cost too, at three times the rate of `join`. The message bucket bounds both per connection.
 - A released host that returns before the service noticed its dead connection gets two `room-taken` answers per attempt. With liveness that lasts at most 90 seconds, and its backoff is 10 seconds, so it can reach the limit of 10. That is accepted: the limit then also stops its retries from being answered differently, and it clears within a minute.
 
 ### 8. `room-taken` names the room, and the host keeps a queue for services that do not
@@ -172,7 +174,7 @@ All fields are numbers or fixed words, as `sharing-service-logging` requires. No
 
 - **A code holder can still open the room after the reservation ends** → the host replaces its code on return and says why; documented as a known limit; a real fix needs a host identity outside the code.
 - **A host that crashed keeps its code "taken" for 5 minutes**, and viewers who join wait instead of hearing that the code is wrong → their apps time out after 20 seconds per attempt and say they cannot connect; after 5 minutes they get the usual answer. A self-hoster can shorten the time.
-- **Bulk reservations**: connect, open 4 rooms with a claim, disconnect, repeat → they count toward the room limit but are evicted for live rooms, so the worst case is today's behaviour for hosts that are away at that moment.
+- **Bulk reservations**: connect, open 4 rooms with a claim, disconnect, repeat → bounded to 16 reservations and 30 new rooms a minute per network (decision 3); filling the table to evict a particular host's reservation takes many networks. On a shared service that is full for real, a reservation can still be evicted early.
 - **Liveness depends on clients answering pings** → browsers and tungstenite do; the host and the desktop viewer also send their own pings. A test runs the current app client against the service with short intervals; released apps are covered by the same library behaviour.
 - **Released hosts and the failed-join limit** (decision 7) → at most a minute of `rate-limited`, only while their own dead connection lives.
 - **Viewers cannot tell "host away" from "connecting"** → accepted for now (decision 4).

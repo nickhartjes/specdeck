@@ -393,9 +393,8 @@ async fn nothing_to_join_with_and_no_addresses() {
 
 // Rooms kept for a host that is away (room-ownership).
 
-/// Claims as long as the app's: 64 hex characters.
+/// A claim as long as the app's: 64 hex characters.
 const SECRET: &str = "5ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7";
-const OTHER: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn host_with(room: &str, claim: Option<&str>) -> ClientMessage {
     ClientMessage::Host { room: room.into(), claim: claim.map(Into::into) }

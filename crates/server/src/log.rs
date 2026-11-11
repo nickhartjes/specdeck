@@ -117,6 +117,10 @@ pub(crate) enum Limit {
     Messages,
     /// Viewers waiting for one room whose host is away.
     WaitingPerRoom,
+    /// New rooms per client network within a minute.
+    RoomsPerNetwork,
+    /// Rooms kept for hosts that are away, per client network.
+    KeptRoomsPerNetwork,
 }
 
 impl fmt::Display for Limit {
@@ -131,6 +135,8 @@ impl fmt::Display for Limit {
             Limit::Backlog => "backlog",
             Limit::Messages => "messages",
             Limit::WaitingPerRoom => "waiting_per_room",
+            Limit::RoomsPerNetwork => "rooms_per_network",
+            Limit::KeptRoomsPerNetwork => "kept_rooms_per_network",
         })
     }
 }
@@ -501,6 +507,8 @@ mod tests {
         assert_eq!(SocketError::Unresponsive.to_string(), "unresponsive");
         assert_eq!(Limit::Messages.to_string(), "messages");
         assert_eq!(Limit::WaitingPerRoom.to_string(), "waiting_per_room");
+        assert_eq!(Limit::RoomsPerNetwork.to_string(), "rooms_per_network");
+        assert_eq!(Limit::KeptRoomsPerNetwork.to_string(), "kept_rooms_per_network");
         assert_eq!(Limit::ConnectionsPerNetwork.to_string(), "connections_per_network");
         assert_eq!(Setting::LogLevel.to_string(), "SPECDECK_LOG_LEVEL");
     }

@@ -11,6 +11,9 @@
 //!   IPv6 /64 (default 100)
 //! - `SPECDECK_MAX_ROOMS`: open rooms in total, rooms kept for a host that is away included
 //!   (default 4000)
+//! - `SPECDECK_ROOMS_PER_IP`: new rooms a client network may open per minute (default 30)
+//! - `SPECDECK_MAX_KEPT_ROOMS_PER_IP`: rooms kept for hosts that are away, per client network
+//!   (default 16)
 //! - `SPECDECK_ROOM_HOLD_SECONDS`: how long a room is kept for a host whose connection ended,
 //!   when the host opened it with a claim (default 300); 0 keeps none
 //! - `SPECDECK_LOG_LEVEL`: `error`, `warn`, `info` or `debug` (default `info`); when it is unset,
@@ -51,6 +54,11 @@ async fn main() -> std::io::Result<()> {
             defaults.max_connections_per_ip,
         ),
         max_rooms: number("SPECDECK_MAX_ROOMS", defaults.max_rooms),
+        rooms_per_ip: number("SPECDECK_ROOMS_PER_IP", defaults.rooms_per_ip),
+        max_kept_rooms_per_ip: number(
+            "SPECDECK_MAX_KEPT_ROOMS_PER_IP",
+            defaults.max_kept_rooms_per_ip,
+        ),
         room_hold: seconds(var("SPECDECK_ROOM_HOLD_SECONDS").as_deref(), defaults.room_hold),
         ..defaults
     };

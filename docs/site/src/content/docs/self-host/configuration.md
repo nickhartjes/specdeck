@@ -17,6 +17,8 @@ description: The SpecDeck server's settings and the coturn options it relies on.
 | `SPECDECK_MAX_CONNECTIONS` | `2000` | Open connections in total. See [Limits](#limits) |
 | `SPECDECK_MAX_CONNECTIONS_PER_IP` | `100` | Open connections from one client network. See [Limits](#limits) |
 | `SPECDECK_MAX_ROOMS` | `4000` | Open rooms in total, rooms kept for a host that is away included. See [Limits](#limits) |
+| `SPECDECK_ROOMS_PER_IP` | `30` | New rooms one client network may open per minute. See [Limits](#limits) |
+| `SPECDECK_MAX_KEPT_ROOMS_PER_IP` | `16` | Rooms kept for hosts that are away, per client network. See [Limits](#limits) |
 | `SPECDECK_ROOM_HOLD_SECONDS` | `300` (5 minutes) | How long a room is kept for its host after the host's connection ended. `0` keeps no rooms. See [Rooms kept for a host](#rooms-kept-for-a-host) |
 | `SPECDECK_LOG_LEVEL` | `info` | `error`, `warn`, `info` or `debug`. When it is unset, a `RUST_LOG` that is a plain level, such as `debug`, is used instead. See [Logs](#logs) |
 | `SPECDECK_LOG_FORMAT` | `plain` | `plain` for text lines, `json` for one JSON object per line. See [Logs](#logs) |
@@ -42,13 +44,15 @@ The service bounds everything it holds, so one client cannot use it up for every
 | Connections per client network (`SPECDECK_MAX_CONNECTIONS_PER_IP`) | 100 | One client taking every connection. A client network is an IPv4 address, or the /64 of an IPv6 address, because one IPv6 client usually holds a whole /64 |
 | Rooms in total (`SPECDECK_MAX_ROOMS`) | 4,000 | Running the service out of memory through rooms. Rooms kept for a host that is away count too |
 | Room hold time (`SPECDECK_ROOM_HOLD_SECONDS`) | 5 minutes | Someone who knows a code opening its room while the host's connection is down. A host that lost the service also comes back to the same code. See [Rooms kept for a host](#rooms-kept-for-a-host) |
+| New rooms per client network (`SPECDECK_ROOMS_PER_IP`) | 30 per minute | Asking for rooms to find out which exist, and filling the service with rooms. Opening a room the connection already holds, or taking a room back with its claim, is not a new room. Over the limit, the network's requests to open a room are refused |
+| Kept rooms per client network (`SPECDECK_MAX_KEPT_ROOMS_PER_IP`) | 16 | One network filling the service with kept rooms, which would push out the kept rooms of other hosts. Over the limit, a host's room closes when its connection ends, as rooms of older apps do |
 | Rooms per host | 4 | One connection opening unlimited rooms. The app holds at most 3 |
 | Room id length | 64 bytes | Huge keys in the service's tables |
 | Viewers per host | 40 | Flooding one host with viewers. The app admits at most 20 |
 | Viewers waiting per room | 40 | Piling up viewers for a room whose host is away |
 | Time to host or join | 30 seconds | Connections that hold a place and do nothing |
 | Unresponsive connections | closed after 90 seconds | Connections that are gone, and the places and rooms they hold. The service pings every connection every 30 seconds, and closes one from which nothing arrived for 90 seconds, not even an answer. Browsers and the apps answer pings by themselves |
-| Messages per connection | 20 at once, then 2 per second | One connection flooding the service. Connection set-up messages are not counted here; they have their own limit. Extra messages are dropped, and the client is told so once |
+| Messages per connection | 20 at once, then 2 per second | One connection flooding the service. Messages that are not the protocol's count too. Connection set-up messages between a viewer and its host are not counted here; they have their own limit. Extra messages are dropped, and the client is told so once |
 | Connection set-up messages | 100 at once, then 20 per second, per viewer connection | Using the service to flood a host or viewer |
 | Backlog per connection | 256 messages, 256 KiB | A client that stops reading and makes the service buffer for it; the service closes that connection |
 | Failed joins | 10 per client network per minute | Guessing invite codes. Asking to open a room that another connection holds, or that is kept for its host, counts too. Over the limit, the network's joins and requests to open a room are refused, whether the room exists or not |
@@ -67,7 +71,7 @@ When a host's connection to the service ends, for example because the laptop wen
 - **Only the host's app can take a room back.** The app makes a random value for each session, its claim, and sends it with every request to open a room. The service keeps only a SHA-256 hash of it with the room, in memory, and never logs or passes it on. A room that another connection holds, or that is kept, goes to a connection only with the same claim. A room opened without a claim cannot be taken over by anyone.
 - **Only rooms opened with a claim are kept.** Current apps send one; apps from earlier releases do not, and their rooms close when their connection ends, as before.
 - **Viewers wait.** A viewer who joins a kept room gets no answer until the host returns, and then joins as usual. When the hold time ends first, the service answers as for a wrong code. At most 40 viewers wait for one room.
-- **Kept rooms never keep a live host out.** They count toward `SPECDECK_MAX_ROOMS`, but when the service is full, a new room releases the kept room whose hold time ends first.
+- **Kept rooms never keep a live host out.** They count toward `SPECDECK_MAX_ROOMS`, but when the service is full, a new room releases the kept room whose hold time ends first. One network can keep at most `SPECDECK_MAX_KEPT_ROOMS_PER_IP` rooms and open at most `SPECDECK_ROOMS_PER_IP` new rooms a minute, so filling the service, and with it pushing out another host's kept room, takes many networks.
 - **A restart forgets them.** Kept rooms live in memory only.
 
 A shorter hold time frees codes sooner after a host crashed; a longer one covers longer absences. With `0`, rooms close as soon as their host's connection ends, and anyone with the code can open its room again.
@@ -99,14 +103,14 @@ The provided Compose file logs plain text and the Kubernetes manifest JSON, both
 | `room.closed` | info | `room`, `viewers`, `lasted_s`, `why` | A room closes: `why` is `closed` when the host replaced its code or ended the session, `host_left` when its connection ended and the room was not kept, `hold_expired` when it was kept and the host did not return in time, `evicted` when it was kept and released to make place for a new room. `viewers` joined through it; `lasted_s` is how long it was open |
 | `room.away` | info | `room`, `viewers`, `rooms` | A host's connection ended and its room is [kept for it](#rooms-kept-for-a-host). `viewers` joined through it so far; `rooms` are open or kept now |
 | `room.reclaimed` | info | `room`, `away_s`, `waiting` | A host takes its room back with its claim. `away_s` is how long it was away, 0 when it took the room from a connection that was still open; `waiting` viewers now join |
-| `room.refused` | info | `reason` | A host cannot open a room: `room_taken` (another connection holds it or it is kept, and the claim does not match), `rate_limited` (too many failed attempts from its network), `busy` or `bad_message` |
+| `room.refused` | info | `reason` | A host cannot open a room: `room_taken` (another connection holds it or it is kept, and the claim does not match), `rate_limited` (too many failed attempts, or too many new rooms, from its network), `busy` or `bad_message` |
 | `peer.joined` | info | `room`, `peer`, `viewers_on_host` | A viewer joins |
 | `peer.waiting` | info | `room`, `waiting` | A viewer joins a room whose host is away, and waits; `waiting` viewers wait for it now |
 | `peer.left` | info | `peer`, `lasted_s` | A viewer's connection to the service ends |
 | `peer.refused` | info | `reason` | A join or a connection is turned away: `unknown_room` (wrong or old code), `rate_limited` (too many wrong codes), `busy` (a limit), `bad_message` |
 | `socket.error` | info | `kind` | A connection fails: `reset` (it broke off), `too_large`, `protocol`, `bad_message` (not a SpecDeck message), `backlog_full` (it stopped reading), `unresponsive` (nothing arrived from it for 90 seconds) |
 | `socket.idle_closed` | debug | | A connection that neither hosted nor joined within 30 seconds is closed |
-| `limit.reached` | warn | `limit`, `count` | A [limit](#limits) refused something: `connections`, `connections_per_network`, `rooms`, `rooms_per_host`, `viewers_per_host`, `waiting_per_room`, `signals_per_viewer`, `messages` or `backlog` |
+| `limit.reached` | warn | `limit`, `count` | A [limit](#limits) refused something: `connections`, `connections_per_network`, `rooms`, `rooms_per_host`, `viewers_per_host`, `waiting_per_room`, `rooms_per_network`, `kept_rooms_per_network`, `signals_per_viewer`, `messages` or `backlog` |
 | `service.stats` | info | `connections`, `rooms`, `viewers`, `turn_issued` | Every 5 minutes, when something changed: what is open now, kept rooms included, and how many connections got TURN credentials since the last one |
 | `service.stopping` | info | `connections`, `rooms` | The service was asked to stop, with this many connections and rooms open or kept |
 

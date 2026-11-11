@@ -101,6 +101,12 @@ pub struct Config {
     pub max_connections_per_ip: usize,
     /// Open rooms in total; more are refused with `ServerBusy`.
     pub max_rooms: usize,
+    /// New rooms a client network may open within `window`. Asking for rooms is a way to find
+    /// out whether they exist, and kept rooms can push others out when the service is full.
+    pub rooms_per_ip: usize,
+    /// Rooms kept for hosts that are away, per client network; more are closed when their host
+    /// leaves, as rooms without a claim are.
+    pub max_kept_rooms_per_ip: usize,
     /// How long a connection may stay open without hosting or joining a room.
     pub idle_timeout: Duration,
     /// How long a TURN credentials request from a connection that has not hosted or joined yet
@@ -130,6 +136,8 @@ impl Default for Config {
             max_connections: 2_000,
             max_connections_per_ip: 100,
             max_rooms: 4_000,
+            rooms_per_ip: 30,
+            max_kept_rooms_per_ip: 16,
             idle_timeout: Duration::from_secs(30),
             turn_grace: Duration::from_secs(2),
             stats_interval: Duration::from_secs(5 * 60),
@@ -159,6 +167,8 @@ struct Inner {
     connections: HashMap<ConnectionId, Connection>,
     failed_joins: RateLimiter<IpAddr>,
     room_joins: RateLimiter<String>,
+    /// New rooms per client network.
+    rooms_opened: RateLimiter<IpAddr>,
     /// Connections per client network, upgrades in progress included.
     networks: HashMap<IpAddr, usize>,
     connection_total: usize,
@@ -176,9 +186,13 @@ struct Inner {
     turn: Option<TurnConfig>,
     max_rooms: usize,
     room_hold: Duration,
+    rooms_per_ip: usize,
+    max_kept_rooms_per_ip: usize,
 }
 
 struct Room {
+    /// The client network of the connection holding it, or that it is kept for.
+    network: IpAddr,
     /// The host connection holding it, or that it is kept for a host that is away.
     state: RoomState,
     /// SHA-256 of the claim it was opened with; a room without one belongs to its connection.
@@ -534,6 +548,7 @@ impl Service {
             connections: HashMap::new(),
             failed_joins: RateLimiter::new(config.failed_joins_per_ip, config.window),
             room_joins: RateLimiter::new(config.joins_per_room, config.window),
+            rooms_opened: RateLimiter::new(config.rooms_per_ip, config.window),
             networks: HashMap::new(),
             connection_total: 0,
             limits: log::Limits::default(),
@@ -545,6 +560,8 @@ impl Service {
             turn: config.turn.clone(),
             max_rooms: config.max_rooms,
             room_hold: config.room_hold,
+            rooms_per_ip: config.rooms_per_ip,
+            max_kept_rooms_per_ip: config.max_kept_rooms_per_ip,
         };
         Self { config, inner: Mutex::new(inner), stopping: watch::Sender::new(false) }
     }
@@ -661,8 +678,16 @@ impl Service {
             Role::Host { rooms, viewers } => {
                 let hold = inner.room_hold;
                 for id in rooms {
+                    let kept = inner.kept_rooms(connection.network);
+                    let keep = kept < inner.max_kept_rooms_per_ip;
                     let Some(room) = inner.rooms.get_mut(&id) else { continue };
-                    if room.claim.is_some() && !hold.is_zero() {
+                    if room.claim.is_some() && !hold.is_zero() && !keep {
+                        let max = inner.max_kept_rooms_per_ip;
+                        inner.limit_reached(Limit::KeptRoomsPerNetwork, max);
+                        if let Some(room) = inner.rooms.remove(&id) {
+                            room.closed(now, Closed::HostLeft);
+                        }
+                    } else if room.claim.is_some() && !hold.is_zero() {
                         // Kept for the host to return to (room-ownership decision 3).
                         let waiting = Vec::new();
                         room.state = RoomState::Away { since: now, until: now + hold, waiting };
@@ -938,8 +963,12 @@ impl Inner {
             Role::New if connection.waiting.is_some() => return Err(ErrorCode::BadMessage),
             _ => {}
         }
-        if !self.rooms.contains_key(&room) && self.rooms.len() >= self.max_rooms && !self.evict(now)
-        {
+        let new = !self.rooms.contains_key(&room);
+        if new && self.rooms_opened.exceeded(&network, now) {
+            self.limit_reached(Limit::RoomsPerNetwork, self.rooms_per_ip);
+            return Err(ErrorCode::RateLimited);
+        }
+        if new && self.rooms.len() >= self.max_rooms && !self.evict(now) {
             self.limit_reached(Limit::Rooms, self.rooms.len());
             return Err(ErrorCode::ServerBusy);
         }
@@ -959,6 +988,7 @@ impl Inner {
         if taking {
             let open = self.rooms.get_mut(&room).expect("checked above");
             let state = std::mem::replace(&mut open.state, RoomState::Held(from.to_owned()));
+            open.network = network;
             let number = open.number;
             match state {
                 RoomState::Held(old) => {
@@ -974,7 +1004,8 @@ impl Inner {
             let number = self.next_room;
             self.next_room += 1;
             let state = RoomState::Held(from.to_owned());
-            let open = Room { state, claim, number, opened: now, joined: 0 };
+            let open = Room { network, state, claim, number, opened: now, joined: 0 };
+            self.rooms_opened.record(network, now);
             self.rooms.insert(room.clone(), open);
             log::room_opened(number, self.rooms.len());
         }
@@ -1030,6 +1061,14 @@ impl Inner {
             self.send(&viewer, ServerMessage::PeerLeft { connection: viewer.clone() });
             self.send(old, ServerMessage::PeerLeft { connection: viewer });
         }
+    }
+
+    /// Rooms kept for hosts from `network` that are away.
+    fn kept_rooms(&self, network: IpAddr) -> usize {
+        self.rooms
+            .values()
+            .filter(|open| open.network == network && matches!(open.state, RoomState::Away { .. }))
+            .count()
     }
 
     /// Ends the hold time of `room`, when it is kept for a host that is away and its time is
