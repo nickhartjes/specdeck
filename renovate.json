@@ -13,6 +13,10 @@
     "enabled": true,
     "schedule": ["before 4am on monday"]
   },
+  "kubernetes": {
+    "description": "The Kubernetes manager matches no files by default; these are the shipped manifests",
+    "managerFilePatterns": ["/^deploy/k8s/.+\\.ya?ml$/"]
+  },
   "gitIgnoredAuthors": [
     "41898282+github-actions[bot]@users.noreply.github.com"
   ],
@@ -28,6 +32,11 @@
       "matchManagers": ["github-actions"],
       "matchDatasources": ["github-tags"],
       "groupName": "GitHub Actions"
+    },
+    {
+      "description": "The Compose and Kubernetes relays run the same coturn; scripts/check-relay-manifests.sh fails when they differ",
+      "matchPackageNames": ["coturn/coturn"],
+      "groupName": "coturn"
     },
     {
       "description": "Minor and patch updates of the npm packages in one pull request, so one CI run covers them",
