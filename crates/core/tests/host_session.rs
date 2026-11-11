@@ -769,7 +769,8 @@ async fn private_and_ignored_files_are_named_only() {
     std::fs::write(folder.path().join(".gitignore"), "*.local.md\n").unwrap();
     git(&["add", ".gitignore"]);
     git(&["commit", "-q", "-m", "first"]);
-    // Creates `.env`, `notes.local.md` (ignored) and `plan.md`, each reported with its content.
+    // Creates `.env`, `notes.local.md` (ignored) and `plan.md`, each reported with its content;
+    // then a shell command writes `credentials.md` (private, not ignored) and `shell.md`.
     fake_agent(
         bin.path(),
         "claude",
@@ -782,6 +783,10 @@ write() { post "{\"hook_event_name\":\"PreToolUse\",\"prompt_id\":\"p1\",\"tool_
 write t1 "$PWD/.env" 'TOKEN=secret'
 write t2 "$PWD/notes.local.md" 'mine'
 write t3 "$PWD/plan.md" 'shared'
+post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"t4","tool_input":{"command":"printf"}}'
+printf 'TOKEN=secret\n' > credentials.md
+printf 'from a command\n' > shell.md
+post '{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"t4","tool_input":{"command":"printf"},"tool_response":{}}'
 echo posted
 exit 0"#,
     );
@@ -802,7 +807,16 @@ exit 0"#,
             _ => None,
         })
         .collect();
-    assert_eq!(changes, [(".env".into(), 0), ("notes.local.md".into(), 0), ("plan.md".into(), 1)]);
+    assert_eq!(
+        changes,
+        [
+            (".env".into(), 0),
+            ("notes.local.md".into(), 0),
+            ("plan.md".into(), 1),
+            ("credentials.md".into(), 0),
+            ("shell.md".into(), 1),
+        ]
+    );
     let documents: Vec<(String, Option<String>)> = entries
         .iter()
         .filter_map(|e| match e {
@@ -810,7 +824,13 @@ exit 0"#,
             _ => None,
         })
         .collect();
-    assert_eq!(documents, [("plan.md".to_owned(), Some("shared\n".to_owned()))]);
+    assert_eq!(
+        documents,
+        [
+            ("plan.md".to_owned(), Some("shared\n".to_owned())),
+            ("shell.md".to_owned(), Some("from a command\n".to_owned())),
+        ]
+    );
     session.close();
 }
 
