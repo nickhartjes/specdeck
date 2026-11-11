@@ -15,7 +15,7 @@ const NO_HOOKS: &str = "core.hooksPath=NUL";
 const NO_HOOKS: &str = "core.hooksPath=/dev/null";
 
 /// Settings given before any other argument, so they win over the repository's own.
-const SAFE_SETTINGS: [&str; 5] = [
+const SAFE_SETTINGS: [&str; 6] = [
     // No file-system monitor command or daemon.
     "core.fsmonitor=false",
     NO_HOOKS,
@@ -24,6 +24,8 @@ const SAFE_SETTINGS: [&str; 5] = [
     // SpecDeck's git never needs a transport, nor a credential helper.
     "protocol.allow=never",
     "credential.helper=",
+    // No command recurses into a submodule, whose own settings these do not cover.
+    "submodule.recurse=false",
 ];
 
 /// git for `dir`, with the agent's environment and nothing the folder's settings could run. Its

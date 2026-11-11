@@ -23,7 +23,7 @@ SpecDeck keeps a few files for each session in a folder of its own, `sessions/<n
 
 SpecDeck deletes them when the session ends. If the session's process is killed instead, for example by a crash or a power cut, they can stay behind; see [Known limits](/specdeck/security/known-limits/#leftover-session-files). Shared files and the braindump are kept in memory only, and are written to disk only when you put a file in the session folder or give the braindump yourself. Prompt suggestions, waiting or kept for later, are kept in memory only and never written to disk.
 
-SpecDeck runs git in the session folder to show the branch, to see what a shell command changed and to ask whether a file is ignored. Those git calls run no command that the folder's own git settings name: no file-system monitor, no hook and no filter, so a folder with a prepared `.git/config` cannot run anything through SpecDeck. git commands you or the agent type in the terminal use the folder's settings as usual.
+SpecDeck runs git in the session folder to show the branch, to see what a shell command changed and to ask whether a file is ignored. Those git calls run no command that the folder's own git settings name: no file-system monitor, no hook and no filter. They do not look into submodules, whose own settings could name one. So a folder with a prepared `.git/config` cannot run anything through SpecDeck. git commands you or the agent type in the terminal use the folder's settings as usual.
 
 A session keeps running when SpecDeck restarts to update or crashes, and ends by itself if SpecDeck is not back within 10 minutes (see [When SpecDeck restarts or stops](/specdeck/guide/host/#when-specdeck-restarts-or-stops)).
 

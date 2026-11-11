@@ -173,6 +173,7 @@ pub fn git_entry(folder: &Path, env: &Environment) -> Entry {
         return Entry::Git { folder: folder_name, branch, dirty, ahead, behind, worktree };
     };
     // `status` may run a clean filter to compare a file, so the folder's filters are switched off.
+    // A submodule's own settings are not read here, so `status` does not look into submodules.
     let no_filters = git::no_filters(&git, env, folder);
     let run = |args: &[&str]| {
         let mut command = git::command(&git, env, folder);
@@ -181,9 +182,14 @@ pub fn git_entry(folder: &Path, env: &Environment) -> Entry {
         Some(String::from_utf8_lossy(&output.stdout).into_owned())
     };
 
-    if let Some(status) =
-        run(&["--no-optional-locks", "status", "--porcelain=v2", "--branch", "-uno"])
-    {
+    if let Some(status) = run(&[
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "-uno",
+        "--ignore-submodules=all",
+    ]) {
         for line in status.lines() {
             if let Some(head) = line.strip_prefix("# branch.head ") {
                 branch = Some(if head == "(detached)" { "detached".into() } else { head.into() });
@@ -511,6 +517,54 @@ pub(crate) mod tests {
             matches!(entry, Entry::Git { branch: Some(ref b), dirty: true, .. } if b == "main")
         );
         assert!(!marker.exists(), "the monitor ran");
+    }
+
+    /// A submodule's own settings name a clean filter; SpecDeck's `git status` does not look into
+    /// the submodule, so the filter does not run.
+    #[cfg(unix)]
+    #[test]
+    fn a_submodule_s_filter_does_not_run() {
+        let base = tempfile::tempdir().unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let status = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(["-c", "protocol.file.allow=always"])
+                .args(args)
+                .current_dir(dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        let lib = base.path().join("lib");
+        std::fs::create_dir(&lib).unwrap();
+        git(&lib, &["init", "-q"]);
+        std::fs::write(lib.join("a.txt"), "a").unwrap();
+        git(&lib, &["add", "."]);
+        git(&lib, &["commit", "-q", "-m", "lib"]);
+        let project = base.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        git(&project, &["init", "-q", "-b", "main"]);
+        git(&project, &["submodule", "add", "-q", &lib.to_string_lossy(), "vendor/lib"]);
+        git(&project, &["commit", "-q", "-m", "submodule"]);
+
+        let marker = base.path().join("ran");
+        let trap = base.path().join("trap.sh");
+        std::fs::write(&trap, format!("#!/bin/sh\ncat >/dev/null\ntouch '{}'\n", marker.display()))
+            .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&trap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let sub = project.join("vendor/lib");
+        git(&sub, &["config", "filter.trap.clean", &trap.to_string_lossy()]);
+        std::fs::write(sub.join(".gitattributes"), "*.txt filter=trap\n").unwrap();
+        // Same size, newer time: git compares the content, through the filter.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(sub.join("a.txt"), "b").unwrap();
+
+        let entry = git_entry(&project, &Environment::from_process());
+        assert!(matches!(entry, Entry::Git { branch: Some(ref b), .. } if b == "main"));
+        assert!(!marker.exists(), "the submodule's clean filter ran");
     }
 
     /// git for Windows takes the null device `NUL` as the hooks path, and runs no monitor.
