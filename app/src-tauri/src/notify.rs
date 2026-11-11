@@ -195,18 +195,20 @@ pub fn notify<R: Runtime>(
         return false;
     }
     let id = notices.lock().unwrap().record(session, open);
-    let body = plain_body(body, cfg!(target_os = "linux"));
+    let linux = cfg!(target_os = "linux");
+    let (title, body) = (plain_text(title, linux), plain_text(body, linux));
     app.notification().builder().id(id).title(title).body(body).show().is_ok()
 }
 
-/// `body` as plain text. Linux notification servers may render a little markup in bodies, so
-/// there `&`, `<` and `>` are escaped; titles are plain text everywhere, as are bodies on macOS
-/// and Windows (`confine-window-navigation` design decision 6).
-fn plain_body(body: &str, linux: bool) -> String {
+/// `text` as plain text in a notification's title or body. Linux notification servers may render
+/// a little markup in bodies, and some (dunst, with its default format) in titles too, so there
+/// `&`, `<` and `>` are escaped; macOS and Windows show both as plain text already
+/// (`confine-window-navigation` design decision 6).
+fn plain_text(text: &str, linux: bool) -> String {
     if !linux {
-        return body.to_owned();
+        return text.to_owned();
     }
-    body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 /// Whether the window exists and has focus; a closed window has none.
@@ -273,9 +275,16 @@ mod tests {
     #[test]
     fn bodies_are_plain_text_on_linux() {
         let body = "<b>nick</b> is watching your session.";
-        assert_eq!(plain_body(body, true), "&lt;b&gt;nick&lt;/b&gt; is watching your session.");
-        assert_eq!(plain_body("a & b", true), "a &amp; b");
-        assert_eq!(plain_body(body, false), body);
+        assert_eq!(plain_text(body, true), "&lt;b&gt;nick&lt;/b&gt; is watching your session.");
+        assert_eq!(plain_text("a & b", true), "a &amp; b");
+        assert_eq!(plain_text(body, false), body);
+    }
+
+    #[test]
+    fn titles_are_plain_text_on_linux() {
+        let title = "<i>admin</i> joined";
+        assert_eq!(plain_text(title, true), "&lt;i&gt;admin&lt;/i&gt; joined");
+        assert_eq!(plain_text(title, false), title);
     }
 
     #[test]
