@@ -1911,13 +1911,13 @@ impl Host {
     /// (design decisions 4 and 5): connections that the old code started and that are not
     /// admitted are dropped, and viewers who are not connected are forgotten.
     fn rotate_code(&mut self) {
-        let old_key = self.keys.auth_key;
+        // Every join with a code started with one being revoked: the current one, or one the
+        // service's `RoomTaken` made the host leave. None started with the new code yet, which
+        // is taken below.
         let joining: Vec<String> = self
             .slots
             .iter()
-            .filter(|(_, slot)| {
-                slot.admitted.is_none() && matches!(slot.auth, Auth::Code(key) if key == old_key)
-            })
+            .filter(|(_, slot)| slot.admitted.is_none() && matches!(slot.auth, Auth::Code(_)))
             .map(|(connection, _)| connection.clone())
             .collect();
         for connection in joining {
@@ -2720,6 +2720,16 @@ mod tests {
         // Joining with the new code works.
         announced(&mut host, "new");
         assert!(host.slots.contains_key("new"));
+    }
+
+    #[tokio::test]
+    async fn a_new_code_also_ends_joins_with_a_code_the_service_made_the_host_leave() {
+        let (_dir, mut host) = host();
+        announced(&mut host, "joining");
+        // The service answered `RoomTaken`: the host moved to another code.
+        host.replace_code();
+        host.rotate_code();
+        assert!(!host.slots.contains_key("joining"));
     }
 
     #[tokio::test]
