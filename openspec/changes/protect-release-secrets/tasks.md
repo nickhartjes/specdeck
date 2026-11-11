@@ -85,6 +85,7 @@ Decisions where design.md and the code or spec differed:
 - **1.3:** validated with `renovate-config-validator` from nixpkgs (Renovate 44.181.0) instead of `npx`, for the same reason.
 - **3.2:** `actions/attest-build-provenance` is pinned at v4.2.2, whose `action.yml` accepts `subject-checksums`.
 - **4.2:** the expected cask is `scripts/testdata/specdeck-1.8.0.rb`, the 1.8.0 cask as published in the tap; the test fails when the version or the repository check is removed.
+- **7.2, today's findings:** `cargo audit --deny warnings` on 2026-11-11 reported seven warnings, so the first run would have opened the issue at once. Six are ignored in `.cargo/audit.toml`, each with its reason and a review date of 2027-05-11: RUSTSEC-2023-0089 (`atomic-polyfill`, unmaintained, not built for SpecDeck's targets), RUSTSEC-2024-0370 (`proc-macro-error`, unmaintained, build time only), RUSTSEC-2024-0429 (`glib` 0.18, unsound `VariantStrIter`, Tauri's GTK stack), RUSTSEC-2026-0370/0371/0372 (`zvariant`, `zbus_names`, `zvariant_derive`, unmaintained, zbus 5 under Tauri's Linux plugins). The seventh, `async-executor` 1.14.0, was yanked; a yanked crate has no ID to ignore, so `Cargo.lock` moves to 1.14.1. `cargo audit --deny warnings` then passes. The npm audits were not run here (the registry is blocked).
 - **actionlint** reports only that it does not know the `ubuntu-26.04` runner label, which the workflows used before this change.
 
 Left unticked:

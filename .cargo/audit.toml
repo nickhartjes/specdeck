@@ -1,10 +1,28 @@
 # cargo audit's settings (.github/workflows/audit.yml). To ignore an advisory, for example one with
 # no fixed version that does not affect SpecDeck, add its ID with the reason and the date on the line
-# above, and look at it again later:
-#
-#   ignore = [
-#     # 2026-11-10: only the TLS client uses the affected function, and SpecDeck builds without it.
-#     "RUSTSEC-0000-0000",
-#   ]
+# above, and look at it again by the review date. A yanked crate has no ID to ignore: update it in
+# Cargo.lock instead.
 [advisories]
-ignore = []
+ignore = [
+  # 2026-11-11, review by 2027-05-11: unmaintained. heapless 0.7 (through postcard, in
+  # specdeck-protocol) needs it only on targets without native atomics; none of SpecDeck's targets
+  # builds it. Goes away when postcard moves to heapless 0.8 or later.
+  "RUSTSEC-2023-0089", # atomic-polyfill
+
+  # 2026-11-11, review by 2027-05-11: unmaintained. A proc macro of glib-macros 0.18 (GTK, under
+  # Tauri on Linux): it runs at build time only and adds no code to the app. Goes away when Tauri
+  # moves to gtk-rs 0.19 or later.
+  "RUSTSEC-2024-0370", # proc-macro-error
+
+  # 2026-11-11, review by 2027-05-11: unsound VariantStrIter, fixed in glib 0.20. glib 0.18 comes
+  # with Tauri's GTK stack on Linux, which SpecDeck cannot move on its own; SpecDeck's code does not
+  # use glib. Goes away with the same Tauri update as above.
+  "RUSTSEC-2024-0429", # glib
+
+  # 2026-11-11, review by 2027-05-11: unmaintained, merged into zbus 6. zbus 5 comes with
+  # notify-rust and the Tauri notification, opener and single-instance plugins on Linux (D-Bus).
+  # Goes away when those plugins move to zbus 6.
+  "RUSTSEC-2026-0370", # zvariant
+  "RUSTSEC-2026-0371", # zbus_names
+  "RUSTSEC-2026-0372", # zvariant_derive
+]
