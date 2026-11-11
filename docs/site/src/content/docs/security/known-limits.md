@@ -87,7 +87,7 @@ The same holds [in a sandbox](/specdeck/guide/sandbox/): the start command passe
 
 ### Notifications can show commands, paths and addresses
 
-When the agent waits for you, the notification can show the command it wants to run, a file path, an address, or its question. Notifications also show viewers' names as they chose them, and a viewer could choose a misleading one, such as `Your admin`. Names are shown without hidden and text-direction characters, so a name cannot hide part of itself or turn its text around, and notifications show them as plain text, never as formatting or links.
+When the agent waits for you, the notification can show the command it wants to run, a file path, an address, or its question. Notifications also show viewers' names as they chose them, and a viewer could choose a misleading one, such as `Your admin`. Names are shown without hidden and text-direction characters, so a name cannot hide part of itself or turn its text around, and notifications show them as plain text, never as formatting or links. A host on SpecDeck 1.8 or older does not leave these characters out itself: viewers of such a host see the names without them, but two names that differ only in a hidden character then both show as, say, `nick`, without the `(2)` that tells them apart.
 
 **What you can do:** turn off **Show notifications**, or hide notification previews on your lock screen in your system's settings.
 
