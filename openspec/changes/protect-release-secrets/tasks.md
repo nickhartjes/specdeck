@@ -52,7 +52,7 @@
 These cannot be done or read from the repository. Each is a manual step; note the outcome in the pull request.
 
 - [ ] 8.1 Check the tag ruleset: only the admin can create, move or delete `v*` tags, with no bypass for others. Check the `release` environment allows `v*` tags and main only, as `release.yml`'s header says
-- [ ] 8.2 Create the `update-signing` environment, allowed for `v*` tags only; add `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to it; delete both from `release`. Do this before the tag of 2.6
+- [ ] 8.2 Create the `update-signing` environment, allowed for `v*` tags only; add `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to it; delete both from `release`; confirm that no repository-level secret has either name (the repository's Settings → Secrets list, or `gh secret list`), since every job can read repository secrets. Do this before the tag of 2.6
 - [ ] 8.3 After 5.3 passes: delete the `RENOVATE_NIX_HASH_TOKEN` secret and revoke the token in the account's settings
 - [ ] 8.4 List who has write access to this repository and to `nickhartjes/homebrew-tap`, and remove what is not needed; check the default workflow token permission is read-only, and turn on "Require actions to be pinned to a full-length commit SHA"
 
