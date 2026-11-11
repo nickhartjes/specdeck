@@ -2,6 +2,7 @@
 // own viewer screen. Watching only; the page joins sessions on the service that served it.
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { shownName } from '../model/names';
 import { errorMessage, useBridge } from '../api/bridge';
 import type { Profile } from '../api/types';
 import { ExportDiagnosticsLink } from '../components/ExportDiagnostics';
@@ -144,7 +145,8 @@ function JoinPage({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!code.trim()) return setError('Enter the invite code the host shared.');
-    if (!name.trim()) return setError('Enter the name others should see.');
+    const shown = shownName(name);
+    if (!shown) return setError('Enter the name others should see.');
     let joinCode = code.trim();
     // A pasted link: join it here only when it is for this service.
     if (joinCode.includes('://')) {
@@ -154,7 +156,7 @@ function JoinPage({
       joinCode = link.code;
     }
     try {
-      onProfile(await bridge.setUsername(name));
+      onProfile(await bridge.setUsername(shown));
       onScreen({ kind: 'viewer', code: joinCode });
     } catch (e) {
       setError(errorMessage(e));

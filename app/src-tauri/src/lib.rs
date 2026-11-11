@@ -8,6 +8,7 @@ mod client;
 mod links;
 mod menu;
 mod migrate;
+mod navigation;
 mod notify;
 mod running;
 mod services;
@@ -34,10 +35,7 @@ use specdeck_protocol::service;
 use specdeck_protocol::{AgentId, AgentStatus};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::menu::MenuEvent;
-use tauri::{
-    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
-};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -1586,6 +1584,16 @@ async fn open_shared_link(
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Opens a link from a document, a plan, an answer or a shared Markdown file in the default
+/// browser, if it passes the check for shared links (`confine-window-navigation` design
+/// decision 2). The window itself never leaves the app's page.
+#[tauri::command]
+async fn open_content_link(app: AppHandle, url: String) -> Result<(), String> {
+    links::open_content_link(&url, |url| {
+        app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+    })
+}
+
 #[tauri::command]
 async fn host_close(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
     let id = app.state::<AppState>().sessions.lock().unwrap().of_window(window.label());
@@ -1994,7 +2002,7 @@ fn open_session_window(app: &AppHandle, label: &str, attach: Option<SessionId>) 
         running_changed(app);
     }
     let appearance = state.settings.lock().unwrap().appearance;
-    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::default())
+    let mut builder = navigation::app_window(app, label, WebviewUrl::default())
         .initialization_script(appearance_script(appearance))
         .title(session_window_title(name.as_deref()))
         .inner_size(1200.0, 800.0)
@@ -2398,7 +2406,7 @@ fn open_settings_window(app: &AppHandle) {
     }
     let title = if cfg!(target_os = "macos") { "Settings" } else { "SpecDeck Settings" };
     let appearance = app.state::<AppState>().settings.lock().unwrap().appearance;
-    let _ = WebviewWindowBuilder::new(
+    let _ = navigation::app_window(
         app,
         "settings",
         WebviewUrl::App("index.html?window=settings".into()),
@@ -2699,6 +2707,7 @@ pub fn run() {
             cast_vote,
             send_link,
             open_shared_link,
+            open_content_link,
             host_close,
             join_session,
             leave_session,
@@ -2727,6 +2736,56 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The names in `commands.txt`, which build.rs turns into the app manifest.
+    fn listed_commands() -> Vec<String> {
+        let list = include_str!("../commands.txt");
+        let lines = list.lines().map(str::trim);
+        lines.filter(|line| !line.is_empty() && !line.starts_with('#')).map(Into::into).collect()
+    }
+
+    /// The names in `generate_handler![…]`, read from this file's source.
+    fn handled_commands() -> Vec<String> {
+        let source = include_str!("lib.rs");
+        let start = source.find("generate_handler![").unwrap() + "generate_handler![".len();
+        let end = start + source[start..].find(']').unwrap();
+        let names = source[start..end].split(',').map(str::trim);
+        names.filter(|name| !name.is_empty()).map(Into::into).collect()
+    }
+
+    /// The app permissions a capability allows: `allow-…` without a plugin prefix.
+    fn allowed_commands(capability: &str) -> Vec<String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities").join(capability);
+        let capability: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let permissions = capability["permissions"].as_array().unwrap().iter();
+        permissions
+            .filter_map(|permission| permission.as_str()?.strip_prefix("allow-"))
+            .map(|name| name.replace('-', "_"))
+            .collect()
+    }
+
+    /// A command missing from one of the three lists fails at run time, so this fails first
+    /// (`confine-window-navigation` design decision 3).
+    #[test]
+    fn commands_are_listed_handled_and_granted() {
+        let mut listed = listed_commands();
+        let mut handled = handled_commands();
+        listed.sort();
+        handled.sort();
+        assert!(!listed.is_empty());
+        let missing = |from: &[String], of: &[String]| -> Vec<String> {
+            of.iter().filter(|name| !from.contains(name)).cloned().collect()
+        };
+        assert_eq!(missing(&handled, &listed), Vec::<String>::new(), "listed, not handled");
+        assert_eq!(missing(&listed, &handled), Vec::<String>::new(), "handled, not listed");
+
+        let session = allowed_commands("default.json");
+        let settings = allowed_commands("settings.json");
+        let granted: Vec<String> = session.iter().chain(&settings).cloned().collect();
+        assert_eq!(missing(&granted, &listed), Vec::<String>::new(), "listed, granted nowhere");
+        assert_eq!(missing(&listed, &granted), Vec::<String>::new(), "granted, not a command");
+    }
 
     #[test]
     fn file_names_from_the_window_are_decoded() {

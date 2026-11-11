@@ -61,4 +61,6 @@ objc2-web-kit = { version = "0.3", default-features = false, features = ["std", 
 
 [dev-dependencies]
 tempfile = "3"
+# The mock runtime, to check which windows may call the app's commands.
+tauri = { version = "2", features = ["test"] }
 specdeck-server = { path = "../../crates/server" }

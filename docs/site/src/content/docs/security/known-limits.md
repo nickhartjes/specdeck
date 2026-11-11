@@ -65,12 +65,6 @@ The Docker Compose setup does not turn off coturn's admin console. It listens on
 
 ## The app
 
-### Links in documents open inside the app window
-
-Clicking a link in a document, a plan or one of Claude's answers loads that page in the SpecDeck window itself, without an address bar, instead of in your browser. The page cannot use SpecDeck's functions, but it could pretend to be part of SpecDeck, and the session view is gone from that window. In the web viewer, the tab leaves the session.
-
-**What you can do:** copy links into your browser instead of clicking them. To get back, close the window: a session you host keeps running and opens again from **Running sessions** on the start screen; as a viewer, join again with the code. Shared links are not affected: they always open in your browser.
-
 ### Settings and logs use default permissions
 
 `settings.json`, the log files and each session's folder are written with your account's default permissions, not made private to you. They hold no secrets, but they do hold your recent folder paths and your name. The session's temporary files themselves, and the log folder, are private to your account.
@@ -93,7 +87,7 @@ The same holds [in a sandbox](/specdeck/guide/sandbox/): the start command passe
 
 ### Notifications can show commands, paths and addresses
 
-When the agent waits for you, the notification can show the command it wants to run, a file path, an address, or its question. Notifications also show viewers' names as they chose them, and a viewer could choose a misleading one.
+When the agent waits for you, the notification can show the command it wants to run, a file path, an address, or its question. Notifications also show viewers' names as they chose them, and a viewer could choose a misleading one, such as `Your admin`. Names are shown without hidden and text-direction characters, so a name cannot hide part of itself or turn its text around, and notifications show them as plain text, never as formatting or links. A host on SpecDeck 1.8 or older does not leave these characters out itself: viewers of such a host see the names without them, but two names that differ only in a hidden character then both show as, say, `nick`, without the `(2)` that tells them apart.
 
 **What you can do:** turn off **Show notifications**, or hide notification previews on your lock screen in your system's settings.
 

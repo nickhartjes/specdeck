@@ -17,4 +17,10 @@ A document tab marks the parts that changed since you last read it as **New** or
 
 A document opens **Formatted**. Switch it to **Source** to see the Markdown as written, with line numbers and highlighted syntax; the same parts are marked as new or changed there, line by line. Switching keeps your place in the document, and the next document you open is formatted again.
 
+## Links in documents
+
+Links in documents, plans, the agent's answers and shared Markdown files open in your own browser, never in the SpecDeck window, so the session stays in view. Point at a link to see its address before you open it.
+
+A link opens only when it is a web address that others could share with you too: `https://`, or `http://` for an address that is not your own computer. Links to `localhost` or `127.0.0.1`, to files on your computer, with a user name or password in them, or of any other kind do not open; SpecDeck says **This link can't be opened**, and you can still read and copy the address. Links to another file in the repository open nothing, and a link to a heading in the same document no longer scrolls to it; use the document's outline or search instead.
+
 Plan cards come from the OpenSpec CLI on the host's computer. Without it, SpecDeck recognises OpenSpec's default layout (proposal, specs, design and tasks).

@@ -31,6 +31,9 @@ export function App() {
   const [startCommand, setStartCommand] = useState<MenuCommand | null>(null);
   // A join link through another sharing service, waiting for the user to agree.
   const [joinThrough, setJoinThrough] = useState<JoinLink | null>(null);
+  // A join link from outside the app, waiting for the user to agree (`confine-window-navigation`
+  // design decision 4): a web page can open one.
+  const [joinAsk, setJoinAsk] = useState<JoinLink | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState(false);
   const refresh = () =>
@@ -72,12 +75,14 @@ export function App() {
     else setScreen({ kind: 'viewer', code: link.code });
   };
   // A join link that opened the app, or came in while it runs. The app gives one only to a window
-  // on its start screen, and opens a new window for it otherwise.
+  // on its start screen, and opens a new window for it otherwise. It joins only once the user
+  // agrees, in one question: the one about the other service when it names one.
   const takeJoinLink = async () => {
     const link = await bridge.takeJoinLink();
     if (!link || screen.kind !== 'start') return;
     if (link.error) setScreen({ kind: 'start', joinError: link.error });
-    else if (link.code) joinFromLink(link);
+    else if (link.code && link.server) setJoinThrough(link);
+    else if (link.code) setJoinAsk(link);
   };
   // The join field on the start screen: a code, or a pasted link that may name a service.
   const join = (code: string, pasted?: string) => {
@@ -192,9 +197,29 @@ export function App() {
           onCommandDone={() => setStartCommand(null)}
         />
       )}
-      {joinThrough?.code && joinThrough.server && (
+      {/* Without a name the start screen asks for one first; the question follows. */}
+      {joinAsk?.code && profile.username && (
+        <ConfirmDialog
+          title="Join this session?"
+          confirm="Join"
+          onCancel={() => setJoinAsk(null)}
+          onConfirm={() => {
+            const code = joinAsk.code as string;
+            setJoinAsk(null);
+            setScreen({ kind: 'viewer', code });
+          }}
+        >
+          <p>
+            Join session <strong>{formatCode(joinAsk.code)}</strong> as <strong>{profile.username}</strong>?
+          </p>
+          <p>The host and the other viewers will see your name. Join only if you trust the link.</p>
+        </ConfirmDialog>
+      )}
+      {joinThrough?.code && joinThrough.server && profile.username && (
         <JoinThroughDialog
           serverName={joinThrough.serverName ?? joinThrough.server}
+          code={formatCode(joinThrough.code)}
+          name={profile.username}
           canKeep={!profile.serviceOverridden}
           onCancel={() => setJoinThrough(null)}
           onJoin={async (keep) => {

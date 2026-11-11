@@ -37,7 +37,7 @@ SpecDeck has no telemetry, analytics or crash reporting. It connects to:
 - **the people in your session**, over the session's encrypted connections;
 - **GitHub**, to check for updates, unless you turn that off.
 
-It also opens web pages in your browser when you ask it to, such as a shared link or an agent's install page.
+It also opens web pages in your browser when you ask it to, such as a shared link, a link in a document or an agent's install page. Its own windows show only SpecDeck and never load another page.
 
 ## Notifications
 

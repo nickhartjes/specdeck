@@ -20,9 +20,10 @@ use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
 use serde::Deserialize;
 use specdeck_core::browser::{BrowserAction, BrowserHandler, BrowserResult};
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, Url, WebviewWindow};
 use tokio::sync::{Notify, oneshot};
 
+use crate::navigation::{browser_window, web_page};
 use crate::sessions::SessionId;
 
 /// What runs inside the page.
@@ -137,20 +138,16 @@ fn browser(app: &AppHandle, id: SessionId) -> tauri::Result<Arc<Browser>> {
     let key = format!("__specdeck_{}", random_hex());
     let loads = Arc::new(Loads::default());
     let seen = loads.clone();
-    let window = WebviewWindowBuilder::new(
-        app,
-        &label,
-        WebviewUrl::External(Url::parse("about:blank").unwrap()),
-    )
-    .title("Claude's browser")
-    .inner_size(1280.0, 800.0)
-    .visible(false)
-    .focused(false)
-    .skip_taskbar(true)
-    .incognito(true)
-    .initialization_script(format!("{}.installConsole();", call_on(&key)))
-    .on_page_load(move |_, payload| seen.seen(payload.event()))
-    .build()?;
+    let window = browser_window(app, &label)
+        .title("Claude's browser")
+        .inner_size(1280.0, 800.0)
+        .visible(false)
+        .focused(false)
+        .skip_taskbar(true)
+        .incognito(true)
+        .initialization_script(format!("{}.installConsole();", call_on(&key)))
+        .on_page_load(move |_, payload| seen.seen(payload.event()))
+        .build()?;
     let browser = Arc::new(Browser { window, key, loads });
     all.insert(id, browser.clone());
     tracing::info!(session = id, "browser.opened");
@@ -229,8 +226,11 @@ impl Browser {
 
     async fn navigate(&self, address: &str) -> BrowserResult {
         let url = match Url::parse(address) {
-            Ok(url) if matches!(url.scheme(), "http" | "https") => url,
-            Ok(_) => return BrowserResult::error("Only http and https addresses can be opened."),
+            // The window's own rule, less the empty page it starts on.
+            Ok(url) if web_page(&url) && url.scheme() != "about" => url,
+            Ok(_) => {
+                return BrowserResult::error("Only web addresses (http and https) can be opened.");
+            }
             Err(error) => {
                 return BrowserResult::error(format!("`{address}` is not an address: {error}"));
             }

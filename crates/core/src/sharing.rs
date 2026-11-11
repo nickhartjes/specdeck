@@ -745,10 +745,12 @@ impl Bucket {
 impl Host {
     fn new(
         view: SessionView,
-        config: SharingConfig,
+        mut config: SharingConfig,
         events: UnboundedSender<SharingEvent>,
         status: watch::Sender<SharingStatus>,
     ) -> Self {
+        // Shown to everyone as viewers' names are: without hidden characters.
+        config.username = control::shown_name(&config.username).unwrap_or_else(|| "Host".into());
         let code = InviteCode::generate();
         let keys = code.keys();
         let ice_servers = config.peer.ice_servers.clone();
@@ -1141,7 +1143,8 @@ impl Host {
                         getrandom::fill(&mut token).expect("no random source");
                         let identity = Identity {
                             id: self.next_viewer_id,
-                            username: username.trim().to_owned(),
+                            // `decode_viewer` refused a name with nothing left to show.
+                            username: control::shown_name(&username).unwrap_or_default(),
                         };
                         self.next_viewer_id += 1;
                         self.identities.insert(token, identity.clone());

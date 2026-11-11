@@ -433,6 +433,37 @@ pub fn encode<T: Serialize>(message: &T) -> Vec<u8> {
 /// The first byte of an encoded `ViewerMessage::Send`.
 const SEND_VARIANT: u8 = 3;
 
+/// Characters that show as nothing or change the direction of text, which could hide part of a
+/// name or reorder it: Unicode's `Default_Ignorable_Code_Point` and `Bidi_Control`, with the
+/// Hangul fillers. `tests/fixtures/shown-names.json` lists the same ranges for the UI's copy.
+pub fn invisible(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}'                          // soft hyphen
+        | '\u{034F}'                        // combining grapheme joiner
+        | '\u{061C}'                        // Arabic letter mark
+        | '\u{115F}'..='\u{1160}'           // Hangul fillers
+        | '\u{17B4}'..='\u{17B5}'           // Khmer inherent vowels
+        | '\u{180B}'..='\u{180F}'           // Mongolian selectors and vowel separator
+        | '\u{200B}'..='\u{200F}'           // zero-width spaces, joiners, direction marks
+        | '\u{202A}'..='\u{202E}'           // direction embeddings and overrides
+        | '\u{2060}'..='\u{206F}'           // word joiner, invisible operators, isolates
+        | '\u{3164}'                        // Hangul filler
+        | '\u{FE00}'..='\u{FE0F}'           // variation selectors
+        | '\u{FEFF}'                        // zero-width no-break space
+        | '\u{FFA0}'                        // halfwidth Hangul filler
+        | '\u{1BCA0}'..='\u{1BCA3}'         // shorthand format controls
+        | '\u{1D173}'..='\u{1D17A}'         // musical format controls
+        | '\u{E0000}'..='\u{E0FFF}') // tags and variation selectors supplement
+}
+
+/// A name as it is shown to others: without invisible and text-direction characters, trimmed;
+/// `None` when nothing is left (`confine-window-navigation` design decision 5).
+pub fn shown_name(name: &str) -> Option<String> {
+    let visible: String = name.chars().filter(|c| !invisible(*c)).collect();
+    let visible = visible.trim();
+    (!visible.is_empty()).then(|| visible.to_owned())
+}
+
 /// Decodes a message from a viewer: strict, bounded and validated.
 pub fn decode_viewer(bytes: &[u8]) -> Result<ViewerMessage, DecodeError> {
     // Postcard starts with the variant index; only `Send` (3) may use the larger cap.
@@ -483,7 +514,10 @@ pub fn decode_viewer(bytes: &[u8]) -> Result<ViewerMessage, DecodeError> {
         }
         ViewerMessage::Hello { username, .. } => {
             let chars = username.trim().chars().count();
-            if chars == 0 || chars > MAX_USERNAME_CHARS || username.chars().any(char::is_control) {
+            if shown_name(username).is_none()
+                || chars > MAX_USERNAME_CHARS
+                || username.chars().any(char::is_control)
+            {
                 return Err(DecodeError::InvalidUsername);
             }
         }
@@ -920,6 +954,69 @@ mod tests {
         let long = "x".repeat(MAX_USERNAME_CHARS + 1);
         assert_eq!(decode_viewer(&encode(&hello(&long))), Err(DecodeError::InvalidUsername));
         assert!(decode_viewer(&encode(&hello("Ünïcødé 名前"))).is_ok());
+    }
+
+    #[test]
+    fn shown_names_drop_invisible_and_direction_characters() {
+        assert_eq!(shown_name("nick").as_deref(), Some("nick"));
+        assert_eq!(shown_name("ni\u{200B}ck").as_deref(), Some("nick"));
+        assert_eq!(shown_name("nick\u{200B}").as_deref(), Some("nick"));
+        assert_eq!(shown_name("\u{202E}kcin").as_deref(), Some("kcin"));
+        for c in ['\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{FEFF}'] {
+            assert_eq!(shown_name(&format!("{c}nick{c}")).as_deref(), Some("nick"), "{c:?}");
+        }
+        assert_eq!(shown_name(" nick "), Some("nick".into()));
+        assert_eq!(shown_name("\u{200B}\u{FEFF}\u{2066}"), None);
+        assert_eq!(shown_name("\u{200B} \u{200B}"), None);
+    }
+
+    /// The cases the UI's copy (`app/ui/src/model/names.ts`) is tested against too.
+    #[derive(serde::Deserialize)]
+    struct ShownNames {
+        hidden: Vec<(String, String)>,
+        shown: Vec<String>,
+        names: Vec<ShownCase>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ShownCase {
+        name: String,
+        shown: Option<String>,
+    }
+
+    fn shown_names() -> ShownNames {
+        serde_json::from_str(include_str!("../tests/fixtures/shown-names.json")).unwrap()
+    }
+
+    #[test]
+    fn exactly_the_listed_characters_are_invisible() {
+        let vector = shown_names();
+        let hex = |text: &str| u32::from_str_radix(text, 16).unwrap();
+        let ranges: Vec<(u32, u32)> =
+            vector.hidden.iter().map(|(first, last)| (hex(first), hex(last))).collect();
+        for c in (0..=0x10FFFF).filter_map(char::from_u32) {
+            let listed = ranges.iter().any(|(first, last)| (*first..=*last).contains(&(c as u32)));
+            assert_eq!(invisible(c), listed, "U+{:04X}", c as u32);
+        }
+        for text in vector.shown {
+            assert!(text.chars().all(|c| !invisible(c)), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn shown_names_match_the_shared_cases() {
+        for case in shown_names().names {
+            assert_eq!(shown_name(&case.name), case.shown, "{:?}", case.name);
+        }
+        let blank = hello("\u{3164}");
+        assert_eq!(decode_viewer(&encode(&blank)), Err(DecodeError::InvalidUsername));
+    }
+
+    #[test]
+    fn a_name_of_only_invisible_characters_is_refused() {
+        let invisible = hello("\u{200B}\u{200C}\u{FEFF}");
+        assert_eq!(decode_viewer(&encode(&invisible)), Err(DecodeError::InvalidUsername));
+        assert!(decode_viewer(&encode(&hello("nick\u{200B}"))).is_ok());
     }
 
     #[test]

@@ -122,6 +122,13 @@ export function openSharedLink(
   open(url, '_blank', LINK_FEATURES);
 }
 
+/** Opens a link from session content in a new tab after the check for shared links; fails otherwise. */
+export function openContentLink(url: string, openableLink: WebBridgeOptions['openableLink'], open: NonNullable<WebBridgeOptions['open']>) {
+  const checked = openableLink(url);
+  if (checked === undefined) throw new Error('This link can’t be opened.');
+  open(checked, '_blank', LINK_FEATURES);
+}
+
 /** The host name of a `wss://host/…/signal` URL. */
 export function serviceName(service: string): string {
   return service.replace(/^wss?:\/\//, '').replace(/\/.*$/, '');
@@ -457,6 +464,7 @@ export function webBridge(options: WebBridgeOptions): Bridge {
       connection.sendLink(url, title, sessionOnly);
     },
     openLink: async (id) => openSharedLink(links, id, options.openableLink, open),
+    openContentLink: async (url) => openContentLink(url, options.openableLink, open),
     answerRead: async (ask, answer) => {
       if (!connection) throw new Error('You are not in a session.');
       connection.answerRead(ask, answer);

@@ -195,7 +195,20 @@ pub fn notify<R: Runtime>(
         return false;
     }
     let id = notices.lock().unwrap().record(session, open);
+    let linux = cfg!(target_os = "linux");
+    let (title, body) = (plain_text(title, linux), plain_text(body, linux));
     app.notification().builder().id(id).title(title).body(body).show().is_ok()
+}
+
+/// `text` as plain text in a notification's title or body. Linux notification servers may render
+/// a little markup in bodies, and some (dunst, with its default format) in titles too, so there
+/// `&`, `<` and `>` are escaped; macOS and Windows show both as plain text already
+/// (`confine-window-navigation` design decision 6).
+fn plain_text(text: &str, linux: bool) -> String {
+    if !linux {
+        return text.to_owned();
+    }
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 /// Whether the window exists and has focus; a closed window has none.
@@ -257,6 +270,21 @@ mod tests {
         let id = |n: usize| NoticeOpen::PlanMode { tool_use_id: "t".repeat(n) };
         assert!(id(OPEN_ID_BYTES).checked().is_some());
         assert_eq!(id(OPEN_ID_BYTES + 1).checked(), None);
+    }
+
+    #[test]
+    fn bodies_are_plain_text_on_linux() {
+        let body = "<b>nick</b> is watching your session.";
+        assert_eq!(plain_text(body, true), "&lt;b&gt;nick&lt;/b&gt; is watching your session.");
+        assert_eq!(plain_text("a & b", true), "a &amp; b");
+        assert_eq!(plain_text(body, false), body);
+    }
+
+    #[test]
+    fn titles_are_plain_text_on_linux() {
+        let title = "<i>admin</i> joined";
+        assert_eq!(plain_text(title, true), "&lt;i&gt;admin&lt;/i&gt; joined");
+        assert_eq!(plain_text(title, false), title);
     }
 
     #[test]

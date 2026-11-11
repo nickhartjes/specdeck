@@ -1,7 +1,8 @@
 //! The links shared in a session, as they passed through the app on their way to the window
 //! (`shared-links` design decision 6). The window asks to open a link by its id, never by its
 //! address, so only a link that is in the session can open, and only after the same check the
-//! host made: a modified host can't make the app open anything else.
+//! host made: a modified host can't make the app open anything else. Links inside session content
+//! are not in the book; `open_content_link` puts them through the same check.
 
 use std::collections::HashMap;
 
@@ -56,9 +57,52 @@ impl LinkBook {
     }
 }
 
+/// Opens a link from session content, such as a document or one of the agent's answers, with
+/// `open` (`confine-window-navigation` design decision 2). These links sit in Markdown that Rust
+/// never parses, so the window names the address; it opens only after the same check as shared
+/// links, in its normalized form.
+pub fn open_content_link(
+    url: &str,
+    open: impl FnOnce(String) -> Result<(), String>,
+) -> Result<(), String> {
+    let url = check_link(url).map_err(|_| String::from("This link can't be opened."))?;
+    open(url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `open_content_link` opened for `url`, or why it refused.
+    fn opened(url: &str) -> Result<Vec<String>, String> {
+        let mut seen = Vec::new();
+        open_content_link(url, |url| {
+            seen.push(url);
+            Ok(())
+        })?;
+        Ok(seen)
+    }
+
+    #[test]
+    fn a_content_link_opens_normalized() {
+        assert_eq!(opened("https://example.com/a"), Ok(vec!["https://example.com/a".into()]));
+        assert_eq!(opened("HTTPS://Example.COM"), Ok(vec!["https://example.com/".into()]));
+    }
+
+    #[test]
+    fn a_content_link_that_fails_the_check_opens_nothing() {
+        let long = format!("https://example.com/{}", "a".repeat(2049 - 20));
+        assert_eq!(long.len(), 2049);
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "http://localhost:3000/",
+            "https://user:pw@example.com/",
+            long.as_str(),
+        ] {
+            assert_eq!(opened(url), Err("This link can't be opened.".into()), "{url}");
+        }
+    }
 
     fn link(id: u32, url: Option<&str>) -> Entry {
         Entry::Link {
