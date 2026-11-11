@@ -26,7 +26,7 @@ Commands the agent runs inherit Claude Code's environment, and with it the token
 - **No way into SpecDeck.** A page in the browser cannot use any of SpecDeck's functions, read its settings or sessions, or type into the agent. The browser loads only `http` and `https` pages, however it is sent there: by Claude, a redirect, a link, a script or going back. So it never shows SpecDeck's own page or a file on your computer, and a page that tries stays where it was. On top of that, SpecDeck grants each of its functions to its own windows by name, a test checks that every function is granted and that the browser's windows are not among them, and a function without a grant fails for every window.
 - **Nothing is kept.** The browser closes when the session ends, and everything it stored goes with it. If SpecDeck restarts, for example to update, the browser is gone and the next tool call starts a new, empty one.
 
-The browser opens only `http` and `https` addresses, and that includes your own computer and your local network, because checking the app on `localhost` is what it is for. Pages Claude opens are input to Claude like any other: a page could hold text meant to steer the agent. Claude Code's own permission rules are your guard against that.
+The browser opens only `http` and `https` addresses, and that includes your own computer and your local network, because checking the app on `localhost` is what it is for. Inside a page, frames the page writes itself (`<iframe srcdoc>`) work too, but `blob:` and `data:` frames do not. Pages Claude opens are input to Claude like any other: a page could hold text meant to steer the agent. Claude Code's own permission rules are your guard against that.
 
 ## Claude Code asks first
 

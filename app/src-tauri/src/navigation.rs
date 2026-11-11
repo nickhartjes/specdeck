@@ -45,11 +45,14 @@ pub fn own_page(url: &Url, app_origin: &Url) -> bool {
         && url.port_or_known_default() == app_origin.port_or_known_default()
 }
 
-/// Whether Claude's browser may load `url`: a web page, or the empty page it starts on. Only the
-/// macOS browser makes windows; the tests check the rule everywhere.
+/// Whether Claude's browser may load `url`: a web page, the empty page it starts on, or a frame a
+/// page writes itself (`<iframe srcdoc>`), which has that page's origin. The rule also sees
+/// frames, and cannot tell them from the page, so `about:srcdoc` is allowed at the top too, where
+/// it is empty. Only the macOS browser makes windows; the tests check the rule everywhere.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn web_page(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https") || url.as_str() == "about:blank"
+    matches!(url.scheme(), "http" | "https")
+        || matches!(url.as_str(), "about:blank" | "about:srcdoc")
 }
 
 #[cfg(test)]
@@ -133,8 +136,10 @@ mod tests {
     }
 
     #[test]
-    fn web_page_is_http_https_and_the_empty_page() {
-        for allowed in ["http://localhost:5173/", "https://example.com/", "about:blank"] {
+    fn web_page_is_http_https_the_empty_page_and_srcdoc_frames() {
+        let allowed =
+            ["http://localhost:5173/", "https://example.com/", "about:blank", "about:srcdoc"];
+        for allowed in allowed {
             assert!(web_page(&url(allowed)), "{allowed}");
         }
         for refused in [
@@ -143,7 +148,7 @@ mod tests {
             "data:text/html,x",
             "blob:https://example.com/0b1c2d3e-0000-4000-8000-000000000000",
             "javascript:alert(1)",
-            "about:srcdoc",
+            "about:config",
         ] {
             assert!(!web_page(&url(refused)), "{refused}");
         }
