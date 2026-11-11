@@ -406,13 +406,19 @@ jobs:
       UPDATES: SpecDeck-arm64.app.tar.gz SpecDeck-x64.app.tar.gz SpecDeck-x64-setup.exe SpecDeck-x86_64.AppImage
     steps:
       # Installed apps then find no update, as when the key was missing from the build: the zipped
-      # macOS apps leave the draft, and publish writes no latest.json without signatures.
+      # macOS apps leave the draft, and publish writes no latest.json without signatures. Deletes
+      # only what is there, so a re-run passes.
       - name: Check for the update key
         if: env.HAS_KEY != 'true'
         run: |
+          set -euo pipefail
           echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; this release has no update files."
-          gh release delete-asset "$GITHUB_REF_NAME" SpecDeck-arm64.app.tar.gz --yes
-          gh release delete-asset "$GITHUB_REF_NAME" SpecDeck-x64.app.tar.gz --yes
+          assets=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
+          for name in SpecDeck-arm64.app.tar.gz SpecDeck-x64.app.tar.gz; do
+            if grep -qxF -- "$name" <<< "$assets"; then
+              gh release delete-asset "$GITHUB_REF_NAME" "$name" --yes
+            fi
+          done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.HAS_KEY == 'true'
         with:
