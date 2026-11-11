@@ -158,10 +158,14 @@ impl FileRule {
     }
 
     /// Whether `dir` is in a repository, cached for the session. `None` when git fails although a
-    /// `.git` is there: a damaged repository stays on the closed side.
+    /// `.git` is there: a damaged repository stays on the closed side. "No repository" is trusted
+    /// only while no `.git` has appeared since, so a `git init` during the session is asked about.
     fn repository(&self, git: &Path, env: &Environment, dir: &Path) -> Option<Repository> {
-        if let Some(known) = self.repositories.lock().unwrap_or_else(|e| e.into_inner()).get(dir) {
-            return Some(*known);
+        let known = self.repositories.lock().unwrap_or_else(|e| e.into_inner()).get(dir).copied();
+        match known {
+            Some(Repository::Yes) => return Some(Repository::Yes),
+            Some(Repository::No) if !has_git_entry(dir) => return Some(Repository::No),
+            _ => {}
         }
         let found = git::command(git, env, dir)
             .args(["rev-parse", "--git-dir"])
@@ -170,7 +174,7 @@ impl FileRule {
             .ok()?;
         let answer = if found.success() {
             Repository::Yes
-        } else if dir.ancestors().any(|parent| parent.join(".git").symlink_metadata().is_ok()) {
+        } else if has_git_entry(dir) {
             return None;
         } else {
             Repository::No
@@ -202,6 +206,11 @@ fn in_private_folder(inside: &Path) -> bool {
             _ => None,
         })
         .any(|name| PRIVATE_FOLDERS.contains(&name.as_str()))
+}
+
+/// Whether `dir` or a folder above it holds a `.git` entry, a folder or a file.
+fn has_git_entry(dir: &Path) -> bool {
+    dir.ancestors().any(|parent| parent.join(".git").symlink_metadata().is_ok())
 }
 
 /// The nearest folder of `path` that exists.
@@ -397,6 +406,20 @@ mod tests {
         write(dir.path(), "a.txt", "a");
         std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
         assert_eq!(rule(dir.path()).decide("a.txt"), Err(NotShown::CheckFailed));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_repository_made_during_the_session_is_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "notes.txt", "x");
+        let rule = rule(dir.path());
+        assert!(rule.shown("notes.txt").is_some(), "in no repository yet");
+        git(dir.path(), &["init", "-q"]);
+        write(dir.path(), ".gitignore", "secret.json\n");
+        write(dir.path(), "secret.json", "{}");
+        assert_eq!(rule.decide("secret.json"), Err(NotShown::Ignored));
+        assert!(rule.shown("notes.txt").is_some());
     }
 
     #[test]
