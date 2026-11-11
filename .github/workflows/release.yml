@@ -118,9 +118,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
-      # Tools pinned in mise.toml: Rust, Node, pnpm, just, cmake.
+      # Tools pinned in mise.toml: Rust, Node, pnpm, just, cmake. This and rust-cache restore main's
+      # caches and save none: a cache saved for a tag can be restored by no later run.
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
-      # Restores main's cache and saves none: a cache saved for a tag can be restored by no later run.
+        with:
+          cache_save: false
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
