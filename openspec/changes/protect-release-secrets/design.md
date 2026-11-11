@@ -53,11 +53,13 @@ draft → package (×4) ─┬→ sign-updates ─┬→ publish → homebrew
   1. Exit with the existing warning when the key is not set.
   2. Sparse checkout of `package.json` and `pnpm-lock.yaml` only, `persist-credentials: false`.
   3. Read the `@tauri-apps/cli` version from the lockfile and install exactly that version into an empty folder with the runner's own npm: `npm install --ignore-scripts --no-save @tauri-apps/cli@<version>`. No mise, no pnpm workspace install, no cache.
-  4. `gh release download` the four update files (the names in `scripts/latest-json.mjs`).
-  5. For each file, `tauri signer sign --app-version <version> <file>`, with the key and password in the environment of this step only.
-  6. `gh release upload` the four `.sig` files.
+  4. Download the four update files (the names in `scripts/latest-json.mjs`) from the `update-<platform>` workflow artifacts the `package` jobs uploaded, not from the draft, and the `sums-*` artifacts (decision 7).
+  5. Fail unless each file's hash equals the one its `package` job recorded. The signed files are verified first: only jobs of this run can write its artifacts, while anyone with write access can replace a draft asset, and a file swapped in before signing would get a valid signature from the real key.
+  6. For each file, `tauri signer sign --app-version <version> <file>`, with the key and password in the environment of this step only.
+  7. `gh release upload --clobber` the four files and their `.sig` files, so the draft holds exactly what was signed.
 - The signing tool is the one piece of third-party code the job cannot avoid. Installing it by exact version without lifecycle scripts keeps it to that.
 - `package` uploads the update files always, signatures never. `publish` is unchanged: it finds the `.sig` files, or warns and publishes without `latest.json`.
+- Accepted limit: `sign-updates` signs what this run's `package` jobs built. A compromised build step can change its own outputs (and `package` has `contents: write`), and they are then signed; a compromised build makes a malicious app either way. What this decision guarantees is that the key cannot be copied out, and that nothing from outside the run gets signed.
 
 Alternatives:
 - **Key only on the `Build the installers` step:** not enough. That step runs every build script and proc macro, which is most of the risk.
@@ -113,9 +115,9 @@ Decision: remove it. The workflow already has this path: a push with the workflo
 - Each `package` job writes the SHA-256 of every file it uploads into `sums-<platform>.txt` and uploads that as a workflow artifact, outside the release.
 - A `checksums` job (`needs: [package, sign-updates]`, `permissions: contents: write, id-token: write, attestations: write`, no environment):
   1. downloads the `sums-*` artifacts and the release's installers and update files;
-  2. fails unless every file's hash equals the one its build job recorded, so a draft asset replaced between the jobs is caught;
-  3. writes `SHA256SUMS` (installers and update files; not the `.sig` files or `latest.json`) and uploads it;
-  4. runs `actions/attest-build-provenance` with `subject-checksums: SHA256SUMS`.
+  2. fails unless every file's hash equals the one its build job recorded, so a draft asset replaced between the jobs is caught (the update files were already checked before signing, decision 1; this covers the other installers);
+  3. writes `SHA256SUMS` (installers and update files; not the `.sig` files, `latest.json` or a `SHA256SUMS` from an earlier attempt, so a re-run passes);
+  4. runs `actions/attest-build-provenance` with `subject-checksums: SHA256SUMS`, then uploads `SHA256SUMS`, so a draft never has checksums without provenance.
 - `publish` gets `needs: [package, image-merge, sign-updates, checksums]`, so a release without checksums or provenance stays a draft.
 - The attestation is made by a job that did not build the files. What it states is true and useful: these hashes were produced by `release.yml` at this tag in this repository. Step 2 ties them to the build jobs.
 - Verifying, as the docs will say: `sha256sum --check --ignore-missing SHA256SUMS`, and `gh attestation verify <file> --repo nickhartjes/specdeck`.

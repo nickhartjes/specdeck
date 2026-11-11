@@ -77,31 +77,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # `platform` names the job's checksums artifact. `rename` lists every file the job
-          # uploads; the update files are among them: on macOS the zipped .app, on Windows and
-          # Linux the installer itself. sign-updates signs them.
+          # `platform` names the job's artifacts. `rename` lists every file the job uploads;
+          # `update` is the one among them that installed apps update from: on macOS the zipped
+          # .app, on Windows and Linux the installer itself. sign-updates signs it.
           - name: macOS arm64
             platform: macos-arm64
             os: macos-latest
             bundles: app,dmg
             rename: 'dmg/*.dmg=SpecDeck-arm64.dmg macos/*.app.tar.gz=SpecDeck-arm64.app.tar.gz'
+            update: SpecDeck-arm64.app.tar.gz
           # Built natively on Intel: cross-compiling the vendored OpenSSL and libdatachannel is fragile.
           - name: macOS x64
             platform: macos-x64
             os: macos-15-intel
             bundles: app,dmg
             rename: 'dmg/*.dmg=SpecDeck-x64.dmg macos/*.app.tar.gz=SpecDeck-x64.app.tar.gz'
+            update: SpecDeck-x64.app.tar.gz
           - name: Windows
             platform: windows
             os: windows-latest
             bundles: nsis
             rename: 'nsis/*.exe=SpecDeck-x64-setup.exe'
+            update: SpecDeck-x64-setup.exe
           # The oldest supported Ubuntu, so the AppImage runs on older distributions too.
           - name: Linux
             platform: linux
             os: ubuntu-22.04
             bundles: appimage,deb
             rename: 'appimage/*.AppImage=SpecDeck-x86_64.AppImage deb/*.deb=SpecDeck-amd64.deb'
+            update: SpecDeck-x86_64.AppImage
     runs-on: ${{ matrix.os }}
     # Not update-signing: no step of this job can read the update key (sign-updates).
     environment: release
@@ -237,6 +241,14 @@ jobs:
           name: sums-${{ matrix.platform }}
           path: sums-${{ matrix.platform }}.txt
           if-no-files-found: error
+
+      # sign-updates signs this copy, not the draft's: only jobs of this run can write artifacts.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: update-${{ matrix.platform }}
+          path: upload/${{ matrix.update }}
+          if-no-files-found: error
+          retention-days: 7
 
   # Each platform builds natively (emulated arm64 would take hours) and is pushed by digest only;
   # image-merge tags the two as one image.
@@ -376,7 +388,9 @@ jobs:
 
   # The only job that can read the update key (update-signing environment). It builds nothing
   # and installs nothing of the project: the Tauri CLI at the lockfile's version, without its
-  # package scripts, signs the update files package uploaded to the draft.
+  # package scripts, signs the update files the package jobs of this run uploaded as artifacts,
+  # once each matches the hash its job recorded, and puts them and their signatures in the draft.
+  # A file of the draft is never signed: anyone with write access can replace one.
   sign-updates:
     name: Sign the update files
     needs: package
@@ -388,6 +402,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+      # The update files of scripts/latest-json.mjs, as the package jobs name them.
+      UPDATES: SpecDeck-arm64.app.tar.gz SpecDeck-x64.app.tar.gz SpecDeck-x64-setup.exe SpecDeck-x86_64.AppImage
     steps:
       # Installed apps then find no update, as when the key was missing from the build: the zipped
       # macOS apps leave the draft, and publish writes no latest.json without signatures.
@@ -420,14 +436,36 @@ jobs:
           echo '{}' > package.json
           npm install --ignore-scripts --no-save --no-audit --no-fund "@tauri-apps/cli@$version"
           echo "$RUNNER_TEMP/cli/node_modules/.bin" >> "$GITHUB_PATH"
-      - name: Download the update files
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: env.HAS_KEY == 'true'
+        with:
+          pattern: update-*
+          merge-multiple: true
+          path: updates
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: env.HAS_KEY == 'true'
+        with:
+          pattern: sums-*
+          merge-multiple: true
+          path: sums
+      - name: Check the update files against the build jobs' hashes
         if: env.HAS_KEY == 'true'
         run: |
-          mkdir -p updates
-          # The update files of scripts/latest-json.mjs.
-          gh release download "$GITHUB_REF_NAME" --dir updates \
-            -p SpecDeck-arm64.app.tar.gz -p SpecDeck-x64.app.tar.gz \
-            -p SpecDeck-x64-setup.exe -p SpecDeck-x86_64.AppImage
+          set -euo pipefail
+          # Git Bash on Windows may mark names with `*` (binary mode); the same hash either way.
+          sed 's/^\([0-9a-f]\{64\}\) [ *]/\1  /' sums/*.txt > recorded.txt
+          for file in $UPDATES; do
+            if [ ! -f "updates/$file" ]; then
+              echo "::error::No $file among the package jobs' artifacts"
+              exit 1
+            fi
+            actual=$(cd updates && sha256sum -- "$file")
+            if ! grep -qxF -- "$actual" recorded.txt; then
+              echo "::error::$file is not the file its package job recorded"
+              exit 1
+            fi
+            echo "$actual"
+          done
       - name: Sign
         if: env.HAS_KEY == 'true'
         working-directory: updates
@@ -437,12 +475,21 @@ jobs:
         run: |
           set -euo pipefail
           # tauri build binds the signature to the app version by itself; signing by hand does not.
-          for file in SpecDeck-arm64.app.tar.gz SpecDeck-x64.app.tar.gz SpecDeck-x64-setup.exe SpecDeck-x86_64.AppImage; do
+          for file in $UPDATES; do
             tauri signer sign --app-version "${GITHUB_REF_NAME#v}" "$file"
           done
-      - name: Upload the signatures
+      # The signed files too, so the draft holds what was signed whatever was put there meanwhile;
+      # checksums then compares every asset with the recorded hashes once more.
+      - name: Upload the update files and signatures
         if: env.HAS_KEY == 'true'
-        run: gh release upload "$GITHUB_REF_NAME" updates/*.sig --clobber
+        working-directory: updates
+        run: |
+          set -euo pipefail
+          files=()
+          for file in $UPDATES; do
+            files+=("$file" "$file.sig")
+          done
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
 
   # SHA256SUMS and a build provenance attestation for every installer and update file, from a job
   # that built nothing, so no build step holds an OIDC token. The draft is checked against what
