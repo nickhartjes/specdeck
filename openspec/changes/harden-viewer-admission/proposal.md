@@ -45,6 +45,7 @@ None.
 
 - `session-sharing`: revoking the code also ends joins in progress and forgets absent viewers; removing a viewer is final; a connection is one viewer; joining has a deadline and a bound.
 - `viewer-requests`: waiting suggestions and links are bounded for the session.
+- `session-streaming`: a viewer whose connection dropped reconnects without the code only while the host has not made a new code since; otherwise they are refused and need the new code.
 
 ## Impact
 
