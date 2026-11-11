@@ -479,8 +479,7 @@ async fn handle(socket: WebSocket, service: Arc<Service>, slot: Slot) {
                         service.handle(&id, message);
                     }
                     Err(_) => {
-                        service.socket_error(SocketError::BadMessage);
-                        service.reply(&id, ServerMessage::Error { code: ErrorCode::BadMessage, room: None });
+                        service.bad_message(&id);
                     }
                 },
                 Some(Err(error)) => {
@@ -605,7 +604,13 @@ impl Service {
                 Some(Burst::PeerRefused),
             ),
             ClientMessage::Signal { connection, payload } => {
-                (inner.relay(from, &connection, payload, now), None)
+                let relayed = inner.relay(from, &connection, payload, now);
+                // A signal for a pair that does not exist has no bucket of its own: it counts
+                // against the sender's messages, as any other message would.
+                if relayed == Err(ErrorCode::UnknownConnection) && !inner.take_message(from, now) {
+                    return;
+                }
+                (relayed, None)
             }
             ClientMessage::TurnCredentials => (inner.turn_credentials(from), None),
         };
@@ -618,8 +623,14 @@ impl Service {
         }
     }
 
-    fn reply(&self, to: &str, message: ServerMessage) {
-        self.inner.lock().unwrap().send(to, message);
+    /// Answers a message that is not one of the protocol's, within the sender's message limit.
+    fn bad_message(&self, from: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        let now = Instant::now();
+        inner.throttle.record(Burst::SocketError(SocketError::BadMessage), now);
+        if inner.take_message(from, now) {
+            inner.send(from, ServerMessage::Error { code: ErrorCode::BadMessage, room: None });
+        }
     }
 
     fn socket_error(&self, kind: SocketError) {

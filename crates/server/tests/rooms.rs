@@ -1064,3 +1064,44 @@ async fn stopping_closes_every_connection() {
     tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap().unwrap();
     assert!(asked.elapsed() < Duration::from_secs(5));
 }
+
+/// Reads answers until the service has been quiet for a while: how many there were, and how many
+/// of them said the sender was rate limited.
+async fn count_answers(client: &mut Client) -> (usize, usize) {
+    let (mut answers, mut limited) = (0, 0);
+    while let Ok(Some(message)) =
+        tokio::time::timeout(Duration::from_millis(300), client.0.next()).await
+    {
+        let message: ServerMessage =
+            serde_json::from_str(message.unwrap().to_text().unwrap()).unwrap();
+        answers += 1;
+        if message == LIMITED {
+            limited += 1;
+        }
+    }
+    (answers, limited)
+}
+
+#[tokio::test]
+async fn a_flood_of_messages_that_are_not_the_protocols_is_cut_off() {
+    let (url, _) = start().await;
+    let mut client = Client::connect(&url).await;
+    for _ in 0..100 {
+        client.0.send(Message::Text("not a message".into())).await.unwrap();
+    }
+    let (answers, limited) = count_answers(&mut client).await;
+    assert!((21..=23).contains(&answers), "{answers} answers");
+    assert_eq!(limited, 1);
+}
+
+#[tokio::test]
+async fn a_flood_of_signals_for_no_connection_is_cut_off() {
+    let (url, _) = start().await;
+    let mut client = Client::connect(&url).await;
+    for _ in 0..100 {
+        client.send(ClientMessage::Signal { connection: "made-up".into(), payload: offer() }).await;
+    }
+    let (answers, limited) = count_answers(&mut client).await;
+    assert!((21..=23).contains(&answers), "{answers} answers");
+    assert_eq!(limited, 1);
+}
