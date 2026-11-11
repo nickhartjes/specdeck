@@ -15,7 +15,7 @@ All of it can be fixed without paid certificates or services.
 
 ## What Changes
 
-- **The update key is used by one job that builds nothing.** The `package` job builds the installers and the update files without the key. A new `sign-updates` job downloads the update files from the draft release and signs them with `tauri signer sign`. The key moves to an environment of its own, `update-signing`, so the build jobs cannot read it at all.
+- **The update key is used by one job that builds nothing.** The `package` job builds the installers and the update files without the key. A new `sign-updates` job takes the update files the build jobs of the same run produced, checks them against the hashes those jobs recorded, and signs them with `tauri signer sign`. The key moves to an environment of its own, `update-signing`, so the build jobs cannot read it at all.
 - **Actions are pinned by commit SHA** in every workflow, with the version in a comment, and Renovate keeps the pins current.
 - **Least privilege for the workflows' tokens.** `ci.yml` and `docs.yml` get a `permissions:` block, `nix.yml` grants `actions: write` only where it saves the cache, and checkouts in jobs that do not push set `persist-credentials: false`.
 - **The Renovate token is removed.** `renovate-nix-hash.yml` pushes with the workflow's own token and starts CI and Nix for the new commit itself, which it already does when the secret is missing. No long-lived token is left to steal or renew.

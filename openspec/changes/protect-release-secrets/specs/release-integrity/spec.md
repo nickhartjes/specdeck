@@ -15,7 +15,11 @@ The update signing key and its password SHALL be available only to the release j
 
 #### Scenario: Signing job
 - **WHEN** the signing job runs for a release tag
-- **THEN** it downloads the update files from the draft release, signs each one, uploads the signatures, and runs no build script, package lifecycle script or cache restore
+- **THEN** it takes the update files the build jobs of the same run produced, not the draft release's copies, fails unless each matches the hash its build job recorded, signs each one, uploads the files and their signatures to the draft, and runs no build script, package lifecycle script or cache restore
+
+#### Scenario: Update file differs from its recorded hash
+- **WHEN** an update file the signing job receives does not match the hash its build job recorded
+- **THEN** the signing job fails before signing anything, and the release stays a draft
 
 #### Scenario: Updates still verify
 - **WHEN** an installed app checks a release whose update files were signed by the signing job
