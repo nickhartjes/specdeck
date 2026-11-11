@@ -1,6 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import type { ViewEvent } from '../api/types';
-import { shownName, shownNames } from './names';
+import vectorJson from '../../../../crates/protocol/tests/fixtures/shown-names.json?raw';
+import { invisible, shownName, shownNames } from './names';
+
+/** The cases `control::shown_name` in crates/protocol is tested against too. */
+const vector = JSON.parse(vectorJson) as { hidden: [string, string][]; shown: string[]; names: { name: string; shown: string | null }[] };
+
+describe('the shared cases', () => {
+  it('leave out exactly the listed characters', () => {
+    const ranges = vector.hidden.map(([first, last]) => [parseInt(first, 16), parseInt(last, 16)] as const);
+    for (let code = 0; code <= 0x10ffff; code++) {
+      if (code >= 0xd800 && code <= 0xdfff) continue;
+      const listed = ranges.some(([first, last]) => code >= first && code <= last);
+      if (invisible(String.fromCodePoint(code)) !== listed) expect.fail(`U+${code.toString(16).toUpperCase()}`);
+    }
+    for (const text of vector.shown) expect([...text].some(invisible)).toBe(false);
+  });
+
+  it('give the same names as the host', () => {
+    for (const { name, shown } of vector.names) expect(shownName(name), JSON.stringify(name)).toBe(shown);
+  });
+});
 
 describe('shown names', () => {
   it('drop zero-width and text-direction characters', () => {

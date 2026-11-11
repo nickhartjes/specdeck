@@ -1,0 +1,40 @@
+{
+  "comment": "Names as others see them (control::shown_name, app/ui/src/model/names.ts). `hidden` lists every range of characters left out: Unicode's Default_Ignorable_Code_Point and Bidi_Control, which includes the Hangul fillers. Both test suites read this file, so the two lists cannot drift apart.",
+  "hidden": [
+    ["00AD", "00AD"],
+    ["034F", "034F"],
+    ["061C", "061C"],
+    ["115F", "1160"],
+    ["17B4", "17B5"],
+    ["180B", "180F"],
+    ["200B", "200F"],
+    ["202A", "202E"],
+    ["2060", "206F"],
+    ["3164", "3164"],
+    ["FE00", "FE0F"],
+    ["FEFF", "FEFF"],
+    ["FFA0", "FFA0"],
+    ["1BCA0", "1BCA3"],
+    ["1D173", "1D17A"],
+    ["E0000", "E0FFF"]
+  ],
+  "shown": ["a", "Z", "é", "名", " ", "-", "¬", "؀", "ᅡ", "⁰", "ㅥ", "︐", "ﾡ"],
+  "names": [
+    { "name": "nick", "shown": "nick" },
+    { "name": " nick ", "shown": "nick" },
+    { "name": "ni​ck", "shown": "nick" },
+    { "name": "‮kcin", "shown": "kcin" },
+    { "name": "⁦nick⁩", "shown": "nick" },
+    { "name": "nick﻿", "shown": "nick" },
+    { "name": "nick؜", "shown": "nick" },
+    { "name": "ni­ck", "shown": "nick" },
+    { "name": "nickㅤ", "shown": "nick" },
+    { "name": "nickᅟᅠﾠ", "shown": "nick" },
+    { "name": "n͏i᠎ck️", "shown": "nick" },
+    { "name": "nick󠁁󠁿", "shown": "nick" },
+    { "name": "ㅤ", "shown": null },
+    { "name": "ㅤ ㅤ", "shown": null },
+    { "name": "​﻿⁦", "shown": null },
+    { "name": "­؜", "shown": null }
+  ]
+}
