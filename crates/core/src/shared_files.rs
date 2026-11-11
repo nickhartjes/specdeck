@@ -167,19 +167,20 @@ pub fn clean_name(name: &str) -> String {
     name
 }
 
-/// Whether Windows reserves `name` for a device: `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9` or
-/// `LPT1` to `LPT9` before its first `.`, compared without case.
+/// Whether Windows reserves `name` for a device: `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`,
+/// `CONOUT$`, `COM1` to `COM9`, `COM¹` to `COM³`, or the same for `LPT`, before its first `.`
+/// and any spaces in front of that, compared without case.
 fn is_device_name(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
-    matches!(
-        stem.as_bytes(),
-        b"CON"
-            | b"PRN"
-            | b"AUX"
-            | b"NUL"
-            | [b'C', b'O', b'M', b'1'..=b'9']
-            | [b'L', b'P', b'T', b'1'..=b'9']
-    )
+    let stem = name.split('.').next().unwrap_or_default().trim_end_matches(' ');
+    let stem = stem.to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+    let Some(number) = stem.strip_prefix("COM").or_else(|| stem.strip_prefix("LPT")) else {
+        return false;
+    };
+    let mut digits = number.chars();
+    matches!((digits.next(), digits.next()), (Some('1'..='9' | '¹' | '²' | '³'), None))
 }
 
 /// Names an agent reads as instructions in the folder it works in, compared without case.
@@ -660,10 +661,17 @@ mod tests {
             ("COM1", "_COM1"),
             ("lpt9.log", "_lpt9.log"),
             ("dir/aux.tar.gz", "_aux.tar.gz"),
+            ("CONIN$", "_CONIN$"),
+            ("conout$.txt", "_conout$.txt"),
+            ("COM¹", "_COM¹"),
+            ("com³.log", "_com³.log"),
+            ("LPT².md", "_LPT².md"),
+            ("NUL .txt", "_NUL .txt"),
+            ("con  .md", "_con  .md"),
         ] {
             assert_eq!(clean_name(name), cleaned, "{name}");
         }
-        for name in ["CONSOLE.md", "null.txt", "COM10.txt", "LPT0", "xCON.md"] {
+        for name in ["CONSOLE.md", "null.txt", "COM10.txt", "LPT0", "xCON.md", "COM⁴", "CONIN"] {
             assert_eq!(clean_name(name), name, "{name}");
         }
         let long_device = format!("CON.{}", "x".repeat(300));

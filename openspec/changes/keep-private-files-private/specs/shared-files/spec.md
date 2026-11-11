@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: A shared file's name is only a name
-A shared file's name SHALL be shown as text, never as a path. Folders, path separators, control characters and leading dots SHALL be removed from it, and it SHALL be cut to 255 bytes. A name that is empty afterwards SHALL be replaced by `file`, with an extension that fits its type. A name that Windows reserves for a device (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, with or without an extension, compared without case) SHALL get a `_` in front, on every platform, so everyone sees the same name.
+A shared file's name SHALL be shown as text, never as a path. Folders, path separators, control characters and leading dots SHALL be removed from it, and it SHALL be cut to 255 bytes. A name that is empty afterwards SHALL be replaced by `file`, with an extension that fits its type. A name that Windows reserves for a device (`CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1` to `COM9`, `COM¹` to `COM³`, `LPT1` to `LPT9`, `LPT¹` to `LPT³`, with or without an extension and with or without spaces before it, compared without case) SHALL get a `_` in front, on every platform, so everyone sees the same name.
 
 #### Scenario: Name with a path
 - **WHEN** a viewer's app sends a file named `../../.ssh/config.md`
