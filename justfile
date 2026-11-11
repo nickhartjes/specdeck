@@ -31,6 +31,7 @@ check:
 [unix]
 check-scripts:
     scripts/check-workflows.sh
+    scripts/check-workflows.test.sh
     scripts/render-cask.test.sh
     scripts/check-relay-manifests.sh
     scripts/check-pnpm-version.sh
