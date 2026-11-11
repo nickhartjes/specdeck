@@ -393,6 +393,10 @@ async fn nothing_to_join_with_and_no_addresses() {
 
 // Rooms kept for a host that is away (room-ownership).
 
+/// Claims as long as the app's: 64 hex characters.
+const SECRET: &str = "5ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7";
+const OTHER: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 fn host_with(room: &str, claim: Option<&str>) -> ClientMessage {
     ClientMessage::Host { room: room.into(), claim: claim.map(Into::into) }
 }
@@ -422,12 +426,12 @@ async fn a_host_goes_away_and_returns() {
     let log = Log::default();
     let _guard = log.capture(Level::INFO, Format::Json);
     let url = start_with(Config::default()).await;
-    open_claimed(&url, "r", "secret").await.close().await;
+    open_claimed(&url, "r", SECRET).await.close().await;
     log.until("room.away").await;
     let mut viewer = Client::connect(&url).await;
     viewer.send(ClientMessage::Join { room: "r".into() }).await;
     log.until("peer.waiting").await;
-    let _host = open_claimed(&url, "r", "secret").await;
+    let _host = open_claimed(&url, "r", SECRET).await;
     assert!(matches!(viewer.recv().await, ServerMessage::Joined { .. }));
 
     let fields = ["room", "peer", "viewers", "rooms", "waiting", "away_s"];
@@ -446,8 +450,8 @@ async fn a_host_takes_its_room_from_a_connection_that_is_still_open() {
     let log = Log::default();
     let _guard = log.capture(Level::INFO, Format::Json);
     let url = start_with(Config::default()).await;
-    let _old = open_claimed(&url, "r", "secret").await;
-    let _new = open_claimed(&url, "r", "secret").await;
+    let _old = open_claimed(&url, "r", SECRET).await;
+    let _new = open_claimed(&url, "r", SECRET).await;
     let reclaimed = log.named("room.reclaimed");
     assert_eq!(
         event(&reclaimed[0], &["room", "away_s", "waiting"]),
@@ -462,7 +466,7 @@ async fn a_host_does_not_return() {
     let _guard = log.capture(Level::INFO, Format::Json);
     let config = Config { room_hold: Duration::from_millis(200), ..Config::default() };
     let url = start_with(config).await;
-    open_claimed(&url, "r", "secret").await.close().await;
+    open_claimed(&url, "r", SECRET).await.close().await;
     log.until("room.closed").await;
     let closed = log.named("room.closed");
     assert_eq!(closed[0]["why"], "hold_expired");
@@ -471,7 +475,7 @@ async fn a_host_does_not_return() {
     let log = Log::default();
     let _guard = log.capture(Level::INFO, Format::Json);
     let url = start_with(Config { max_rooms: 1, ..Config::default() }).await;
-    open_claimed(&url, "kept", "secret").await.close().await;
+    open_claimed(&url, "kept", SECRET).await.close().await;
     log.until("room.away").await;
     let _new = open(&url, "new").await;
     let closed = log.named("room.closed");
@@ -514,7 +518,7 @@ async fn limits_on_messages_and_waiting_viewers() {
     let _guard = log.capture(Level::INFO, Format::Json);
     let config = Config { joins_per_room: 100, ..Config::default() };
     let url = start_with(config).await;
-    open_claimed(&url, "r", "secret").await.close().await;
+    open_claimed(&url, "r", SECRET).await.close().await;
     log.until("room.away").await;
     let mut waiting = Vec::new();
     for _ in 0..41 {
@@ -542,7 +546,7 @@ async fn kept_rooms_count_in_the_load_summary() {
     let _guard = log.capture(Level::INFO, Format::Json);
     let config = Config { stats_interval: Duration::from_millis(100), ..Config::default() };
     let url = start_with(config).await;
-    open_claimed(&url, "r", "secret").await.close().await;
+    open_claimed(&url, "r", SECRET).await.close().await;
     log.until("room.away").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     let stats = log.named("service.stats");
@@ -583,12 +587,12 @@ async fn nothing_of_a_claim_and_no_ids_while_a_host_is_away() {
         let _guard = log.capture(Level::DEBUG, format);
         let url = start_with(Config::default()).await;
         let room = "MARKER-ROOM-0123456789abcdef";
-        let claim = "MARKER-CLAIM-0123456789abcdef";
+        let claim = "MARKER-CLAIM-0123456789abcdef0123456789";
         open_claimed(&url, room, claim).await.close().await;
         log.until("room.away").await;
         // Someone without the claim is refused.
         assert_eq!(
-            refused(&url, host_with(room, Some("MARKER-GUESS"))).await,
+            refused(&url, host_with(room, Some("MARKER-GUESS-0123456789abcdef0123456789"))).await,
             ErrorCode::RoomTaken
         );
         let mut viewer = Client::connect(&url).await;

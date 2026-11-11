@@ -617,6 +617,10 @@ async fn an_oversized_frame_closes_the_connection() {
 // Room ownership (room-ownership): claims, rooms kept for a host that is away, and the viewers
 // that wait for it.
 
+/// Claims as long as the app's: 64 hex characters.
+const SECRET: &str = "5ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7e75ec7";
+const OTHER: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 fn host_with(room: &str, claim: Option<&str>) -> ClientMessage {
     ClientMessage::Host { room: room.into(), claim: claim.map(Into::into) }
 }
@@ -656,8 +660,8 @@ fn hold(hold: Duration) -> Config {
 #[tokio::test]
 async fn the_claim_takes_a_room_from_another_connection() {
     let (url, _) = start().await;
-    let mut first = open_claimed(&url, "r", "secret").await;
-    let mut second = open_claimed(&url, "r", "secret").await;
+    let mut first = open_claimed(&url, "r", SECRET).await;
+    let mut second = open_claimed(&url, "r", SECRET).await;
     let mut viewer = Client::connect(&url).await;
     viewer.send(ClientMessage::Join { room: "r".into() }).await;
     let ServerMessage::Joined { connection } = viewer.recv().await else { panic!() };
@@ -668,8 +672,8 @@ async fn the_claim_takes_a_room_from_another_connection() {
 #[tokio::test]
 async fn without_the_claim_a_held_room_is_taken() {
     let (url, _) = start().await;
-    let _host = open_claimed(&url, "r", "secret").await;
-    for claim in [None, Some("other")] {
+    let _host = open_claimed(&url, "r", SECRET).await;
+    for claim in [None, Some(OTHER)] {
         let mut intruder = Client::connect(&url).await;
         intruder.send(host_with("r", claim)).await;
         assert_eq!(intruder.recv().await, taken("r"));
@@ -684,7 +688,7 @@ async fn without_the_claim_a_held_room_is_taken() {
 async fn a_room_opened_without_a_claim_cannot_be_taken() {
     let (url, _) = start().await;
     let _host = open(&url, "r").await;
-    for claim in ["", "secret"] {
+    for claim in [SECRET, OTHER] {
         let mut other = Client::connect(&url).await;
         other.send(host_with("r", Some(claim))).await;
         assert_eq!(other.recv().await, taken("r"));
@@ -694,13 +698,13 @@ async fn a_room_opened_without_a_claim_cannot_be_taken() {
 #[tokio::test]
 async fn viewers_of_a_room_that_moves_are_told_their_host_left() {
     let (url, _) = start().await;
-    let mut first = open_claimed(&url, "r", "secret").await;
+    let mut first = open_claimed(&url, "r", SECRET).await;
     let mut viewer = Client::connect(&url).await;
     viewer.send(ClientMessage::Join { room: "r".into() }).await;
     let ServerMessage::Joined { connection } = viewer.recv().await else { panic!() };
     assert!(matches!(first.recv().await, ServerMessage::ViewerJoined { .. }));
 
-    let _second = open_claimed(&url, "r", "secret").await;
+    let _second = open_claimed(&url, "r", SECRET).await;
     assert_eq!(viewer.recv().await, ServerMessage::PeerLeft { connection: connection.clone() });
     assert_eq!(first.recv().await, ServerMessage::PeerLeft { connection: connection.clone() });
     // Neither side can reach the other through the service any more.
@@ -710,6 +714,19 @@ async fn viewers_of_a_room_that_moves_are_told_their_host_left() {
         ServerMessage::Error { code: ErrorCode::UnknownConnection, room: None }
     );
     viewer.expect_silence().await;
+}
+
+#[tokio::test]
+async fn a_short_claim_is_refused() {
+    let (url, service) = start().await;
+    for claim in ["", "1", &"c".repeat(31)] {
+        let mut host = Client::connect(&url).await;
+        host.send(host_with("r", Some(claim))).await;
+        let refused = ServerMessage::Error { code: ErrorCode::BadMessage, room: None };
+        assert_eq!(host.recv().await, refused);
+    }
+    assert_eq!(service.room_count(), 0);
+    let _host = open_claimed(&url, "r", &"c".repeat(32)).await;
 }
 
 #[tokio::test]
@@ -726,34 +743,34 @@ async fn a_long_claim_is_refused() {
 #[tokio::test]
 async fn a_host_returns_to_its_kept_room() {
     let (url, service) = start_with(hold(Duration::from_secs(5))).await;
-    drop(open_claimed(&url, "r", "secret").await);
+    drop(open_claimed(&url, "r", SECRET).await);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(service.room_count(), 1);
     // Someone else, without the claim, is refused.
     let mut intruder = Client::connect(&url).await;
     intruder.send(host_with("r", None)).await;
     assert_eq!(intruder.recv().await, taken("r"));
-    intruder.send(host_with("r", Some("guess"))).await;
+    intruder.send(host_with("r", Some(OTHER))).await;
     assert_eq!(intruder.recv().await, taken("r"));
     // The host, with it, gets its room back.
-    let _host = open_claimed(&url, "r", "secret").await;
+    let _host = open_claimed(&url, "r", SECRET).await;
     assert_eq!(service.room_count(), 1);
 }
 
 #[tokio::test]
 async fn a_kept_room_is_released_after_the_hold_time() {
     let (url, service) = start_with(hold(Duration::from_millis(300))).await;
-    drop(open_claimed(&url, "r", "secret").await);
+    drop(open_claimed(&url, "r", SECRET).await);
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(service.room_count(), 1);
     until_rooms(&service, 0).await;
-    let _anyone = open_claimed(&url, "r", "another").await;
+    let _anyone = open_claimed(&url, "r", OTHER).await;
 }
 
 #[tokio::test]
 async fn a_room_the_host_closed_is_not_kept() {
     let (url, service) = start().await;
-    let mut host = open_claimed(&url, "r", "secret").await;
+    let mut host = open_claimed(&url, "r", SECRET).await;
     host.send(ClientMessage::CloseRoom { room: "r".into() }).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     drop(host);
@@ -768,7 +785,7 @@ async fn nothing_is_kept_without_a_claim_or_a_hold_time() {
     until_rooms(&service, 0).await;
 
     let (url, service) = start_with(hold(Duration::ZERO)).await;
-    drop(open_claimed(&url, "r", "secret").await);
+    drop(open_claimed(&url, "r", SECRET).await);
     until_rooms(&service, 0).await;
     assert_eq!(join(&url, "r").await, NOT_FOUND);
 }
@@ -776,7 +793,7 @@ async fn nothing_is_kept_without_a_claim_or_a_hold_time() {
 /// A room kept for its host, which left: the service, and a closure that brings the host back.
 async fn away(config: Config) -> (String, Arc<Service>) {
     let (url, service) = start_with(config).await;
-    drop(open_claimed(&url, "r", "secret").await);
+    drop(open_claimed(&url, "r", SECRET).await);
     tokio::time::sleep(Duration::from_millis(100)).await;
     (url, service)
 }
@@ -787,7 +804,7 @@ async fn a_viewer_waits_for_its_host_to_return() {
     let mut viewer = Client::connect(&url).await;
     viewer.send(ClientMessage::Join { room: "r".into() }).await;
     viewer.expect_silence().await;
-    let mut host = open_claimed(&url, "r", "secret").await;
+    let mut host = open_claimed(&url, "r", SECRET).await;
     let ServerMessage::Joined { connection } = viewer.recv().await else { panic!() };
     assert_eq!(host.recv().await, ServerMessage::ViewerJoined { room: "r".into(), connection });
 }
@@ -801,7 +818,7 @@ async fn a_waiting_viewer_gets_relay_credentials_once_joined() {
     // Longer than the grace for credentials asked before joining.
     tokio::time::sleep(Duration::from_millis(500)).await;
     viewer.expect_silence().await;
-    let _host = open_claimed(&url, "r", "secret").await;
+    let _host = open_claimed(&url, "r", SECRET).await;
     assert!(matches!(viewer.recv().await, ServerMessage::Joined { .. }));
     assert!(matches!(viewer.recv().await, ServerMessage::TurnCredentials { .. }));
 }
@@ -835,7 +852,7 @@ async fn a_viewer_that_stopped_waiting_is_not_joined() {
     gone.expect_silence().await;
     drop(gone);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let mut host = open_claimed(&url, "r", "secret").await;
+    let mut host = open_claimed(&url, "r", SECRET).await;
     host.expect_silence().await;
 }
 
@@ -861,9 +878,9 @@ async fn joins_for_a_kept_room_are_limited_as_for_an_open_one() {
 #[tokio::test]
 async fn a_new_room_releases_the_room_kept_longest() {
     let (url, service) = start_with(Config { max_rooms: 3, ..Config::default() }).await;
-    drop(open_claimed(&url, "kept-1", "secret").await);
+    drop(open_claimed(&url, "kept-1", SECRET).await);
     tokio::time::sleep(Duration::from_millis(50)).await;
-    drop(open_claimed(&url, "kept-2", "secret").await);
+    drop(open_claimed(&url, "kept-2", SECRET).await);
     let _live = open(&url, "live").await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     let mut waiting = Client::connect(&url).await;
@@ -877,7 +894,7 @@ async fn a_new_room_releases_the_room_kept_longest() {
     let _newer = open(&url, "newer").await;
     // Only open rooms are left.
     let mut refused = Client::connect(&url).await;
-    refused.send(host_with("newest", Some("secret"))).await;
+    refused.send(host_with("newest", Some(SECRET))).await;
     assert_eq!(refused.recv().await, BUSY);
 }
 
@@ -895,7 +912,7 @@ fn liveness() -> Config {
 async fn a_connection_that_stops_answering_is_closed() {
     let (url, service) = start_with(liveness()).await;
     // Never read from again, so it answers no pings.
-    let _silent = open_claimed(&url, "r", "secret").await;
+    let _silent = open_claimed(&url, "r", SECRET).await;
     assert_eq!(service.connection_count(), 1);
     let started = tokio::time::Instant::now();
     while service.connection_count() > 0 {
@@ -905,7 +922,7 @@ async fn a_connection_that_stops_answering_is_closed() {
     assert!(started.elapsed() >= Duration::from_millis(250));
     // Its room is kept for it, as for any host that left.
     assert_eq!(service.room_count(), 1);
-    let _back = open_claimed(&url, "r", "secret").await;
+    let _back = open_claimed(&url, "r", SECRET).await;
 }
 
 #[tokio::test]
@@ -955,14 +972,14 @@ async fn a_flood_of_room_requests_is_cut_off() {
 async fn a_normal_session_is_never_rate_limited() {
     let (url, _) = start_with(turn_config()).await;
     let mut host = Client::connect(&url).await;
-    host.send(host_with("code-0", Some("secret"))).await;
-    host.send(host_with("rejoin", Some("secret"))).await;
+    host.send(host_with("code-0", Some(SECRET))).await;
+    host.send(host_with("rejoin", Some(SECRET))).await;
     host.send(ClientMessage::TurnCredentials).await;
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     assert!(matches!(host.recv().await, ServerMessage::TurnCredentials { .. }));
     for i in 1..=3 {
-        host.send(host_with(&format!("code-{i}"), Some("secret"))).await;
+        host.send(host_with(&format!("code-{i}"), Some(SECRET))).await;
         host.send(ClientMessage::CloseRoom { room: format!("code-{}", i - 1) }).await;
         assert!(matches!(host.recv().await, ServerMessage::RoomOpened { .. }));
     }
@@ -986,7 +1003,7 @@ async fn asking_for_rooms_that_exist_counts_as_guessing() {
     let (url, _) = start_with(config).await;
     let _held = Client::connect_from(&url, "198.51.100.1").await;
     let mut owner = Client::connect_from(&url, "198.51.100.1").await;
-    owner.send(host_with("held", Some("secret"))).await;
+    owner.send(host_with("held", Some(SECRET))).await;
     assert!(matches!(owner.recv().await, ServerMessage::RoomOpened { .. }));
 
     let mut prober = Client::connect_from(&url, "203.0.113.7").await;
@@ -1014,7 +1031,7 @@ async fn taking_a_room_back_is_not_guessing() {
     let config = Config { failed_joins_per_ip: 1, ..Config::default() };
     let (url, _) = start_with(config).await;
     for _ in 0..3 {
-        let _host = open_claimed(&url, "r", "secret").await;
+        let _host = open_claimed(&url, "r", SECRET).await;
     }
     assert_eq!(join(&url, "missing").await, NOT_FOUND);
 }

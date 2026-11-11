@@ -11,9 +11,10 @@ use crate::signal_auth::SignedDescription;
 #[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub enum ClientMessage {
     /// The host opens a room. A host may hold several rooms while it rotates its code. `claim` is
-    /// a secret of the host's own choosing: a connection that presents it may take the room over
-    /// from another connection, or back after the host was away. Older hosts send none, and older
-    /// services ignore it.
+    /// a secret of the host's own choosing, 32 to 64 bytes (the app sends 32 random bytes as 64
+    /// hex characters); the service refuses any other length as a bad message. A connection that
+    /// presents it may take the room over from another connection, or back after the host was
+    /// away. Older hosts send none, and older services ignore it.
     Host {
         room: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]

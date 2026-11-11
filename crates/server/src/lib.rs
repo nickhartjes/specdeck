@@ -49,7 +49,8 @@ const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 const SOCKET_BUFFER_BYTES: usize = 8 * 1024;
 /// Longest room id. The app's are 32 hex characters.
 const MAX_ROOM_BYTES: usize = 64;
-/// Longest claim. The app's are 64 hex characters.
+/// Shortest and longest claim. The app's are 64 hex characters; a short one could be guessed.
+const MIN_CLAIM_BYTES: usize = 32;
 const MAX_CLAIM_BYTES: usize = 64;
 /// Rooms one host connection may hold. The app holds at most 3: its rejoin room, and its old and
 /// new code's rooms while it replaces the code.
@@ -741,7 +742,9 @@ fn check_room(room: &str) -> Result<(), ErrorCode> {
 
 fn check_claim(claim: Option<&str>) -> Result<(), ErrorCode> {
     match claim {
-        Some(claim) if claim.len() > MAX_CLAIM_BYTES => Err(ErrorCode::BadMessage),
+        Some(claim) if !(MIN_CLAIM_BYTES..=MAX_CLAIM_BYTES).contains(&claim.len()) => {
+            Err(ErrorCode::BadMessage)
+        }
         _ => Ok(()),
     }
 }
