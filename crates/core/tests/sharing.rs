@@ -2369,9 +2369,14 @@ async fn next_accepted(
 /// A `host` a scripted service got: the connection's number, the room, the claim, and when.
 type HostSeen = (usize, String, Option<String>, tokio::time::Instant);
 
+/// How a scripted service answers a `host`: given which room it is (0 for the first room it was
+/// asked for, the code's room) and how many times it was asked for it, an error, or none to open
+/// it.
+type Script =
+    Arc<dyn Fn(usize, usize) -> Option<specdeck_protocol::signalling::ErrorCode> + Send + Sync>;
+
 /// An older sharing service, scripted: it ignores the claim, names no room in its errors, and
-/// says another connection holds the `taken`th room it is asked for (0 for the code's room, 1
-/// for the rejoin room).
+/// answers each `host` as its script says.
 struct Scripted {
     url: String,
     /// Every `host` it got.
@@ -2381,15 +2386,23 @@ struct Scripted {
 }
 
 impl Scripted {
+    /// Says another connection holds the `taken`th room it is asked for (0 for the code's room,
+    /// 1 for the rejoin room).
     async fn start(taken: Option<usize>) -> Scripted {
+        use specdeck_protocol::signalling::ErrorCode;
+        Self::with(Arc::new(move |nth, _| (Some(nth) == taken).then_some(ErrorCode::RoomTaken)))
+            .await
+    }
+
+    async fn with(script: Script) -> Scripted {
         use futures_util::{SinkExt, StreamExt};
-        use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage};
+        use specdeck_protocol::signalling::{ClientMessage, ServerMessage};
         use tokio_tungstenite::tungstenite::Message;
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/signal", listener.local_addr().unwrap());
         let hosts = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let rooms = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let rooms = Arc::new(std::sync::Mutex::new(Vec::<(String, usize)>::new()));
         let (close, closing) = tokio::sync::watch::channel(0);
         let recorded = hosts.clone();
         tokio::spawn(async move {
@@ -2397,8 +2410,8 @@ impl Scripted {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
                 connection += 1;
-                let (hosts, rooms, mut closing) =
-                    (recorded.clone(), rooms.clone(), closing.clone());
+                let (hosts, rooms, mut closing, script) =
+                    (recorded.clone(), rooms.clone(), closing.clone(), script.clone());
                 closing.mark_unchanged();
                 tokio::spawn(async move {
                     let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
@@ -2417,17 +2430,21 @@ impl Scripted {
                         };
                         let now = tokio::time::Instant::now();
                         hosts.lock().unwrap().push((connection, room.clone(), claim, now));
-                        let nth = {
+                        let (nth, asked) = {
                             let mut rooms = rooms.lock().unwrap();
-                            if !rooms.contains(&room) {
-                                rooms.push(room.clone());
-                            }
-                            rooms.iter().position(|r| *r == room)
+                            let nth = match rooms.iter().position(|(r, _)| *r == room) {
+                                Some(nth) => nth,
+                                None => {
+                                    rooms.push((room.clone(), 0));
+                                    rooms.len() - 1
+                                }
+                            };
+                            rooms[nth].1 += 1;
+                            (nth, rooms[nth].1)
                         };
-                        let answer = if nth == taken {
-                            ServerMessage::Error { code: ErrorCode::RoomTaken, room: None }
-                        } else {
-                            ServerMessage::RoomOpened { room }
+                        let answer = match script(nth, asked) {
+                            Some(code) => ServerMessage::Error { code, room: None },
+                            None => ServerMessage::RoomOpened { room },
                         };
                         let json = serde_json::to_string(&answer).unwrap();
                         if socket.send(Message::Text(json.into())).await.is_err() {
@@ -2506,4 +2523,33 @@ async fn an_older_service_lets_the_host_open_its_rooms_again() {
     assert_eq!(hosts[4].0, 2);
     let claim = hosts[0].2.clone().expect("a claim");
     assert!(hosts.iter().all(|(.., c, _)| c.as_ref() == Some(&claim)), "{hosts:?}");
+}
+
+/// A service that refuses the code's room as rate-limited, as it does while the host's network
+/// asked for too many rooms that exist: the host shows sharing as unavailable, asks for the room
+/// again 15 to 30 seconds later on the same connection, and gets its code with no new one.
+#[tokio::test(start_paused = true)]
+async fn a_rate_limited_code_room_is_asked_for_again_and_keeps_the_code() {
+    use specdeck_protocol::signalling::ErrorCode;
+    let script: Script =
+        Arc::new(|nth, asked| (nth == 0 && asked == 1).then_some(ErrorCode::RateLimited));
+    let service = Scripted::with(script).await;
+    let (_sharing, mut events, _dir) = share_log(&service.url);
+    tokio::time::timeout(PAUSED_WAIT, unavailable(&mut events)).await.unwrap();
+    // Longer than `ready_unreplaced` waits.
+    let code = match tokio::time::timeout(PAUSED_WAIT, events.recv()).await.unwrap() {
+        Some(SharingEvent::Ready { code }) => code,
+        other => panic!("{other:?}"),
+    };
+
+    let hosts = service.hosts_until(3).await;
+    assert_eq!(hosts.len(), 3, "{hosts:?}");
+    let (code_room, rejoin) = (&hosts[0].1, &hosts[1].1);
+    assert_ne!(code_room, rejoin);
+    assert_eq!(&hosts[2].1, code_room, "the same room again");
+    assert_eq!(code.keys().room_id, *code_room);
+    let gap = hosts[2].3 - hosts[0].3;
+    assert!(gap >= Duration::from_secs(15) && gap <= Duration::from_millis(30_100), "{gap:?}");
+    assert!(hosts.iter().all(|(connection, ..)| *connection == 1), "{hosts:?}");
+    assert!(events.try_recv().is_err(), "nothing else");
 }

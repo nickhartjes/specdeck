@@ -82,6 +82,19 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// (`room-ownership` design decision 8).
 const REJOIN_RETRY: Duration = Duration::from_secs(30);
 
+/// A room the service refused as rate-limited is asked for again after this, plus up to
+/// `RATE_LIMITED_JITTER`, so hosts behind one address do not all come back at once.
+const RATE_LIMITED_RETRY: Duration = Duration::from_secs(15);
+const RATE_LIMITED_JITTER: Duration = Duration::from_secs(15);
+
+/// An unnamed `rate-limited` or `bad-message` answers the oldest `host` only if that was sent
+/// this recently; older, it is about some other message.
+const ANSWER_WITHIN: Duration = Duration::from_secs(10);
+
+/// A `host` with no answer after this is taken off the queue, and its room asked for again if
+/// the host still wants it.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Debug)]
 pub struct SharingConfig {
     /// `ws://` or `wss://…/signal`.
@@ -476,6 +489,13 @@ struct Upload {
     group: &'static str,
 }
 
+/// A `host` sent on this connection that has no answer yet, and when it was sent.
+#[derive(Debug)]
+struct Asked {
+    room: String,
+    at: Instant,
+}
+
 struct Host {
     view: SessionView,
     config: SharingConfig,
@@ -489,9 +509,10 @@ struct Host {
     /// service (`room-ownership` design decision 1).
     claim: String,
     /// The rooms asked for on this connection that have no answer yet, oldest first.
-    pending: VecDeque<String>,
-    /// When to ask for the rejoin room again, while another connection holds it.
-    rejoin_retry: Option<Instant>,
+    pending: VecDeque<Asked>,
+    /// Rooms to ask for again on this connection, and when: the rejoin room while another
+    /// connection holds it, and a room the service refused as rate-limited.
+    retries: Vec<(String, Instant)>,
     signalling: Option<SignallingSender>,
     ice_servers: Vec<String>,
     /// When the TURN credentials in `ice_servers` stop working.
@@ -797,7 +818,7 @@ impl Host {
             rejoin_room: hex(&rejoin_room),
             claim: hex(&claim),
             pending: VecDeque::new(),
-            rejoin_retry: None,
+            retries: Vec::new(),
             signalling: None,
             ice_servers,
             credentials_expire: None,
@@ -834,7 +855,7 @@ impl Host {
                 service = self.start_connecting();
             }
             let time_up = self.asks.deadline();
-            let rejoin_at = self.rejoin_retry;
+            let room_check = self.next_room_check();
             tokio::select! {
                 command = commands.recv() => match command {
                     Some(Command::NewCode) => self.rotate_code(),
@@ -881,9 +902,9 @@ impl Host {
                 _ = tokio::time::sleep_until(time_up.unwrap_or(next_attempt)), if time_up.is_some() => {
                     self.close_read(true);
                 }
-                _ = tokio::time::sleep_until(rejoin_at.unwrap_or(next_attempt)), if rejoin_at.is_some() => {
-                    self.rejoin_retry = None;
-                    self.open_room(self.rejoin_room.clone());
+                // A room is due to be asked for again, or a `host` went unanswered too long.
+                _ = tokio::time::sleep_until(room_check.unwrap_or(next_attempt)), if room_check.is_some() => {
+                    self.check_rooms();
                 }
                 _ = traffic.tick() => {
                     self.traffic.report_host();
@@ -992,7 +1013,7 @@ impl Host {
         self.signalling = Some(sender);
         // A new connection has answered nothing yet.
         self.pending.clear();
-        self.rejoin_retry = None;
+        self.retries.clear();
         self.open_room(self.keys.room_id.clone());
         self.open_room(self.rejoin_room.clone());
         // The service gives TURN credentials only to a connection that holds a room.
@@ -1015,7 +1036,7 @@ impl Host {
         self.signalling = None;
         self.service_down = true;
         self.pending.clear();
-        self.rejoin_retry = None;
+        self.retries.clear();
     }
 
     /// Asks the service for `room`, with the session's claim.
@@ -1024,21 +1045,65 @@ impl Host {
         if let Some(signalling) = &self.signalling
             && signalling.send(ClientMessage::Host { room: room.clone(), claim })
         {
-            self.pending.push_back(room);
+            self.pending.push_back(Asked { room, at: Instant::now() });
+        }
+    }
+
+    /// Whether the host still wants `room`: the current code's or the rejoin room.
+    fn wants(&self, room: &str) -> bool {
+        room == self.keys.room_id || room == self.rejoin_room
+    }
+
+    /// Asks for `room` again after `wait`, replacing an earlier retry for it.
+    fn retry(&mut self, room: String, wait: Duration) {
+        self.retries.retain(|(other, _)| *other != room);
+        self.retries.push((room, Instant::now() + wait));
+    }
+
+    /// When a room next needs looking at: a retry, or the oldest `host` running out of time.
+    fn next_room_check(&self) -> Option<Instant> {
+        let timeout = self.pending.front().map(|asked| asked.at + ANSWER_TIMEOUT);
+        self.retries.iter().map(|(_, at)| *at).chain(timeout).min()
+    }
+
+    /// Asks again for the rooms whose retry is due, and for the wanted rooms whose `host` got no
+    /// answer in time, so a lost answer heals. A room the host no longer wants is dropped.
+    fn check_rooms(&mut self) {
+        let now = Instant::now();
+        let mut again = Vec::new();
+        while self.pending.front().is_some_and(|asked| asked.at + ANSWER_TIMEOUT <= now) {
+            again.extend(self.pending.pop_front().map(|asked| asked.room));
+        }
+        let (due, later) =
+            std::mem::take(&mut self.retries).into_iter().partition(|(_, at)| *at <= now);
+        self.retries = later;
+        again.extend(due.into_iter().map(|(room, _): (String, Instant)| room));
+        for room in again {
+            if self.wants(&room) && !self.pending.iter().any(|asked| asked.room == room) {
+                self.open_room(room);
+            }
         }
     }
 
     /// Takes the room an answer to a `host` is about out of the queue: the room it names, or,
-    /// from a service that names none, the oldest one asked for.
-    fn answered(&mut self, room: Option<String>) -> Option<String> {
+    /// from a service that names none, the oldest one asked for. The service also sends an
+    /// unnamed `rate-limited` and `bad-message` for other messages (signals, too many messages),
+    /// so for those (`only_host` false) the oldest is taken only if it was sent within
+    /// `ANSWER_WITHIN`: the service answers a `host` at once, so an older one is not its answer.
+    /// A `host` whose answer was missed this way runs out of time and is asked for again.
+    fn answered(&mut self, room: Option<String>, only_host: bool) -> Option<String> {
         match room {
             Some(room) => {
-                if let Some(at) = self.pending.iter().position(|pending| *pending == room) {
+                if let Some(at) = self.pending.iter().position(|asked| asked.room == room) {
                     self.pending.remove(at);
                 }
                 Some(room)
             }
-            None => self.pending.pop_front(),
+            None if only_host => self.pending.pop_front().map(|asked| asked.room),
+            None => {
+                let recent = self.pending.front().is_some_and(|a| a.at.elapsed() <= ANSWER_WITHIN);
+                if recent { self.pending.pop_front().map(|asked| asked.room) } else { None }
+            }
         }
     }
 
@@ -1052,10 +1117,30 @@ impl Host {
             let _ = self.events.send(SharingEvent::CodeReplaced { reason: ReplaceReason::InUse });
         } else if room == self.rejoin_room {
             // Viewers were given this room; keep it and ask again later.
-            self.rejoin_retry = Some(Instant::now() + REJOIN_RETRY);
+            self.retry(room, REJOIN_RETRY);
             diag::host_rejoin_room_taken(REJOIN_RETRY);
         }
         // Otherwise an old code's room, which this host no longer wants.
+    }
+
+    /// The service refused `room` because this network asked for too many rooms that exist
+    /// (design decision 7). The limit clears by itself, so ask again in 15 to 30 seconds. While
+    /// the code's room is refused nobody can join with the code, so the window shows sharing as
+    /// unavailable until the next `Ready`.
+    fn rate_limited(&mut self, room: String) {
+        let code_room = room == self.keys.room_id;
+        if !code_room && room != self.rejoin_room {
+            return;
+        }
+        let mut random = [0u8; 4];
+        getrandom::fill(&mut random).expect("no random source");
+        let share = f64::from(u32::from_le_bytes(random)) / f64::from(u32::MAX);
+        let wait = RATE_LIMITED_RETRY + RATE_LIMITED_JITTER.mul_f64(share);
+        self.retry(room, wait);
+        diag::host_room_rate_limited(code_room, wait);
+        if code_room {
+            let _ = self.events.send(SharingEvent::Unavailable);
+        }
     }
 
     fn send_signalling(&self, message: ClientMessage) {
@@ -1067,7 +1152,8 @@ impl Host {
     fn handle_server(&mut self, message: ServerMessage) {
         match message {
             ServerMessage::RoomOpened { room } => {
-                self.answered(Some(room.clone()));
+                self.answered(Some(room.clone()), true);
+                self.retries.retain(|(other, _)| *other != room);
                 if room == self.keys.room_id {
                     self.busy_backoff = Duration::ZERO;
                     let _ = self.events.send(SharingEvent::Ready { code: self.code.clone() });
@@ -1161,10 +1247,16 @@ impl Host {
                     | ErrorCode::RateLimited),
                 room,
             } => {
-                let room = self.answered(room);
+                let only_host = matches!(code, ErrorCode::RoomTaken | ErrorCode::ServerBusy);
+                let room = self.answered(room, only_host);
                 match code {
                     ErrorCode::RoomTaken => self.room_taken(room),
                     ErrorCode::ServerBusy => self.busy = true,
+                    ErrorCode::RateLimited => {
+                        if let Some(room) = room {
+                            self.rate_limited(room);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2773,6 +2865,25 @@ mod tests {
         fn opened(&mut self, room: &str) {
             self.host.handle_server(ServerMessage::RoomOpened { room: room.into() });
         }
+
+        fn rate_limited(&mut self, room: Option<&str>) {
+            let room = room.map(str::to_owned);
+            self.host.handle_server(ServerMessage::Error { code: ErrorCode::RateLimited, room });
+        }
+
+        /// The rooms waiting for an answer, oldest first.
+        fn pending(&self) -> Vec<String> {
+            self.host.pending.iter().map(|asked| asked.room.clone()).collect()
+        }
+
+        /// When `room` is asked for again, if it is.
+        fn retry_at(&self, room: &str) -> Option<Instant> {
+            self.host.retries.iter().find(|(other, _)| other == room).map(|(_, at)| *at)
+        }
+
+        fn rejoin(&self) -> String {
+            self.host.rejoin_room.clone()
+        }
     }
 
     #[tokio::test]
@@ -2827,7 +2938,7 @@ mod tests {
         hosting.taken(Some(&rejoin));
         assert_eq!(hosting.host.code, code);
         assert_eq!(hosting.events(), [SharingEvent::Ready { code }]);
-        assert_eq!(hosting.host.rejoin_retry, Some(Instant::now() + REJOIN_RETRY));
+        assert_eq!(hosting.retry_at(&rejoin), Some(Instant::now() + REJOIN_RETRY));
         assert_eq!(REJOIN_RETRY, Duration::from_secs(30));
         let taken = capture.named("host.rejoin_room_taken");
         assert_eq!(taken.len(), 1);
@@ -2842,7 +2953,7 @@ mod tests {
         hosting.taken(None);
         assert_eq!(hosting.host.code, code);
         assert_eq!(hosting.events(), [SharingEvent::Ready { code }]);
-        assert!(hosting.host.rejoin_retry.is_some());
+        assert!(hosting.retry_at(&hosting.rejoin()).is_some());
     }
 
     #[tokio::test]
@@ -2852,10 +2963,10 @@ mod tests {
         hosting.taken(None);
         assert_ne!(hosting.code_room(), old_room);
         assert_eq!(hosting.events(), [SharingEvent::CodeReplaced { reason: ReplaceReason::InUse }]);
-        assert!(hosting.host.rejoin_retry.is_none());
+        assert!(hosting.host.retries.is_empty());
         // The rejoin room's answer is next in line.
         hosting.opened(&hosting.host.rejoin_room.clone());
-        assert_eq!(hosting.host.pending, [hosting.code_room()]);
+        assert_eq!(hosting.pending(), [hosting.code_room()]);
     }
 
     #[tokio::test]
@@ -2870,7 +2981,7 @@ mod tests {
         hosting.taken(Some(&old_room));
         assert_eq!(hosting.host.code, code);
         assert!(hosting.events().is_empty());
-        assert!(hosting.host.rejoin_retry.is_none());
+        assert!(hosting.host.retries.is_empty());
     }
 
     #[tokio::test]
@@ -2878,9 +2989,10 @@ mod tests {
         let mut hosting = Hosting::start();
         let error = |code| ServerMessage::Error { code, room: None };
         hosting.host.handle_server(error(ErrorCode::RateLimited));
-        assert_eq!(hosting.host.pending, [hosting.host.rejoin_room.clone()]);
+        assert_eq!(hosting.pending(), [hosting.rejoin()]);
+        assert_eq!(hosting.events(), [SharingEvent::Unavailable]);
         hosting.host.handle_server(error(ErrorCode::BadMessage));
-        assert!(hosting.host.pending.is_empty());
+        assert!(hosting.pending().is_empty());
         // Nothing left to answer: a later one changes nothing.
         hosting.taken(None);
         assert!(hosting.events().is_empty());
@@ -2888,6 +3000,103 @@ mod tests {
         hosting.reconnect();
         hosting.host.handle_server(error(ErrorCode::ServerBusy));
         assert!(hosting.host.busy);
-        assert_eq!(hosting.host.pending, [hosting.host.rejoin_room.clone()]);
+        assert_eq!(hosting.pending(), [hosting.rejoin()]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_limited_room_is_asked_for_again_while_it_is_wanted() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let mut hosting = Hosting::start();
+        let (code, code_room, rejoin) =
+            (hosting.host.code.clone(), hosting.code_room(), hosting.rejoin());
+        hosting.hosted();
+        hosting.opened(&code_room);
+        assert_eq!(hosting.events(), [SharingEvent::Ready { code: code.clone() }]);
+
+        // The rejoin room: the code still works, so nothing changes in the window.
+        hosting.rate_limited(Some(&rejoin));
+        let at = hosting.retry_at(&rejoin).expect("asked for again");
+        let wait = at - Instant::now();
+        assert!(wait >= RATE_LIMITED_RETRY, "{wait:?}");
+        assert!(wait <= RATE_LIMITED_RETRY + RATE_LIMITED_JITTER, "{wait:?}");
+        assert!(hosting.events().is_empty());
+        tokio::time::advance(wait).await;
+        hosting.host.check_rooms();
+        assert_eq!(hosting.hosted(), [(rejoin.clone(), Some(hosting.host.claim.clone()))]);
+        assert!(hosting.host.retries.is_empty());
+        hosting.opened(&rejoin);
+
+        // The code's room, unnamed as from an older service: sharing is unavailable until the
+        // room is asked for again and opened, with the same code.
+        hosting.host.rotate_code();
+        let (code, code_room) = (hosting.host.code.clone(), hosting.code_room());
+        hosting.hosted();
+        hosting.rate_limited(None);
+        assert_eq!(hosting.events(), [SharingEvent::Unavailable]);
+        let at = hosting.retry_at(&code_room).expect("asked for again");
+        tokio::time::advance(at - Instant::now()).await;
+        hosting.host.check_rooms();
+        assert_eq!(hosting.hosted().len(), 1);
+        hosting.opened(&code_room);
+        assert_eq!(hosting.events(), [SharingEvent::Ready { code }]);
+
+        // A retry for a room the host no longer wants is dropped.
+        hosting.rate_limited(Some(&code_room));
+        hosting.host.rotate_code();
+        hosting.opened(&hosting.code_room());
+        hosting.hosted();
+        tokio::time::advance(RATE_LIMITED_RETRY + RATE_LIMITED_JITTER).await;
+        hosting.host.check_rooms();
+        assert!(hosting.hosted().is_empty());
+
+        let limited = capture.named("host.room_rate_limited");
+        let rooms: Vec<_> = limited.iter().map(|event| event.field("room")).collect();
+        assert_eq!(rooms, [Some("rejoin"), Some("code"), Some("code")]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unnamed_rate_limited_takes_only_a_host_sent_just_before() {
+        let mut hosting = Hosting::start();
+        hosting.opened(&hosting.code_room());
+        hosting.events();
+        // Long after the rejoin room's `host`: about some other message.
+        tokio::time::advance(ANSWER_WITHIN + Duration::from_secs(1)).await;
+        hosting.rate_limited(None);
+        hosting
+            .host
+            .handle_server(ServerMessage::Error { code: ErrorCode::BadMessage, room: None });
+        assert_eq!(hosting.pending(), [hosting.rejoin()]);
+        assert!(hosting.host.retries.is_empty());
+        assert!(hosting.events().is_empty());
+        // Nothing waiting at all: nothing to take.
+        hosting.opened(&hosting.rejoin());
+        hosting.rate_limited(None);
+        assert!(hosting.host.retries.is_empty());
+        assert!(hosting.events().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_host_without_an_answer_is_asked_for_again_if_still_wanted() {
+        let mut hosting = Hosting::start();
+        let old_room = hosting.code_room();
+        hosting.host.rotate_code();
+        let rooms = [old_room, hosting.rejoin(), hosting.code_room()];
+        assert_eq!(hosting.pending(), rooms);
+        let started = Instant::now();
+        assert_eq!(hosting.host.next_room_check(), Some(started + ANSWER_TIMEOUT));
+        hosting.hosted();
+
+        tokio::time::advance(ANSWER_TIMEOUT - Duration::from_millis(1)).await;
+        hosting.host.check_rooms();
+        assert!(hosting.hosted().is_empty(), "not yet");
+        tokio::time::advance(Duration::from_millis(1)).await;
+        hosting.host.check_rooms();
+        // The old code's room is dropped; the others are asked for again.
+        let again: Vec<_> = hosting.hosted().into_iter().map(|(room, _)| room).collect();
+        assert_eq!(again, rooms[1..]);
+        assert_eq!(hosting.pending(), rooms[1..]);
+        assert_eq!(hosting.host.next_room_check(), Some(Instant::now() + ANSWER_TIMEOUT));
+        hosting.opened(&rooms[2]);
+        assert!(matches!(hosting.events()[..], [SharingEvent::Ready { .. }]));
     }
 }
