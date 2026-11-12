@@ -271,6 +271,23 @@ pub fn host_signalling_down(retry_in: Duration) {
     warn!(retry_in_ms = millis(retry_in), "host.signalling_down");
 }
 
+/// Another connection holds the session's rejoin room; it is asked for again in `retry_in`.
+pub fn host_rejoin_room_taken(retry_in: Duration) {
+    warn!(retry_in_ms = millis(retry_in), "host.rejoin_room_taken");
+}
+
+/// The service refused the code's room (`code` true) or the rejoin room as rate-limited; it is
+/// asked for again in `retry_in`.
+pub fn host_room_rate_limited(code: bool, retry_in: Duration) {
+    let room = if code { "code" } else { "rejoin" };
+    warn!(room, retry_in_ms = millis(retry_in), "host.room_rate_limited");
+}
+
+/// Another connection holds the invite code's room, so the host made a new code.
+pub fn host_code_in_use() {
+    warn!("host.code_in_use");
+}
+
 pub fn host_turn_credentials(expires_in: Duration) {
     info!(expires_in_s = expires_in.as_secs(), "host.turn_credentials");
 }

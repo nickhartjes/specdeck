@@ -5,7 +5,7 @@
 //! A viewer's sender reads from the log while that viewer's channel has room, so a slow viewer
 //! falls behind and catches up later without ever holding up the agent or other viewers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,9 +31,10 @@ use specdeck_protocol::timeline::Entry;
 use specdeck_protocol::{AgentId, AgentStatus};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{oneshot, watch};
+use tokio::task::JoinHandle;
 
 use crate::asks::{AskRefusal, Asks, Gone, HOST, Present};
-use crate::diag::{self, LeaveReason};
+use crate::diag::{self, LeaveReason, Reason};
 use crate::ice::turn_url_with_credentials;
 use crate::peer::{BUFFERED_LOW, Channel, LinkState, Peer, PeerConfig, PeerEvent};
 use crate::session::SessionView;
@@ -73,6 +74,27 @@ const FILES_HIGH_WATER: usize = BUFFERED_LOW;
 /// An upload that gets no chunk for this long is dropped and its room freed.
 const UPLOAD_IDLE: Duration = Duration::from_secs(30);
 
+/// An attempt to reach the signalling service that takes longer than this has failed
+/// (`room-ownership` design decision 9).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// While another connection holds the rejoin room, it is asked for again this often
+/// (`room-ownership` design decision 8).
+const REJOIN_RETRY: Duration = Duration::from_secs(30);
+
+/// A room the service refused as rate-limited is asked for again after this, plus up to
+/// `RATE_LIMITED_JITTER`, so hosts behind one address do not all come back at once.
+const RATE_LIMITED_RETRY: Duration = Duration::from_secs(15);
+const RATE_LIMITED_JITTER: Duration = Duration::from_secs(15);
+
+/// An unnamed `rate-limited` or `bad-message` answers the oldest `host` only if that was sent
+/// this recently; older, it is about some other message.
+const ANSWER_WITHIN: Duration = Duration::from_secs(10);
+
+/// A `host` with no answer after this is taken off the queue, and its room asked for again if
+/// the host still wants it.
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Debug)]
 pub struct SharingConfig {
     /// `ws://` or `wss://…/signal`.
@@ -93,6 +115,11 @@ pub enum SharingEvent {
     /// The signalling service cannot be reached; the session keeps running locally and the
     /// service is retried.
     Unavailable,
+    /// The invite code was replaced without the host asking; comes before the `Ready` with the
+    /// new code.
+    CodeReplaced {
+        reason: ReplaceReason,
+    },
     Participants(Vec<Participant>),
     /// What viewers may send, after the host changed it.
     Allowed {
@@ -118,6 +145,15 @@ pub enum SharingEvent {
     ReadClosed {
         time_up: bool,
     },
+}
+
+/// Why the invite code was replaced without the host asking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReplaceReason {
+    /// Another connection on the sharing service holds the code's room, so the old code and
+    /// link may lead to another session.
+    InUse,
 }
 
 /// The host's asks as the host's window shows them: the same views viewers get, with every
@@ -453,6 +489,13 @@ struct Upload {
     group: &'static str,
 }
 
+/// A `host` sent on this connection that has no answer yet, and when it was sent.
+#[derive(Debug)]
+struct Asked {
+    room: String,
+    at: Instant,
+}
+
 struct Host {
     view: SessionView,
     config: SharingConfig,
@@ -462,6 +505,14 @@ struct Host {
     keys: InviteKeys,
     /// Signalling room for admitted viewers to return through, open for the whole session.
     rejoin_room: String,
+    /// Sent with every `host`, so only this session can open its rooms again after it lost the
+    /// service (`room-ownership` design decision 1).
+    claim: String,
+    /// The rooms asked for on this connection that have no answer yet, oldest first.
+    pending: VecDeque<Asked>,
+    /// Rooms to ask for again on this connection, and when: the rejoin room while another
+    /// connection holds it, and a room the service refused as rate-limited.
+    retries: Vec<(String, Instant)>,
     signalling: Option<SignallingSender>,
     ice_servers: Vec<String>,
     /// When the TURN credentials in `ice_servers` stop working.
@@ -755,6 +806,8 @@ impl Host {
         let requests = Requests::new(view.agent());
         let mut rejoin_room = [0u8; 16];
         getrandom::fill(&mut rejoin_room).expect("no random source");
+        let mut claim = [0u8; 32];
+        getrandom::fill(&mut claim).expect("no random source");
         Self {
             view,
             config,
@@ -762,7 +815,10 @@ impl Host {
             key: SessionKey::generate(),
             code,
             keys,
-            rejoin_room: rejoin_room.iter().map(|b| format!("{b:02x}")).collect(),
+            rejoin_room: hex(&rejoin_room),
+            claim: hex(&claim),
+            pending: VecDeque::new(),
+            retries: Vec::new(),
             signalling: None,
             ice_servers,
             credentials_expire: None,
@@ -790,16 +846,16 @@ impl Host {
         self.peer_tx = peer_tx;
         let mut records = self.view.log().subscribe();
         let mut changes = self.view.subscribe();
-        let mut server_rx = None;
+        let mut service = Service::Idle;
         let (mut next_attempt, mut backoff) = (Instant::now(), Duration::ZERO);
         let mut traffic = diag::traffic_interval();
 
         loop {
-            if server_rx.is_none() && Instant::now() >= next_attempt {
-                server_rx = self.connect_signalling(&mut backoff).await;
-                next_attempt = Instant::now() + backoff;
+            if matches!(service, Service::Idle) && Instant::now() >= next_attempt {
+                service = self.start_connecting();
             }
             let time_up = self.asks.deadline();
+            let room_check = self.next_room_check();
             tokio::select! {
                 command = commands.recv() => match command {
                     Some(Command::NewCode) => self.rotate_code(),
@@ -818,12 +874,21 @@ impl Host {
                     }
                     Some(Command::Close) | None => break,
                 },
-                message = recv_or_pending(&mut server_rx) => match message {
-                    Some(message) => self.handle_server(message),
-                    None => {
-                        server_rx = None;
-                        self.signalling = None;
-                        self.service_down = true;
+                from = from_service(&mut service) => match from {
+                    FromService::Attempt(Some((sender, receiver))) => {
+                        backoff = Duration::ZERO;
+                        self.connected(sender);
+                        service = Service::Connected(receiver);
+                    }
+                    FromService::Attempt(None) => {
+                        self.connect_failed(&mut backoff);
+                        next_attempt = Instant::now() + backoff;
+                        service = Service::Idle;
+                    }
+                    FromService::Message(Some(message)) => self.handle_server(message),
+                    FromService::Message(None) => {
+                        service = Service::Idle;
+                        self.lost_service();
                         diag::host_signalling_down(Duration::ZERO);
                         let _ = self.events.send(SharingEvent::Unavailable);
                     }
@@ -832,10 +897,14 @@ impl Host {
                 Ok(()) = records.changed() => {}
                 Ok(()) = changes.changed() => {}
                 // Waits before retrying the signalling service; only armed while it is down.
-                _ = tokio::time::sleep_until(next_attempt), if server_rx.is_none() => {}
+                _ = tokio::time::sleep_until(next_attempt), if matches!(service, Service::Idle) => {}
                 // The open read request's time is up: it closes as if the host went on.
                 _ = tokio::time::sleep_until(time_up.unwrap_or(next_attempt)), if time_up.is_some() => {
                     self.close_read(true);
+                }
+                // A room is due to be asked for again, or a `host` went unanswered too long.
+                _ = tokio::time::sleep_until(room_check.unwrap_or(next_attempt)), if room_check.is_some() => {
+                    self.check_rooms();
                 }
                 _ = traffic.tick() => {
                     self.traffic.report_host();
@@ -845,9 +914,8 @@ impl Host {
             if std::mem::take(&mut self.busy) {
                 // A full service refused the connection or a room: leave it, and come back later
                 // rather than at once, which would only add to its load.
-                server_rx = None;
-                self.signalling = None;
-                self.service_down = true;
+                service = Service::Idle;
+                self.lost_service();
                 self.busy_backoff =
                     (self.busy_backoff * 2).clamp(Duration::from_secs(1), Duration::from_secs(30));
                 next_attempt = Instant::now() + self.busy_backoff;
@@ -857,9 +925,14 @@ impl Host {
             self.sync_whole_files();
             self.sync_files();
             self.pump_all();
+            let connected = matches!(service, Service::Connected(_));
             let retry_in =
-                server_rx.is_none().then(|| next_attempt.saturating_duration_since(Instant::now()));
+                (!connected).then(|| next_attempt.saturating_duration_since(Instant::now()));
             self.publish_status(retry_in);
+        }
+        // An attempt still running is dropped with its socket.
+        if let Service::Connecting { task, .. } = &service {
+            task.abort();
         }
         self.end();
     }
@@ -914,34 +987,159 @@ impl Host {
         });
     }
 
-    /// Connects to the signalling service and opens the room. On failure, reports the service as
-    /// unavailable and doubles `backoff`, the wait before the next attempt.
-    async fn connect_signalling(
-        &mut self,
-        backoff: &mut Duration,
-    ) -> Option<UnboundedReceiver<ServerMessage>> {
-        match signalling_client::connect(&self.config.signalling_url).await {
-            Ok((sender, receiver)) => {
-                *backoff = Duration::ZERO;
-                self.service_down = false;
-                diag::host_signalling_up();
-                sender.send(ClientMessage::Host { room: self.keys.room_id.clone() });
-                sender.send(ClientMessage::Host { room: self.rejoin_room.clone() });
-                // The service gives TURN credentials only to a connection that holds a room.
-                sender.send(ClientMessage::TurnCredentials);
-                self.signalling = Some(sender);
-                Some(receiver)
-            }
-            Err(_) => {
-                if backoff.is_zero() {
-                    let _ = self.events.send(SharingEvent::Unavailable);
+    /// Starts an attempt to reach the signalling service in its own task, so a service that
+    /// accepts the connection and never answers holds up nothing (design decision 9).
+    fn start_connecting(&self) -> Service {
+        let (done, result) = oneshot::channel();
+        let url = self.config.signalling_url.clone();
+        let task = diag::spawn(async move {
+            let attempt = tokio::time::timeout(CONNECT_TIMEOUT, signalling_client::connect(&url));
+            let connection = match attempt.await {
+                Ok(connection) => connection.ok(),
+                Err(_) => {
+                    diag::signalling_connect_failed(Reason::Timeout);
+                    None
                 }
-                *backoff =
-                    (*backoff * 2).clamp(Duration::from_millis(500), Duration::from_secs(10));
-                self.service_down = true;
-                diag::host_signalling_down(*backoff);
-                None
+            };
+            let _ = done.send(connection);
+        });
+        Service::Connecting { result, task }
+    }
+
+    /// The service was reached: opens both rooms and asks for TURN credentials.
+    fn connected(&mut self, sender: SignallingSender) {
+        self.service_down = false;
+        diag::host_signalling_up();
+        self.signalling = Some(sender);
+        // A new connection has answered nothing yet.
+        self.pending.clear();
+        self.retries.clear();
+        self.open_room(self.keys.room_id.clone());
+        self.open_room(self.rejoin_room.clone());
+        // The service gives TURN credentials only to a connection that holds a room.
+        self.send_signalling(ClientMessage::TurnCredentials);
+    }
+
+    /// An attempt failed: reports the service as unavailable and doubles `backoff`, the wait
+    /// before the next attempt.
+    fn connect_failed(&mut self, backoff: &mut Duration) {
+        if backoff.is_zero() {
+            let _ = self.events.send(SharingEvent::Unavailable);
+        }
+        *backoff = (*backoff * 2).clamp(Duration::from_millis(500), Duration::from_secs(10));
+        self.service_down = true;
+        diag::host_signalling_down(*backoff);
+    }
+
+    /// The connection to the service closed, or the host left a busy one.
+    fn lost_service(&mut self) {
+        self.signalling = None;
+        self.service_down = true;
+        self.pending.clear();
+        self.retries.clear();
+    }
+
+    /// Asks the service for `room`, with the session's claim.
+    fn open_room(&mut self, room: String) {
+        let claim = Some(self.claim.clone());
+        if let Some(signalling) = &self.signalling
+            && signalling.send(ClientMessage::Host { room: room.clone(), claim })
+        {
+            self.pending.push_back(Asked { room, at: Instant::now() });
+        }
+    }
+
+    /// Whether the host still wants `room`: the current code's or the rejoin room.
+    fn wants(&self, room: &str) -> bool {
+        room == self.keys.room_id || room == self.rejoin_room
+    }
+
+    /// Asks for `room` again after `wait`, replacing an earlier retry for it.
+    fn retry(&mut self, room: String, wait: Duration) {
+        self.retries.retain(|(other, _)| *other != room);
+        self.retries.push((room, Instant::now() + wait));
+    }
+
+    /// When a room next needs looking at: a retry, or the oldest `host` running out of time.
+    fn next_room_check(&self) -> Option<Instant> {
+        let timeout = self.pending.front().map(|asked| asked.at + ANSWER_TIMEOUT);
+        self.retries.iter().map(|(_, at)| *at).chain(timeout).min()
+    }
+
+    /// Asks again for the rooms whose retry is due, and for the wanted rooms whose `host` got no
+    /// answer in time, so a lost answer heals. A room the host no longer wants is dropped.
+    fn check_rooms(&mut self) {
+        let now = Instant::now();
+        let mut again = Vec::new();
+        while self.pending.front().is_some_and(|asked| asked.at + ANSWER_TIMEOUT <= now) {
+            again.extend(self.pending.pop_front().map(|asked| asked.room));
+        }
+        let (due, later) =
+            std::mem::take(&mut self.retries).into_iter().partition(|(_, at)| *at <= now);
+        self.retries = later;
+        again.extend(due.into_iter().map(|(room, _): (String, Instant)| room));
+        for room in again {
+            if self.wants(&room) && !self.pending.iter().any(|asked| asked.room == room) {
+                self.open_room(room);
             }
+        }
+    }
+
+    /// Takes the room an answer to a `host` is about out of the queue: the room it names, or,
+    /// from a service that names none, the oldest one asked for. The service also sends an
+    /// unnamed `rate-limited` and `bad-message` for other messages (signals, too many messages),
+    /// so for those (`only_host` false) the oldest is taken only if it was sent within
+    /// `ANSWER_WITHIN`: the service answers a `host` at once, so an older one is not its answer.
+    /// A `host` whose answer was missed this way runs out of time and is asked for again.
+    fn answered(&mut self, room: Option<String>, only_host: bool) -> Option<String> {
+        match room {
+            Some(room) => {
+                if let Some(at) = self.pending.iter().position(|asked| asked.room == room) {
+                    self.pending.remove(at);
+                }
+                Some(room)
+            }
+            None if only_host => self.pending.pop_front().map(|asked| asked.room),
+            None => {
+                let recent = self.pending.front().is_some_and(|a| a.at.elapsed() <= ANSWER_WITHIN);
+                if recent { self.pending.pop_front().map(|asked| asked.room) } else { None }
+            }
+        }
+    }
+
+    /// Another connection holds `room` (design decision 8).
+    fn room_taken(&mut self, room: Option<String>) {
+        let Some(room) = room else { return };
+        if room == self.keys.room_id {
+            // Someone else opened the code's room: whoever joins with the code reaches them.
+            diag::host_code_in_use();
+            self.replace_code();
+            let _ = self.events.send(SharingEvent::CodeReplaced { reason: ReplaceReason::InUse });
+        } else if room == self.rejoin_room {
+            // Viewers were given this room; keep it and ask again later.
+            self.retry(room, REJOIN_RETRY);
+            diag::host_rejoin_room_taken(REJOIN_RETRY);
+        }
+        // Otherwise an old code's room, which this host no longer wants.
+    }
+
+    /// The service refused `room` because this network asked for too many rooms that exist
+    /// (design decision 7). The limit clears by itself, so ask again in 15 to 30 seconds. While
+    /// the code's room is refused nobody can join with the code, so the window shows sharing as
+    /// unavailable until the next `Ready`.
+    fn rate_limited(&mut self, room: String) {
+        let code_room = room == self.keys.room_id;
+        if !code_room && room != self.rejoin_room {
+            return;
+        }
+        let mut random = [0u8; 4];
+        getrandom::fill(&mut random).expect("no random source");
+        let share = f64::from(u32::from_le_bytes(random)) / f64::from(u32::MAX);
+        let wait = RATE_LIMITED_RETRY + RATE_LIMITED_JITTER.mul_f64(share);
+        self.retry(room, wait);
+        diag::host_room_rate_limited(code_room, wait);
+        if code_room {
+            let _ = self.events.send(SharingEvent::Unavailable);
         }
     }
 
@@ -953,9 +1151,13 @@ impl Host {
 
     fn handle_server(&mut self, message: ServerMessage) {
         match message {
-            ServerMessage::RoomOpened { room } if room == self.keys.room_id => {
-                self.busy_backoff = Duration::ZERO;
-                let _ = self.events.send(SharingEvent::Ready { code: self.code.clone() });
+            ServerMessage::RoomOpened { room } => {
+                self.answered(Some(room.clone()), true);
+                self.retries.retain(|(other, _)| *other != room);
+                if room == self.keys.room_id {
+                    self.busy_backoff = Duration::ZERO;
+                    let _ = self.events.send(SharingEvent::Ready { code: self.code.clone() });
+                }
             }
             ServerMessage::TurnCredentials { urls, username, credential, ttl_seconds } => {
                 let ttl = Duration::from_secs(ttl_seconds);
@@ -1036,11 +1238,28 @@ impl Host {
                     self.drop_slot(&connection, LeaveReason::Left);
                 }
             }
-            ServerMessage::Error { code: ErrorCode::RoomTaken } => {
-                // Practically impossible with 60-bit codes; pick another one.
-                self.rotate_code();
+            // The errors that can answer a `host`.
+            ServerMessage::Error {
+                code:
+                    code @ (ErrorCode::RoomTaken
+                    | ErrorCode::ServerBusy
+                    | ErrorCode::BadMessage
+                    | ErrorCode::RateLimited),
+                room,
+            } => {
+                let only_host = matches!(code, ErrorCode::RoomTaken | ErrorCode::ServerBusy);
+                let room = self.answered(room, only_host);
+                match code {
+                    ErrorCode::RoomTaken => self.room_taken(room),
+                    ErrorCode::ServerBusy => self.busy = true,
+                    ErrorCode::RateLimited => {
+                        if let Some(room) = room {
+                            self.rate_limited(room);
+                        }
+                    }
+                    _ => {}
+                }
             }
-            ServerMessage::Error { code: ErrorCode::ServerBusy } => self.busy = true,
             _ => {}
         }
     }
@@ -1742,11 +1961,17 @@ impl Host {
     }
 
     fn rotate_code(&mut self) {
+        let old_room = self.replace_code();
+        self.send_signalling(ClientMessage::CloseRoom { room: old_room });
+    }
+
+    /// Makes a new code and asks for its room; returns the old code's room.
+    fn replace_code(&mut self) -> String {
         let old_room = std::mem::take(&mut self.keys.room_id);
         self.code = InviteCode::generate();
         self.keys = self.code.keys();
-        self.send_signalling(ClientMessage::Host { room: self.keys.room_id.clone() });
-        self.send_signalling(ClientMessage::CloseRoom { room: old_room });
+        self.open_room(self.keys.room_id.clone());
+        old_room
     }
 
     fn remove(&mut self, viewer_id: u32) {
@@ -2042,11 +2267,38 @@ impl StreamSink for Peer {
     }
 }
 
-async fn recv_or_pending<T>(receiver: &mut Option<UnboundedReceiver<T>>) -> Option<T> {
-    match receiver {
-        Some(receiver) => receiver.recv().await,
-        None => std::future::pending().await,
+/// The host's connection to the signalling service (design decision 9).
+enum Service {
+    /// Waiting for the next attempt.
+    Idle,
+    /// An attempt runs in `task` and ends in `result`.
+    Connecting {
+        result: oneshot::Receiver<Option<Connection>>,
+        task: JoinHandle<()>,
+    },
+    Connected(UnboundedReceiver<ServerMessage>),
+}
+
+type Connection = (SignallingSender, UnboundedReceiver<ServerMessage>);
+
+enum FromService {
+    /// How an attempt to connect ended.
+    Attempt(Option<Connection>),
+    /// A message from the service; `None` once the connection closed.
+    Message(Option<ServerMessage>),
+}
+
+/// The next thing the service's connection has for the host's loop; waits forever while idle.
+async fn from_service(service: &mut Service) -> FromService {
+    match service {
+        Service::Idle => std::future::pending().await,
+        Service::Connecting { result, .. } => FromService::Attempt(result.await.unwrap_or(None)),
+        Service::Connected(receiver) => FromService::Message(receiver.recv().await),
     }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -2552,5 +2804,299 @@ mod tests {
         let (capture, _guard) = crate::capture::Capture::start_at(LevelFilter::INFO);
         ten_seconds_of_output().await;
         assert!(capture.events().is_empty(), "{:?}", capture.events());
+    }
+
+    /// A host connected to a service that only collects what it is sent.
+    struct Hosting {
+        host: Host,
+        sent: UnboundedReceiver<ClientMessage>,
+        events: UnboundedReceiver<SharingEvent>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl Hosting {
+        fn start() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let log = Arc::new(OutputLog::create(dir.path()).unwrap());
+            let view = SessionView::from_log(AgentId::OpenCode, log);
+            let config = SharingConfig {
+                signalling_url: "ws://127.0.0.1:9/signal".into(),
+                username: "nick".into(),
+                peer: PeerConfig::default(),
+                viewer_limit: 20,
+            };
+            let (events_tx, events) = mpsc::unbounded_channel();
+            let mut host = Host::new(view, config, events_tx, watch::channel(Default::default()).0);
+            let (sender, sent) = mpsc::unbounded_channel();
+            host.connected(SignallingSender(sender));
+            Self { host, sent, events, _dir: dir }
+        }
+
+        /// The rooms asked for since the last call, and the claims they carried.
+        fn hosted(&mut self) -> Vec<(String, Option<String>)> {
+            std::iter::from_fn(|| self.sent.try_recv().ok())
+                .filter_map(|message| match message {
+                    ClientMessage::Host { room, claim } => Some((room, claim)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// A new connection to the service.
+        fn reconnect(&mut self) {
+            let (sender, sent) = mpsc::unbounded_channel();
+            self.sent = sent;
+            self.host.connected(SignallingSender(sender));
+        }
+
+        fn events(&mut self) -> Vec<SharingEvent> {
+            std::iter::from_fn(|| self.events.try_recv().ok()).collect()
+        }
+
+        fn code_room(&self) -> String {
+            self.host.keys.room_id.clone()
+        }
+
+        fn taken(&mut self, room: Option<&str>) {
+            let room = room.map(str::to_owned);
+            self.host.handle_server(ServerMessage::Error { code: ErrorCode::RoomTaken, room });
+        }
+
+        fn opened(&mut self, room: &str) {
+            self.host.handle_server(ServerMessage::RoomOpened { room: room.into() });
+        }
+
+        fn rate_limited(&mut self, room: Option<&str>) {
+            let room = room.map(str::to_owned);
+            self.host.handle_server(ServerMessage::Error { code: ErrorCode::RateLimited, room });
+        }
+
+        /// The rooms waiting for an answer, oldest first.
+        fn pending(&self) -> Vec<String> {
+            self.host.pending.iter().map(|asked| asked.room.clone()).collect()
+        }
+
+        /// When `room` is asked for again, if it is.
+        fn retry_at(&self, room: &str) -> Option<Instant> {
+            self.host.retries.iter().find(|(other, _)| other == room).map(|(_, at)| *at)
+        }
+
+        fn rejoin(&self) -> String {
+            self.host.rejoin_room.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn every_room_is_asked_for_with_the_sessions_claim() {
+        let mut hosting = Hosting::start();
+        let first = hosting.hosted();
+        let rooms: Vec<_> = first.iter().map(|(room, _)| room.clone()).collect();
+        assert_eq!(rooms, [hosting.code_room(), hosting.host.rejoin_room.clone()]);
+        let claim = first[0].1.clone().expect("a claim");
+        assert_eq!(claim.len(), 64);
+        assert!(claim.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(first[1].1.as_ref(), Some(&claim));
+
+        // A new code, and a new connection, keep the claim.
+        hosting.host.rotate_code();
+        assert_eq!(hosting.hosted(), [(hosting.code_room(), Some(claim.clone()))]);
+        hosting.reconnect();
+        let rooms = [hosting.code_room(), hosting.host.rejoin_room.clone()];
+        let claimed = rooms.map(|room| (room, Some(claim.clone())));
+        assert_eq!(hosting.hosted(), claimed);
+        let mut again = Hosting::start();
+        assert_ne!(again.hosted()[0].1, Some(claim), "each session has its own");
+    }
+
+    #[tokio::test]
+    async fn the_code_rooms_room_taken_makes_a_new_code_and_says_why_first() {
+        let mut hosting = Hosting::start();
+        let (old_code, old_room) = (hosting.host.code.clone(), hosting.code_room());
+        hosting.hosted();
+        hosting.taken(Some(&old_room));
+        let new_room = hosting.code_room();
+        assert_ne!(new_room, old_room);
+        assert_eq!(hosting.hosted().len(), 1, "the new code's room is asked for");
+        hosting.opened(&new_room);
+        let new_code = hosting.host.code.clone();
+        assert_ne!(new_code, old_code);
+        assert_eq!(
+            hosting.events(),
+            [
+                SharingEvent::CodeReplaced { reason: ReplaceReason::InUse },
+                SharingEvent::Ready { code: new_code }
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_rejoin_rooms_room_taken_keeps_the_code_and_tries_again() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let mut hosting = Hosting::start();
+        let (code, rejoin) = (hosting.host.code.clone(), hosting.host.rejoin_room.clone());
+        hosting.opened(&hosting.code_room());
+        hosting.taken(Some(&rejoin));
+        assert_eq!(hosting.host.code, code);
+        assert_eq!(hosting.events(), [SharingEvent::Ready { code }]);
+        assert_eq!(hosting.retry_at(&rejoin), Some(Instant::now() + REJOIN_RETRY));
+        assert_eq!(REJOIN_RETRY, Duration::from_secs(30));
+        let taken = capture.named("host.rejoin_room_taken");
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].field("retry_in_ms"), Some("30000"));
+    }
+
+    #[tokio::test]
+    async fn an_unnamed_room_taken_after_the_code_rooms_answer_is_the_rejoin_room() {
+        let mut hosting = Hosting::start();
+        let code = hosting.host.code.clone();
+        hosting.opened(&hosting.code_room());
+        hosting.taken(None);
+        assert_eq!(hosting.host.code, code);
+        assert_eq!(hosting.events(), [SharingEvent::Ready { code }]);
+        assert!(hosting.retry_at(&hosting.rejoin()).is_some());
+    }
+
+    #[tokio::test]
+    async fn an_unnamed_room_taken_as_the_first_answer_is_the_code_room() {
+        let mut hosting = Hosting::start();
+        let old_room = hosting.code_room();
+        hosting.taken(None);
+        assert_ne!(hosting.code_room(), old_room);
+        assert_eq!(hosting.events(), [SharingEvent::CodeReplaced { reason: ReplaceReason::InUse }]);
+        assert!(hosting.host.retries.is_empty());
+        // The rejoin room's answer is next in line.
+        hosting.opened(&hosting.host.rejoin_room.clone());
+        assert_eq!(hosting.pending(), [hosting.code_room()]);
+    }
+
+    #[tokio::test]
+    async fn room_taken_for_an_old_codes_room_is_ignored() {
+        let mut hosting = Hosting::start();
+        let old_room = hosting.code_room();
+        hosting.opened(&old_room);
+        hosting.opened(&hosting.host.rejoin_room.clone());
+        hosting.host.rotate_code();
+        let code = hosting.host.code.clone();
+        hosting.events();
+        hosting.taken(Some(&old_room));
+        assert_eq!(hosting.host.code, code);
+        assert!(hosting.events().is_empty());
+        assert!(hosting.host.retries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn other_answers_to_a_host_take_it_from_the_queue() {
+        let mut hosting = Hosting::start();
+        let error = |code| ServerMessage::Error { code, room: None };
+        hosting.host.handle_server(error(ErrorCode::RateLimited));
+        assert_eq!(hosting.pending(), [hosting.rejoin()]);
+        assert_eq!(hosting.events(), [SharingEvent::Unavailable]);
+        hosting.host.handle_server(error(ErrorCode::BadMessage));
+        assert!(hosting.pending().is_empty());
+        // Nothing left to answer: a later one changes nothing.
+        hosting.taken(None);
+        assert!(hosting.events().is_empty());
+        // A new connection starts the queue again.
+        hosting.reconnect();
+        hosting.host.handle_server(error(ErrorCode::ServerBusy));
+        assert!(hosting.host.busy);
+        assert_eq!(hosting.pending(), [hosting.rejoin()]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_limited_room_is_asked_for_again_while_it_is_wanted() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let mut hosting = Hosting::start();
+        let (code, code_room, rejoin) =
+            (hosting.host.code.clone(), hosting.code_room(), hosting.rejoin());
+        hosting.hosted();
+        hosting.opened(&code_room);
+        assert_eq!(hosting.events(), [SharingEvent::Ready { code: code.clone() }]);
+
+        // The rejoin room: the code still works, so nothing changes in the window.
+        hosting.rate_limited(Some(&rejoin));
+        let at = hosting.retry_at(&rejoin).expect("asked for again");
+        let wait = at - Instant::now();
+        assert!(wait >= RATE_LIMITED_RETRY, "{wait:?}");
+        assert!(wait <= RATE_LIMITED_RETRY + RATE_LIMITED_JITTER, "{wait:?}");
+        assert!(hosting.events().is_empty());
+        tokio::time::advance(wait).await;
+        hosting.host.check_rooms();
+        assert_eq!(hosting.hosted(), [(rejoin.clone(), Some(hosting.host.claim.clone()))]);
+        assert!(hosting.host.retries.is_empty());
+        hosting.opened(&rejoin);
+
+        // The code's room, unnamed as from an older service: sharing is unavailable until the
+        // room is asked for again and opened, with the same code.
+        hosting.host.rotate_code();
+        let (code, code_room) = (hosting.host.code.clone(), hosting.code_room());
+        hosting.hosted();
+        hosting.rate_limited(None);
+        assert_eq!(hosting.events(), [SharingEvent::Unavailable]);
+        let at = hosting.retry_at(&code_room).expect("asked for again");
+        tokio::time::advance(at - Instant::now()).await;
+        hosting.host.check_rooms();
+        assert_eq!(hosting.hosted().len(), 1);
+        hosting.opened(&code_room);
+        assert_eq!(hosting.events(), [SharingEvent::Ready { code }]);
+
+        // A retry for a room the host no longer wants is dropped.
+        hosting.rate_limited(Some(&code_room));
+        hosting.host.rotate_code();
+        hosting.opened(&hosting.code_room());
+        hosting.hosted();
+        tokio::time::advance(RATE_LIMITED_RETRY + RATE_LIMITED_JITTER).await;
+        hosting.host.check_rooms();
+        assert!(hosting.hosted().is_empty());
+
+        let limited = capture.named("host.room_rate_limited");
+        let rooms: Vec<_> = limited.iter().map(|event| event.field("room")).collect();
+        assert_eq!(rooms, [Some("rejoin"), Some("code"), Some("code")]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unnamed_rate_limited_takes_only_a_host_sent_just_before() {
+        let mut hosting = Hosting::start();
+        hosting.opened(&hosting.code_room());
+        hosting.events();
+        // Long after the rejoin room's `host`: about some other message.
+        tokio::time::advance(ANSWER_WITHIN + Duration::from_secs(1)).await;
+        hosting.rate_limited(None);
+        hosting
+            .host
+            .handle_server(ServerMessage::Error { code: ErrorCode::BadMessage, room: None });
+        assert_eq!(hosting.pending(), [hosting.rejoin()]);
+        assert!(hosting.host.retries.is_empty());
+        assert!(hosting.events().is_empty());
+        // Nothing waiting at all: nothing to take.
+        hosting.opened(&hosting.rejoin());
+        hosting.rate_limited(None);
+        assert!(hosting.host.retries.is_empty());
+        assert!(hosting.events().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_host_without_an_answer_is_asked_for_again_if_still_wanted() {
+        let mut hosting = Hosting::start();
+        let old_room = hosting.code_room();
+        hosting.host.rotate_code();
+        let rooms = [old_room, hosting.rejoin(), hosting.code_room()];
+        assert_eq!(hosting.pending(), rooms);
+        let started = Instant::now();
+        assert_eq!(hosting.host.next_room_check(), Some(started + ANSWER_TIMEOUT));
+        hosting.hosted();
+
+        tokio::time::advance(ANSWER_TIMEOUT - Duration::from_millis(1)).await;
+        hosting.host.check_rooms();
+        assert!(hosting.hosted().is_empty(), "not yet");
+        tokio::time::advance(Duration::from_millis(1)).await;
+        hosting.host.check_rooms();
+        // The old code's room is dropped; the others are asked for again.
+        let again: Vec<_> = hosting.hosted().into_iter().map(|(room, _)| room).collect();
+        assert_eq!(again, rooms[1..]);
+        assert_eq!(hosting.pending(), rooms[1..]);
+        assert_eq!(hosting.host.next_room_check(), Some(Instant::now() + ANSWER_TIMEOUT));
+        hosting.opened(&rooms[2]);
+        assert!(matches!(hosting.events()[..], [SharingEvent::Ready { .. }]));
     }
 }

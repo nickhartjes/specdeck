@@ -60,6 +60,8 @@ SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a com
 | Let viewers send links, or stop them | Select the **sharing settings** button and switch **Viewers can share links**. You see each link first |
 | End the session for everyone | Select **End session** and confirm. The agent or shell stops and the invite code stops working |
 
+Sometimes SpecDeck makes a new code by itself. When your app comes back to the sharing service and someone else is using your invite code there, it makes a new code and keeps a notice above the session until you dismiss it: *Someone else was using your invite code on the sharing service, so SpecDeck made a new one.* Share the new code. The old code and link may lead to another session, so tell anyone who still has them. Viewers already watching stay connected.
+
 The status next to the folder name shows what the agent is doing: **working**, **waiting for input**, or **exited**. For omp, Codex, Grok and pi it shows working or waiting when the agent reports it, and **Live** otherwise; OpenCode always shows **Live**, because its activity is not shared; a terminal session also shows **Live**, and **Shell exited** once you exit the shell. When Claude Code asks your permission, for example to run a command, the status shows **waiting** and the timeline shows the question, so viewers see why it paused.
 
 If you set up your own Claude Code status line, it keeps showing in the terminal. SpecDeck reads the same figures from it for the bar at the bottom of the window, which everyone in the session sees, including your 5-hour and 7-day limits.
@@ -159,3 +161,5 @@ If SpecDeck is not started again within **10 minutes**, the session ends itself 
 ## When sharing is unavailable
 
 If SpecDeck's sharing service cannot be reached, the session still runs on your computer. A banner says that sharing is unavailable, and the invite code appears as soon as the service is back.
+
+The service keeps your code for you while you are away, 5 minutes by default. When you are back within that time, the code stays the same, and viewers who were watching reconnect by themselves. After a longer absence, make a [new code](#while-you-host) to be safe.

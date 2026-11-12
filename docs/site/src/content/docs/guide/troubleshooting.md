@@ -9,7 +9,7 @@ SpecDeck says why on the start screen:
 
 | Message | What it means |
 |---|---|
-| That code does not work | Check the code with the host. Codes stop working when the host ends the session or makes a new code |
+| That code does not work | Check the code with the host. Codes stop working when the host ends the session or makes a new code. You also see this after waiting 5 minutes for a host that did not come back (see [Sharing is unavailable](#sharing-is-unavailable)) |
 | This session is full | The host reached their viewer limit |
 | Too many attempts | Several wrong codes were tried from your network. Wait a minute |
 | SpecDeck cannot reach its sharing service | Check your internet connection, and the [sharing service in Settings](/specdeck/guide/settings/#sharing-service) |
@@ -31,6 +31,8 @@ Sessions you host keep running through an update in the version that started the
 ## Sharing is unavailable
 
 When the host sees a banner that sharing is unavailable, SpecDeck cannot reach its sharing service. The session keeps running on the host's computer, and the invite code appears as soon as the service is back. If it does not come back, check the address in [Settings](/specdeck/guide/settings/#sharing-service).
+
+While the host is away from the service, viewers cannot get in. A viewer who was watching keeps reconnecting, and is back in the session once the host returns. A viewer who joins with the code meanwhile sees *Waiting for the host…* after 20 seconds, and gets in as soon as the host is back, without entering the code again. The service keeps the host's code for 5 minutes by default; a viewer waits as long, then sees *That code does not work*. After that, the host's app may [make a new code](/specdeck/guide/host/#while-you-host).
 
 ## See what the connection is doing
 

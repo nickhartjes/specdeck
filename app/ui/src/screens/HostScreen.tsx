@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, BookOpen, Copy, Gauge, Link2, Power, RefreshCw } from 'lucide-react';
+import { AlertTriangle, BookOpen, Copy, Gauge, Link2, Power, RefreshCw, X } from 'lucide-react';
 import { errorMessage, useBridge } from '../api/bridge';
 import type { AgentId, AgentStatus, BraindumpItemInfo, HostAsks, HostEvent, HostLink, HostSuggestion, Participant, SharedFileInfo, SharingState, TerminalSnapshot, TimelineEvent } from '../api/types';
 import { AskReadDialog } from '../components/AskReadDialog';
@@ -42,6 +42,8 @@ interface State {
   timelineSupported: boolean;
   sharing: SharingState;
   code: string | null;
+  /** The code was replaced because someone else held it, until the host dismisses the notice. */
+  codeReplaced: boolean;
   /** The sharing service, which join links name. */
   service: string;
   /** The service serves the web viewer, so join links open in a browser. */
@@ -94,6 +96,7 @@ const initial: State = {
   timelineSupported: false,
   sharing: 'connecting',
   code: null,
+  codeReplaced: false,
   service: '',
   webViewer: false,
   participants: [],
@@ -122,7 +125,7 @@ const initial: State = {
   asksAt: 0,
 };
 
-export function hostReducer(state: State, event: HostEvent | { type: 'limit'; limit: number }): State {
+export function hostReducer(state: State, event: HostEvent | { type: 'limit'; limit: number } | { type: 'dismiss-code-replaced' }): State {
   switch (event.type) {
     case 'snapshot':
       return {
@@ -173,6 +176,10 @@ export function hostReducer(state: State, event: HostEvent | { type: 'limit'; li
     }
     case 'sharing':
       return { ...state, sharing: event.state, code: event.code ?? (event.state === 'connecting' ? null : state.code) };
+    case 'code-replaced':
+      return { ...state, codeReplaced: true };
+    case 'dismiss-code-replaced':
+      return { ...state, codeReplaced: false };
     case 'web-viewer':
       return { ...state, webViewer: event.available };
     case 'participants':
@@ -448,6 +455,18 @@ export function HostScreen({ layout: stored, onLayout, screenReader = false, onE
             <AlertTriangle aria-hidden />
             Sharing is unavailable: SpecDeck's sharing service cannot be reached. Your session keeps running here, and SpecDeck keeps
             trying; the invite code appears once it can be shared.
+          </div>
+        )}
+        {state.codeReplaced && (
+          <div className="banner warning" role="status">
+            <AlertTriangle aria-hidden />
+            <span>
+              Someone else was using your invite code on the sharing service, so SpecDeck made a new one. Share the new code; the old code and
+              link may lead to another session.
+            </span>
+            <button className="btn ghost small icon" onClick={() => dispatch({ type: 'dismiss-code-replaced' })} aria-label="Dismiss" title="Dismiss">
+              <X aria-hidden />
+            </button>
           </div>
         )}
         {state.exited !== null && (

@@ -12,9 +12,22 @@ A session's invite code, such as `7K2M-9QXH-4TPA`, is 12 random characters from 
 - **It is the only key.** Anyone with the code can watch, up to the session's viewer limit (20 unless the host lowers it). There is no approval step: the host sees each viewer by the name they chose, and can remove them.
 - **It works until the host replaces it or ends the session.** It does not expire on its own. **New code** in the session window replaces it at once, and removing a viewer also makes a new code, so they cannot come back with the old one. Viewers already watching stay connected; a viewer who loses the connection rejoins with a separate random token, not the code.
 - **It is never sent to the service.** The app turns the code into two values: a **room id**, which the service uses to find the session, and a **key** that stays in the apps. Host and viewer sign the messages that set up their connection with that key. Those messages also carry the fingerprint of each side's encryption certificate, so a service that swaps in its own connection details is refused, and no session content is shown. In a web join link, the code sits after the `#`, which browsers never send to a server.
-- **Guessing on the service is limited.** It refuses further joins from a network after 10 wrong codes in a minute, and takes at most 60 joins per minute for any one session.
+- **Only the host can open its room again.** While the host is connected, and for 5 minutes after its connection to the service drops, the service gives the code's room only to a connection that presents the host's claim. A kept room can be released early, but only when the service is full, and one network cannot fill it alone. See [While the host is away](#while-the-host-is-away).
+- **Guessing on the service is limited.** A wrong code counts as a failed attempt, and so does asking to open a room that someone else holds. After 10 failed attempts in a minute from one network, the service refuses that network's joins and requests to open a room, whether the room exists or not. Asking for a room that does not exist opens it, and one network may open at most 30 new rooms a minute, so asking with room requests is slower than with joins only by that margin. It also takes at most 60 joins per minute for any one session.
 
 The host's app also signs what it sends on the encrypted connection. That does not protect against the service any further: the key for checking those signatures arrives over the same encrypted connection.
+
+### While the host is away
+
+A host's connection to the service can drop, for example when the laptop sleeps or changes networks. The service then keeps the host's rooms for 5 minutes (self-hosters can change this), so that nobody else who knows the code can open its room meanwhile, and the host comes back to the same code.
+
+- **Kept rooms are bounded per network.** One network may have at most 16 rooms kept for hosts that are away, and may open at most 30 new rooms a minute. When the whole service is full, a new room releases the kept room whose hold time ends first. Filling the service takes many networks, so one person cannot push a host's kept room out on purpose.
+
+- **The host proves it is the same host with a random value**, which its app makes for each session and sends with every request to open a room. It is unrelated to the code, so it tells the service nothing about it. The service keeps only a hash of it, in memory, for as long as it holds or keeps the room, and never logs it or passes it on.
+- **Viewers who join meanwhile wait** on the service instead of being told the code is wrong. Viewers who were watching get back in when the host returns.
+- **After the hold time**, or after the service restarts, the room is free again. If someone else opens it then, the host's app notices when it returns, makes a new code and says so. See [A code can be used by someone else after the host was away](/specdeck/security/known-limits/#a-code-can-be-used-by-someone-else-after-the-host-was-away).
+
+Hosts on an app from before this behaviour send no such value: their rooms close when their connection drops, as before, and no other connection can take them over.
 
 ### The weakness: guessing a code offline
 
@@ -39,14 +52,15 @@ A fix is planned: the apps will agree on a key with a password-authenticated key
 
 - the IP addresses of hosts and viewers;
 - room ids, and when sessions start and end;
+- a hash of each host's random value for its rooms (see [While the host is away](#while-the-host-is-away));
 - how many viewers join each session, and when;
 - the messages that set up each connection, which list the network addresses each app can be reached at. From the app these include addresses in your local network; browsers usually hide those.
 
-It never sees names, the invite code, or anything of the session itself. It keeps rooms and connections in memory only, and loses them when it restarts.
+It never sees names, the invite code, or anything of the session itself. It keeps rooms and connections in memory only, and loses them when it restarts. A room whose host's connection dropped is kept for at most the hold time, then forgotten.
 
-Its log records what it does, one line per event: when rooms open and close and how many viewers joined each, when viewers join and leave, joins it turned away and why (such as a wrong code), connections that failed, which of its limits were reached, and every 5 minutes how many connections, rooms and viewers are open. Rooms and viewers appear only as numbers it counts up from 1 each time it starts. So the log shows when sessions happen and how many people watch them, but not which session or who.
+Its log records what it does, one line per event: when rooms open and close and how many viewers joined each, when a host's connection drops and when it returns, when viewers join, wait for a host and leave, joins it turned away and why (such as a wrong code), connections that failed, which of its limits were reached, and every 5 minutes how many connections, rooms and viewers are open. Rooms and viewers appear only as numbers it counts up from 1 each time it starts. So the log shows when sessions happen and how many people watch them, but not which session or who.
 
-The log never holds room ids, invite codes, connection ids, the messages that set up a connection, relay credentials or IP addresses, at any level, and there is no setting to add them. How long the built-in service keeps its log is not stated yet. See [Logs](/specdeck/self-host/configuration/#logs) for every event.
+The log never holds room ids, invite codes, the host's random value or its hash, connection ids, the messages that set up a connection, relay credentials or IP addresses, at any level, and there is no setting to add them. How long the built-in service keeps its log is not stated yet. See [Logs](/specdeck/self-host/configuration/#logs) for every event.
 
 **The relay** forwards the encrypted traffic of relayed connections and cannot read it. It sees the IP addresses of both ends and how much traffic passes. It writes a log line for each connection it relays, with the addresses of both ends. How long the built-in service keeps those logs is not stated yet.
 
@@ -59,7 +73,7 @@ The relay forwards traffic only for apps that host a session or have joined one:
 - **never forwards to private addresses**: loopback, private, link-local and other special-purpose addresses, for IPv4 and IPv6, so it cannot be used to reach the network it runs in;
 - **limits each credential and the relay as a whole** to a number of relayed connections, and each connection to about 20 Mbit/s, so one session cannot use it all.
 
-The server bounds everything it holds as well: connections in total and per network, rooms, viewers per host, and how fast set-up messages may flow. When a limit is reached, the apps say **"The sharing service is busy"** and keep retrying where they already would. Too many wrong codes from one network show **"Too many attempts"**. Self-hosters can change each limit; see [Limits](/specdeck/self-host/configuration/#limits).
+The server bounds everything it holds as well: connections in total and per network, rooms, viewers per host, and how fast messages may flow. It closes connections that stop answering after 90 seconds. When a limit is reached, the apps say **"The sharing service is busy"** and keep retrying where they already would. Too many wrong codes from one network show **"Too many attempts"**. Self-hosters can change each limit; see [Limits](/specdeck/self-host/configuration/#limits).
 
 ## The web viewer's code
 
