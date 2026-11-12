@@ -154,6 +154,7 @@ fn browser(app: &AppHandle, id: SessionId) -> tauri::Result<Arc<Browser>> {
     let browser = Arc::new(Browser { window, key, loads });
     all.insert(id, browser.clone());
     tracing::info!(session = id, "browser.opened");
+    crate::window_opened(app, &label);
     Ok(browser)
 }
 

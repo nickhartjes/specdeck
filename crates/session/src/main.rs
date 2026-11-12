@@ -50,6 +50,8 @@ fn main() -> ExitCode {
     let (diagnostics, subscriber) = Diagnostics::for_session(PathBuf::from(log_dir), id);
     let _ = tracing::subscriber::set_global_default(subscriber);
     specdeck_diag::install_panic_hook("session.panicked");
+    // A session can outlive the app that started it, through an update: which version runs it.
+    tracing::info!(session = id, version = env!("CARGO_PKG_VERSION"), "session.process_started");
     let diagnostics = Arc::new(diagnostics);
     let options = Options {
         id,

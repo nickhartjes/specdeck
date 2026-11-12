@@ -36,6 +36,11 @@ pub use crate::panic::install_panic_hook;
 
 mod limit;
 mod panic;
+pub mod run;
+pub mod system;
+mod windows_crash;
+#[cfg(windows)]
+pub use crate::windows_crash::{install_exception_filter, reopen_if_new_day};
 
 /// The app's log files are `specdeck.log.<yyyy-mm-dd>`, one per day (UTC).
 pub const APP_LOG: &str = "specdeck.log";
@@ -351,9 +356,31 @@ fn suppressed(sink: &Sink, name: &str, count: u64) -> Map<String, Value> {
     line
 }
 
+/// Events that go straight to the file ([`Delivery::Now`]): crashes and the end of a run, as the
+/// process may end next, and the few steps a minute that come before a crash, which a queued
+/// write could lose with it.
+const AT_ONCE: [&str; 11] = [
+    "app.panicked",
+    "session.panicked",
+    "app.crashed",
+    "app.ended_unexpectedly",
+    "app.stopped",
+    "window.opened",
+    "window.closed",
+    "folder_picker.opened",
+    "folder_picker.picked",
+    "folder_picker.cancelled",
+    "session.requested",
+];
+
+/// Whether event `name` goes straight to the file; also any other crash (`*.panicked`).
+fn at_once(name: &str) -> bool {
+    AT_ONCE.contains(&name) || name.ends_with(".panicked")
+}
+
 /// Writes each event as one JSON line, `{"ts":…,"level":…,"event":…, fields…}`, to the file
-/// and to the in-memory list. A crash's line (`*.panicked`) goes straight to the file; the
-/// flood limit applies to it too, so a task that panics in a loop is cut off as well.
+/// and to the in-memory list. The events in [`AT_ONCE`] go straight to the file; the flood
+/// limit applies to them too, so a task that panics in a loop is cut off as well.
 struct JsonLines(Arc<Sink>);
 
 thread_local! {
@@ -386,7 +413,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for JsonLines {
             return;
         }
         let _writing = Writing;
-        let panicked = name.as_str().is_some_and(|name| name.ends_with(".panicked"));
+        let now = name.as_str().is_some_and(at_once);
         // Verbose traffic is already summed once a second.
         if *level != Level::DEBUG {
             let name = name.as_str().unwrap_or_default();
@@ -400,7 +427,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for JsonLines {
         }
         let mut line = sink.line(level, name);
         line.extend(fields.0);
-        sink.write(line, if panicked { Delivery::Now } else { Delivery::Queued });
+        sink.write(line, if now { Delivery::Now } else { Delivery::Queued });
     }
 }
 
@@ -535,6 +562,32 @@ pub struct Heartbeat {
     pub elements: Option<u64>,
 }
 
+/// A step on the start screen the window reports, before something that could take the app
+/// down with it, such as the system's folder picker. A fixed set: the window cannot pass text.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Step {
+    FolderPickerOpened,
+    FolderPicked,
+    FolderPickerCancelled,
+}
+
+impl Step {
+    /// `folder_picker.opened`, `folder_picker.picked` or `folder_picker.cancelled`; never the
+    /// folder.
+    pub fn record(self) {
+        match self {
+            Step::FolderPickerOpened => {
+                tracing::info!(target: "specdeck_diag", "folder_picker.opened")
+            }
+            Step::FolderPicked => tracing::info!(target: "specdeck_diag", "folder_picker.picked"),
+            Step::FolderPickerCancelled => {
+                tracing::info!(target: "specdeck_diag", "folder_picker.cancelled")
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowSize {
@@ -627,6 +680,11 @@ pub struct ExportHeader {
     pub exported_at: String,
     pub app_version: &'static str,
     pub os: &'static str,
+    /// The OS's version and the web view's, as in `app.started`; empty until known.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub os_version: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub webview_version: String,
     pub arch: &'static str,
     pub sharing_service: ServiceKind,
     pub verbose: bool,
@@ -653,6 +711,8 @@ impl ExportHeader {
             exported_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default(),
             app_version: env!("CARGO_PKG_VERSION"),
             os: std::env::consts::OS,
+            os_version: String::new(),
+            webview_version: String::new(),
             arch: std::env::consts::ARCH,
             sharing_service: if effective_service == built_in {
                 ServiceKind::Default
@@ -664,6 +724,13 @@ impl ExportHeader {
             terminal: status.terminal,
             other_sessions: Vec::new(),
         }
+    }
+
+    /// Adds the OS's and the web view's versions from this run's launch record.
+    pub fn with_launch(mut self, launch: &run::Launch) -> Self {
+        self.os_version = launch.os.version.clone();
+        self.webview_version = launch.webview.clone();
+        self
     }
 
     /// Adds the sessions open in other windows.
@@ -886,6 +953,45 @@ mod tests {
         drop(diagnostics); // flushes the file
         let text = std::fs::read_to_string(&log_files(dir.path())[0].path).unwrap();
         assert_eq!(text.lines().count(), limit::PER_MINUTE as usize + 2);
+    }
+
+    #[test]
+    fn the_window_reports_fixed_steps_only() {
+        let step: Step = serde_json::from_str("\"folder_picker_cancelled\"").unwrap();
+        assert_eq!(step, Step::FolderPickerCancelled);
+        assert!(serde_json::from_str::<Step>("\"/Users/marker-user/project\"").is_err());
+        assert!(serde_json::from_str::<Step>("\"folder_picker.opened\"").is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
+        tracing::subscriber::with_default(subscriber, || {
+            Step::FolderPickerOpened.record();
+            Step::FolderPicked.record();
+        });
+        let names: Vec<_> =
+            diagnostics.recent().iter().map(|e| e["event"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(names, ["folder_picker.picked", "folder_picker.opened"]);
+        // Read before the writer is flushed: both are already there.
+        let text = std::fs::read_to_string(&log_files(dir.path())[0].path).unwrap();
+        assert!(text.contains("folder_picker.opened") && text.contains("folder_picker.picked"));
+    }
+
+    #[test]
+    fn steps_before_a_crash_reach_the_file_at_once() {
+        for name in ["app.crashed", "window.opened", "folder_picker.cancelled", "x.panicked"] {
+            assert!(at_once(name), "{name}");
+        }
+        assert!(!at_once("ui.size") && !at_once("app.started"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "specdeck_diag", kind = "session", windows = 1, "window.opened");
+        });
+        // Read before the writer is flushed: the line is already there.
+        let text = std::fs::read_to_string(&log_files(dir.path())[0].path).unwrap();
+        assert!(text.contains("\"window.opened\""), "{text}");
+        drop(diagnostics);
     }
 
     static HOOK: std::sync::Once = std::sync::Once::new();
@@ -1292,6 +1398,22 @@ mod tests {
         let header = serde_json::to_value(header).unwrap();
         assert_eq!(header["session"]["role"], "none");
         assert_eq!(header["otherSessions"][0]["role"], "host");
+    }
+
+    #[test]
+    fn an_export_names_the_os_and_web_view_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, _subscriber) = Diagnostics::new(dir.path().to_owned(), APP_LOG);
+        let launch = run::Launch {
+            os: system::Os { name: "Windows 11".into(), version: "10.0.26100".into() },
+            webview: "131.0.2903.70".into(),
+            ..run::Launch::default()
+        };
+        let header = ExportHeader::new(diagnostics.status("main", SessionStatus::None), "a", "a")
+            .with_launch(&launch);
+        let header = serde_json::to_value(header).unwrap();
+        assert_eq!(header["osVersion"], "10.0.26100");
+        assert_eq!(header["webviewVersion"], "131.0.2903.70");
     }
 
     #[test]

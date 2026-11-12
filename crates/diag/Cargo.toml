@@ -16,5 +16,24 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["r
 tracing-appender = "0.2"
 time = { version = "0.3", features = ["formatting", "local-offset"] }
 
+# The OS's version for the launch record (`system.rs`).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+# The OS's version, and the record of a crash Windows ends the app for (`windows_crash.rs`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Wdk_System_SystemServices",
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_IO",
+  "Win32_System_Kernel",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 tempfile = "3"
