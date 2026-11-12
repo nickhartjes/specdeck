@@ -510,6 +510,25 @@ async fn a_crash_is_in_the_session_log_without_its_message() {
     assert!(!log.contains("test panic") && !log.contains(&temp), "{log}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn the_session_log_names_its_version() {
+    let process = Process_::launch_with(600, &[]);
+    let deadline = Instant::now() + WAIT;
+    let started = loop {
+        let found = session_log(&process)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|line| line["event"] == "session.process_started");
+        if let Some(found) = found {
+            break found;
+        }
+        assert!(Instant::now() < deadline, "no session.process_started");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(started["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(started["process"], "session-1");
+}
+
 /// Takes over a minute, so it runs only when asked: `cargo test -- --ignored`.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]

@@ -4767,6 +4767,7 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tracing",
  "window-vibrancy",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4802,6 +4803,7 @@ dependencies = [
 name = "specdeck-diag"
 version = "1.8.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "specdeck-core",
@@ -4810,6 +4812,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

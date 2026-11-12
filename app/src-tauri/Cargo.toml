@@ -62,3 +62,7 @@ objc2-web-kit = { version = "0.3", default-features = false, features = ["std", 
 [dev-dependencies]
 tempfile = "3"
 specdeck-server = { path = "../../crates/server" }
+
+# The native crash tests keep Windows' crash dialog from waiting on CI (`tests/native_crash.rs`).
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_Debug"] }

@@ -80,8 +80,20 @@ export const tauriBridge: Bridge = {
     return () => void stop.then((unlisten) => unlisten());
   },
   chooseFolder: async () => {
+    // Recorded before the system's picker opens, so a crash in it leaves the step in the log; a
+    // failure to record never keeps the picker closed. Never the folder.
+    const step = async (name: 'folder_picker_opened' | 'folder_picked' | 'folder_picker_cancelled') => {
+      try {
+        await invoke('diagnostics_step', { step: name });
+      } catch {
+        // The picker opens all the same.
+      }
+    };
+    await step('folder_picker_opened');
     const folder = await open({ directory: true, multiple: false, title: 'Choose the folder the agent works in' });
-    return typeof folder === 'string' ? folder : null;
+    const picked = typeof folder === 'string' ? folder : null;
+    await step(picked ? 'folder_picked' : 'folder_picker_cancelled');
+    return picked;
   },
   startHosting: (agent, folder, cols, rows) => invoke('start_hosting', { agent, folder, cols, rows }),
   hostAttach: (terminal, events) =>

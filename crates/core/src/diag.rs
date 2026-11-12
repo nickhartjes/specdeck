@@ -702,7 +702,8 @@ pub fn environment_loaded(source: EnvSource, outcome: EnvOutcome, path: PathShap
     }
 }
 
-fn agent_str(agent: AgentId) -> &'static str {
+/// The agent as the log names it.
+pub fn agent_str(agent: AgentId) -> &'static str {
     match agent {
         AgentId::ClaudeCode => "claude_code",
         AgentId::OpenCode => "open_code",
