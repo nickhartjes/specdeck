@@ -751,6 +751,97 @@ exit 0"#,
 }
 
 #[tokio::test]
+async fn private_and_ignored_files_are_named_only() {
+    let bin = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(folder.path())
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(folder.path().join(".gitignore"), "*.local.md\n").unwrap();
+    git(&["add", ".gitignore"]);
+    git(&["commit", "-q", "-m", "first"]);
+    // Creates `.env`, `notes.local.md` (ignored) and `plan.md`, each reported with its content;
+    // then a shell command writes `credentials.md` (private, not ignored) and `shell.md`.
+    fake_agent(
+        bin.path(),
+        "claude",
+        r#"url=$(sed -n 's/.*"url": "\(http[^"]*\)".*/\1/p' "$2" | head -n 1)
+post() { curl -s -o /dev/null -X POST -H "Authorization: Bearer $SPECDECK_HOOK_TOKEN" -d "$1" "$url"; }
+post '{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"files"}'
+write() { post "{\"hook_event_name\":\"PreToolUse\",\"prompt_id\":\"p1\",\"tool_name\":\"Write\",\"tool_use_id\":\"$1\",\"tool_input\":{\"file_path\":\"$2\"}}"
+  printf '%s\n' "$3" > "$2"
+  post "{\"hook_event_name\":\"PostToolUse\",\"prompt_id\":\"p1\",\"tool_name\":\"Write\",\"tool_use_id\":\"$1\",\"tool_input\":{\"file_path\":\"$2\"},\"tool_response\":{\"filePath\":\"$2\",\"originalFile\":null,\"content\":\"$3\"}}"; }
+write t1 "$PWD/.env" 'TOKEN=secret'
+write t2 "$PWD/notes.local.md" 'mine'
+write t3 "$PWD/plan.md" 'shared'
+post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"t4","tool_input":{"command":"printf"}}'
+printf 'TOKEN=secret\n' > credentials.md
+printf 'from a command\n' > shell.md
+post '{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"t4","tool_input":{"command":"printf"},"tool_response":{}}'
+echo posted
+exit 0"#,
+    );
+
+    let (session, mut events) = HostSession::start(
+        config(AgentId::ClaudeCode, folder.path(), data.path()),
+        &env_with_git(bin.path()),
+    )
+    .await
+    .unwrap();
+    next_matching(&mut events, |e| matches!(e, SessionEvent::Exited { .. })).await;
+
+    let entries: Vec<Entry> = session.timeline().into_iter().map(|e| e.entry).collect();
+    let changes: Vec<(String, usize)> = entries
+        .iter()
+        .filter_map(|e| match e {
+            Entry::FileChange { path, hunks, .. } => Some((path.clone(), hunks.len())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            (".env".into(), 0),
+            ("notes.local.md".into(), 0),
+            ("plan.md".into(), 1),
+            ("credentials.md".into(), 0),
+            ("shell.md".into(), 1),
+        ]
+    );
+    let documents: Vec<(String, Option<String>)> = entries
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Document { path, text, .. } => Some((path.clone(), text.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        documents,
+        [
+            ("plan.md".to_owned(), Some("shared\n".to_owned())),
+            ("shell.md".to_owned(), Some("from a command\n".to_owned())),
+        ]
+    );
+    session.close();
+}
+
+/// [`env`], with git where this machine has it.
+fn env_with_git(bin: &Path) -> Environment {
+    let git = Environment::from_process().find_executable("git").expect("git");
+    let path = format!("{}:{}:/usr/bin:/bin", bin.display(), git.parent().unwrap().display());
+    [("PATH", path)].into_iter().collect()
+}
+
+#[tokio::test]
 async fn openspec_documents_and_plans_reach_the_timeline() {
     let bin = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();

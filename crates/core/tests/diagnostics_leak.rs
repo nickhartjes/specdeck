@@ -38,6 +38,8 @@ const TURN_SECRET: &str = "Marker-Turn-Secret";
 const SUGGESTION_MARKER: &str = "Marker-Suggestion-Text";
 const CODE_PATH_MARKER: &str = "marker-code-path.rs";
 const CODE_TEXT_MARKER: &str = "Marker-Code-Text";
+/// A private file the agent writes: named only, and never named in diagnostics.
+const PRIVATE_PATH_MARKER: &str = "marker-private-path.pem";
 const FILE_NAME_MARKER: &str = "Marker-Shared-Name";
 const FILE_TEXT_MARKER: &str = "Marker-Shared-Text";
 const LINK_PATH_MARKER: &str = "marker-link-path";
@@ -68,6 +70,8 @@ post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Read","tool_
 post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"marker-code-path.rs"}}'
 echo 'const C: &str = "Marker-Code-Text";' > "$PWD/marker-code-path.rs"
 post '{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"marker-code-path.rs"},"tool_response":{"filePath":"marker-code-path.rs","originalFile":null,"content":"x"}}'
+post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"k","tool_input":{"file_path":"marker-private-path.pem"}}'
+post '{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"k","tool_input":{"file_path":"marker-private-path.pem"},"tool_response":{"filePath":"marker-private-path.pem","originalFile":null,"content":"x"}}'
 post '{"hook_event_name":"PromptRenamed","prompt_id":"p1","prompt":"Marker-Renamed-Text"}'
 post '{"hook_event_name":"PreToolUse","tool_name":"mcp__Marker-Mcp-Server__tool","tool_input":{"x":"Marker-Renamed-Text"}}'
 echo posted
@@ -423,6 +427,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "agent.started",
         "hooks.listening",
         "timeline.unplaced",
+        "file.not-shown",
         "test.panicked",
         "app.started",
         "app.ended_unexpectedly",
@@ -448,6 +453,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         SUGGESTION_MARKER,
         CODE_PATH_MARKER,
         CODE_TEXT_MARKER,
+        PRIVATE_PATH_MARKER,
         FILE_NAME_MARKER,
         FILE_TEXT_MARKER,
         LINK_PATH_MARKER,
