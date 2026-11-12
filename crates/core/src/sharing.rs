@@ -5,7 +5,7 @@
 //! A viewer's sender reads from the log while that viewer's channel has room, so a slow viewer
 //! falls behind and catches up later without ever holding up the agent or other viewers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -73,6 +73,32 @@ const FILES_HIGH_WATER: usize = BUFFERED_LOW;
 /// An upload that gets no chunk for this long is dropped and its room freed.
 const UPLOAD_IDLE: Duration = Duration::from_secs(30);
 
+/// A viewer connection that is not admitted this long after it connected is dropped
+/// (`harden-viewer-admission` design decision 2): `Hello` is the first thing a viewer sends.
+pub const HELLO_DEADLINE: Duration = Duration::from_secs(10);
+
+/// A viewer connection that is not admitted this long after the service announced it is
+/// dropped; longer than the viewer's own [`crate::viewer::CONNECT_TIMEOUT`].
+pub const JOIN_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Most viewer connections the host holds at once, admitted or not, whatever the service
+/// announces: 20 viewers, each of which may be reconnecting once (design decision 3).
+const MAX_SLOTS: usize = 40;
+
+/// Most resume tokens of removed or forgotten viewers kept to refuse them with a reason; the
+/// oldest goes first, and its viewer is then refused without one.
+const MAX_REMOVED: usize = 200;
+
+/// Most viewers kept to return who are not connected; the one away longest is forgotten first,
+/// as a new code forgets them (design decision 9).
+const MAX_AWAY: usize = 100;
+
+/// Most suggestions waiting for the host in a session, from all viewers together.
+const MAX_WAITING_SUGGESTIONS: usize = 50;
+
+/// Most viewers' links waiting for the host in a session.
+const MAX_WAITING_LINKS: usize = 50;
+
 #[derive(Clone, Debug)]
 pub struct SharingConfig {
     /// `ws://` or `wss://…/signal`.
@@ -82,6 +108,10 @@ pub struct SharingConfig {
     /// ICE settings; TURN servers from the signalling service are added to these.
     pub peer: PeerConfig,
     pub viewer_limit: u8,
+    /// [`HELLO_DEADLINE`] outside tests.
+    pub hello_deadline: Duration,
+    /// [`JOIN_DEADLINE`] outside tests.
+    pub join_deadline: Duration,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -285,13 +315,15 @@ impl Sharing {
         self.status.clone()
     }
 
-    /// Replaces the invite code; viewers who already joined stay.
+    /// Replaces the invite code; viewers who are connected stay. Connections still joining
+    /// with the old code are dropped, and viewers who are not connected need the new code.
     pub fn new_code(&self) {
         let _ = self.commands.send(Command::NewCode);
     }
 
     /// Disconnects a viewer and replaces the code, so they cannot rejoin with it; their resume
-    /// token is forgotten, so they cannot return through the rejoin room either.
+    /// token is refused from now on, so they cannot return through the rejoin room either, and
+    /// their connections that are still joining and their unfinished uploads end.
     pub fn remove(&self, viewer_id: u32) {
         let _ = self.commands.send(Command::Remove(viewer_id));
     }
@@ -366,6 +398,8 @@ impl Drop for Sharing {
 struct Identity {
     id: u32,
     username: String,
+    /// Since when they are not connected; `None` while they are.
+    away_since: Option<Instant>,
 }
 
 struct Slot {
@@ -377,6 +411,9 @@ struct Slot {
     admitted: Option<Admitted>,
     /// Whether the connection is relayed, once connected.
     relayed: Option<bool>,
+    /// Dropped when not admitted by then: some time after it was announced, and sooner once
+    /// it connected.
+    deadline: Instant,
 }
 
 #[derive(Clone, Copy)]
@@ -469,7 +506,8 @@ struct Host {
     /// By the viewer's connection id on the signalling service.
     slots: HashMap<String, Slot>,
     identities: HashMap<[u8; 32], Identity>,
-    removed: HashSet<[u8; 32]>,
+    /// Tokens of viewers who were removed or forgotten, oldest first, at most [`MAX_REMOVED`].
+    removed: VecDeque<[u8; 32]>,
     next_viewer_id: u32,
     peer_tx: UnboundedSender<(String, PeerEvent)>,
     status: watch::Sender<SharingStatus>,
@@ -590,6 +628,10 @@ impl Requests {
             (Outcome::Off, None)
         } else if !self.buckets.entry(viewer).or_insert_with(|| Bucket::new(now)).take(now) {
             (Outcome::RateLimited, None)
+        } else if self.waiting_full(&request) {
+            // As many wait as the host will read: the viewer is told to wait, as for its own
+            // limit.
+            (Outcome::RateLimited, None)
         } else {
             match request {
                 ViewerRequest::Suggest { text } => {
@@ -619,6 +661,21 @@ impl Requests {
         };
         diag::host_viewer_request(viewer, kind, bytes, name);
         (outcome, added)
+    }
+
+    /// Whether as many requests of this kind wait for the host as a session holds.
+    fn waiting_full(&self, request: &ViewerRequest) -> bool {
+        match request {
+            ViewerRequest::Suggest { .. } => {
+                let waiting = |s: &&HostSuggestion| s.state == SuggestionState::Waiting;
+                self.suggestions.iter().filter(waiting).count() >= MAX_WAITING_SUGGESTIONS
+            }
+            ViewerRequest::ShareLink { .. } => {
+                let waiting = |l: &&HostLink| l.state == SentLinkState::Waiting;
+                self.links.iter().filter(waiting).count() >= MAX_WAITING_LINKS
+            }
+            _ => false,
+        }
     }
 
     /// Records the host's answer to a waiting link; the link as answered, or None when it was
@@ -768,7 +825,7 @@ impl Host {
             credentials_expire: None,
             slots: HashMap::new(),
             identities: HashMap::new(),
-            removed: HashSet::new(),
+            removed: VecDeque::new(),
             next_viewer_id: 1,
             peer_tx: mpsc::unbounded_channel().0,
             status,
@@ -800,6 +857,7 @@ impl Host {
                 next_attempt = Instant::now() + backoff;
             }
             let time_up = self.asks.deadline();
+            let joining = self.join_deadline();
             tokio::select! {
                 command = commands.recv() => match command {
                     Some(Command::NewCode) => self.rotate_code(),
@@ -836,6 +894,10 @@ impl Host {
                 // The open read request's time is up: it closes as if the host went on.
                 _ = tokio::time::sleep_until(time_up.unwrap_or(next_attempt)), if time_up.is_some() => {
                     self.close_read(true);
+                }
+                // A connection that is joining ran out of time.
+                _ = tokio::time::sleep_until(joining.unwrap_or(next_attempt)), if joining.is_some() => {
+                    self.drop_late_joins();
                 }
                 _ = traffic.tick() => {
                     self.traffic.report_host();
@@ -968,6 +1030,11 @@ impl Host {
                 );
             }
             ServerMessage::ViewerJoined { room, connection } => {
+                // The service's word neither replaces a connection the host holds nor grows them
+                // past the bound.
+                if self.slots.contains_key(&connection) || self.slots.len() >= MAX_SLOTS {
+                    return;
+                }
                 let auth = if room == self.rejoin_room {
                     Auth::Returning(None)
                 } else if room == self.keys.room_id {
@@ -997,7 +1064,9 @@ impl Host {
                         }
                     }
                 });
-                self.slots.insert(connection, Slot { peer, auth, admitted: None, relayed: None });
+                let deadline = Instant::now() + self.config.join_deadline;
+                let slot = Slot { peer, auth, admitted: None, relayed: None, deadline };
+                self.slots.insert(connection, slot);
             }
             ServerMessage::Signal { connection, payload } => {
                 let Some(slot) = self.slots.get_mut(&connection) else { return };
@@ -1006,13 +1075,16 @@ impl Host {
                         let offer = DescriptionKind::Offer;
                         let verified = match slot.auth {
                             Auth::Code(key) => description.verify(&key, &connection, offer).ok(),
-                            // A returning viewer signs with its resume token; try each admitted
-                            // viewer's (at most 20).
-                            Auth::Returning(_) => self.identities.keys().find_map(|token| {
-                                let sdp = description.verify(token, &connection, offer).ok()?;
-                                slot.auth = Auth::Returning(Some(*token));
-                                Some(sdp)
-                            }),
+                            // A returning viewer signs with its resume token; try each known
+                            // viewer's, and each removed one's, who is then told so at `Hello`
+                            // (design decision 6). Both are bounded.
+                            Auth::Returning(_) => {
+                                self.identities.keys().chain(&self.removed).find_map(|token| {
+                                    let sdp = description.verify(token, &connection, offer).ok()?;
+                                    slot.auth = Auth::Returning(Some(*token));
+                                    Some(sdp)
+                                })
+                            }
                         };
                         match verified {
                             Some(sdp) => {
@@ -1038,7 +1110,7 @@ impl Host {
             }
             ServerMessage::Error { code: ErrorCode::RoomTaken } => {
                 // Practically impossible with 60-bit codes; pick another one.
-                self.rotate_code();
+                self.replace_code();
             }
             ServerMessage::Error { code: ErrorCode::ServerBusy } => self.busy = true,
             _ => {}
@@ -1070,6 +1142,8 @@ impl Host {
             }
             PeerEvent::State(datachannel::ConnectionState::Connected) => {
                 slot.relayed = slot.peer.report_path();
+                // `Hello` is the first thing a viewer sends once connected.
+                slot.deadline = slot.deadline.min(Instant::now() + self.config.hello_deadline);
             }
             PeerEvent::State(
                 datachannel::ConnectionState::Failed
@@ -1110,6 +1184,11 @@ impl Host {
                 last_event_seq,
                 resume_token,
             } => {
+                // A connection is one viewer: joining again on it is not something an honest
+                // app does, and would give it a new identity, rate limit and file quota.
+                if self.slots.get(connection).is_none_or(|slot| slot.admitted.is_some()) {
+                    return self.disconnect(connection, LeaveReason::Malformed);
+                }
                 if let Err(reason) = control::check_version(
                     MIN_VIEWER_PROTOCOL_VERSION,
                     PROTOCOL_VERSION,
@@ -1117,6 +1196,14 @@ impl Host {
                 ) {
                     return self.refuse(connection, reason);
                 }
+                let record_cursor = last_output_seq.map_or(Some(0), |seq| seq.checked_add(1));
+                let event_cursor = last_event_seq.map_or(Some(0), |seq| {
+                    usize::try_from(seq).ok().and_then(|seq| seq.checked_add(1))
+                });
+                let (Some(record_cursor), Some(event_cursor)) = (record_cursor, event_cursor)
+                else {
+                    return self.disconnect(connection, LeaveReason::Malformed);
+                };
                 // Through the rejoin room, only the viewer whose token signed the offer.
                 if let Some(Auth::Returning(signed_with)) =
                     self.slots.get(connection).map(|s| s.auth)
@@ -1142,6 +1229,7 @@ impl Host {
                         let identity = Identity {
                             id: self.next_viewer_id,
                             username: username.trim().to_owned(),
+                            away_since: None,
                         };
                         self.next_viewer_id += 1;
                         self.identities.insert(token, identity.clone());
@@ -1160,6 +1248,9 @@ impl Host {
                     .collect();
                 for id in stale {
                     self.drop_slot(&id, LeaveReason::Replaced);
+                }
+                if let Some(identity) = self.identities.get_mut(&token) {
+                    identity.away_since = None;
                 }
 
                 let (cols, rows) = self.view.size();
@@ -1181,8 +1272,8 @@ impl Host {
                     id: identity.id,
                     resume_token: token,
                     protocol: protocol_version,
-                    record_cursor: last_output_seq.map_or(0, |seq| seq + 1),
-                    event_cursor: last_event_seq.map_or(0, |seq| seq as usize + 1),
+                    record_cursor,
+                    event_cursor,
                     last_status: None,
                     stream_open,
                     records_sent: 0,
@@ -1698,6 +1789,7 @@ impl Host {
                 RefusalReason::Removed => LeaveReason::Removed,
                 _ => LeaveReason::Refused,
             };
+            self.release(&slot);
             self.record_departure(&slot, left);
             let _ = slot
                 .peer
@@ -1720,14 +1812,89 @@ impl Host {
     /// upload still on its way is lost, and its room freed.
     fn drop_slot(&mut self, connection: &str, reason: LeaveReason) -> bool {
         let Some(slot) = self.slots.remove(connection) else { return false };
-        if let Some(upload) = slot.admitted.as_ref().and_then(|a| a.upload.as_ref()) {
+        self.release(&slot);
+        self.record_departure(&slot, reason);
+        let Some(admitted) = &slot.admitted else { return false };
+        // Away, unless the same viewer is connected another way.
+        let elsewhere =
+            self.slots.values().any(|s| s.admitted.as_ref().is_some_and(|a| a.id == admitted.id));
+        if let Some(identity) = self.identities.get_mut(&admitted.resume_token)
+            && !elsewhere
+        {
+            identity.away_since = Some(Instant::now());
+            self.forget_longest_away();
+        }
+        true
+    }
+
+    /// Frees what a connection that goes held: the room of its unfinished upload, and records
+    /// its unfinished replay. Every way out of `slots` goes through here.
+    fn release(&self, slot: &Slot) {
+        let Some(admitted) = &slot.admitted else { return };
+        if let Some(upload) = &admitted.upload {
             self.view.release_upload(upload.id);
         }
-        if let Some(admitted) = &slot.admitted {
-            abandon_replay(admitted);
+        abandon_replay(admitted);
+    }
+
+    /// The earliest time a connection that is joining has to be admitted by.
+    fn join_deadline(&self) -> Option<Instant> {
+        self.slots.values().filter(|slot| slot.admitted.is_none()).map(|slot| slot.deadline).min()
+    }
+
+    /// Drops the connections that were not admitted in time (design decision 2).
+    fn drop_late_joins(&mut self) {
+        let now = Instant::now();
+        let late: Vec<String> = self
+            .slots
+            .iter()
+            .filter(|(_, slot)| slot.admitted.is_none() && slot.deadline <= now)
+            .map(|(connection, _)| connection.clone())
+            .collect();
+        for connection in late {
+            self.drop_slot(&connection, LeaveReason::Failed);
         }
-        self.record_departure(&slot, reason);
-        slot.admitted.is_some()
+    }
+
+    /// Ends everything of the viewer `token` belongs to (design decision 8): their token goes
+    /// from the viewers who may return to the removed ones, their connections that are still
+    /// joining are dropped, and the room their unfinished uploads held is freed. Their
+    /// suggestions and links stay.
+    fn revoke(&mut self, token: [u8; 32]) {
+        let Some(identity) = self.identities.remove(&token) else { return };
+        self.removed.push_back(token);
+        if self.removed.len() > MAX_REMOVED {
+            self.removed.pop_front();
+        }
+        let joining: Vec<String> = self
+            .slots
+            .iter()
+            .filter(|(_, slot)| {
+                slot.admitted.is_none()
+                    && matches!(slot.auth, Auth::Returning(Some(signed)) if signed == token)
+            })
+            .map(|(connection, _)| connection.clone())
+            .collect();
+        for connection in joining {
+            self.drop_slot(&connection, LeaveReason::Removed);
+        }
+        // Defence in depth: every way out of `slots` already freed its own upload's room.
+        self.view.release_viewer(identity.id);
+    }
+
+    /// Keeps at most [`MAX_AWAY`] viewers who are away; the one away longest is forgotten first.
+    fn forget_longest_away(&mut self) {
+        loop {
+            let away = self
+                .identities
+                .iter()
+                .filter_map(|(token, identity)| identity.away_since.map(|since| (since, *token)));
+            if away.clone().count() <= MAX_AWAY {
+                return;
+            }
+            let (_, token) = away.min().expect("more than none");
+            self.revoke(token);
+        }
     }
 
     fn record_departure(&mut self, slot: &Slot, reason: LeaveReason) {
@@ -1741,7 +1908,41 @@ impl Host {
         self.slots.values().filter(|slot| slot.admitted.is_some()).count()
     }
 
+    /// A new code that means *from now on, only who is here and who gets the new code*
+    /// (design decisions 4 and 5): connections that the old code started and that are not
+    /// admitted are dropped, and viewers who are not connected are forgotten.
     fn rotate_code(&mut self) {
+        // Every join with a code started with one being revoked: the current one, or one the
+        // service's `RoomTaken` made the host leave. None started with the new code yet, which
+        // is taken below.
+        let joining: Vec<String> = self
+            .slots
+            .iter()
+            .filter(|(_, slot)| slot.admitted.is_none() && matches!(slot.auth, Auth::Code(_)))
+            .map(|(connection, _)| connection.clone())
+            .collect();
+        for connection in joining {
+            self.drop_slot(&connection, LeaveReason::Refused);
+        }
+        let away: Vec<[u8; 32]> = self
+            .identities
+            .iter()
+            .filter(|(_, identity)| {
+                !self
+                    .slots
+                    .values()
+                    .any(|slot| slot.admitted.as_ref().is_some_and(|a| a.id == identity.id))
+            })
+            .map(|(token, _)| *token)
+            .collect();
+        for token in away {
+            self.revoke(token);
+        }
+        self.replace_code();
+    }
+
+    /// Takes a new code and room and closes the old room.
+    fn replace_code(&mut self) {
         let old_room = std::mem::take(&mut self.keys.room_id);
         self.code = InviteCode::generate();
         self.keys = self.code.keys();
@@ -1749,20 +1950,24 @@ impl Host {
         self.send_signalling(ClientMessage::CloseRoom { room: old_room });
     }
 
+    /// Removes a viewer for good: their connection is refused, everything else of theirs ends
+    /// (design decision 8), and the code changes.
     fn remove(&mut self, viewer_id: u32) {
-        let Some(connection) = self
-            .slots
-            .iter()
-            .find(|(_, slot)| slot.admitted.as_ref().is_some_and(|a| a.id == viewer_id))
-            .map(|(id, _)| id.clone())
+        let Some(token) =
+            self.identities.iter().find(|(_, i)| i.id == viewer_id).map(|(token, _)| *token)
         else {
             return;
         };
-        if let Some(admitted) = &self.slots[&connection].admitted {
-            self.removed.insert(admitted.resume_token);
-            self.identities.remove(&admitted.resume_token);
+        let connected: Vec<String> = self
+            .slots
+            .iter()
+            .filter(|(_, slot)| slot.admitted.as_ref().is_some_and(|a| a.id == viewer_id))
+            .map(|(connection, _)| connection.clone())
+            .collect();
+        for connection in connected {
+            self.refuse(&connection, RefusalReason::Removed);
         }
-        self.refuse(&connection, RefusalReason::Removed);
+        self.revoke(token);
         self.rotate_code();
         self.broadcast_participants();
     }
@@ -2357,6 +2562,14 @@ mod tests {
     }
 
     #[test]
+    fn joining_has_ten_seconds_after_connecting_and_thirty_after_being_announced() {
+        assert_eq!(HELLO_DEADLINE, Duration::from_secs(10));
+        assert_eq!(JOIN_DEADLINE, Duration::from_secs(30));
+        // A join the host drops has already failed on the viewer's side.
+        assert!(JOIN_DEADLINE > crate::viewer::CONNECT_TIMEOUT);
+    }
+
+    #[test]
     fn the_rate_limit_allows_a_burst_then_one_per_ten_seconds() {
         let start = Instant::now();
         let mut bucket = Bucket::new(start);
@@ -2382,6 +2595,239 @@ mod tests {
         assert!(!requests.take_answer(1, start + Duration::from_millis(900)));
         assert!(requests.take_answer(1, start + Duration::from_secs(2)));
         assert!(requests.take_answer(2, start), "another viewer has its own");
+    }
+
+    /// A host that has not reached a service, to give messages to directly.
+    fn host() -> (tempfile::TempDir, Host) {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(OutputLog::create(dir.path()).unwrap());
+        let view = SessionView::from_log(AgentId::OpenCode, log);
+        let config = SharingConfig {
+            signalling_url: "ws://127.0.0.1:9/signal".into(),
+            username: "nick".into(),
+            peer: PeerConfig { bind_address: Some("127.0.0.1".into()), ..PeerConfig::default() },
+            viewer_limit: MAX_VIEWERS,
+            hello_deadline: HELLO_DEADLINE,
+            join_deadline: JOIN_DEADLINE,
+        };
+        let (events, _) = mpsc::unbounded_channel();
+        let (status, _) = watch::channel(SharingStatus::default());
+        (dir, Host::new(view, config, events, status))
+    }
+
+    /// The service announces a viewer's connection with the code.
+    fn announced(host: &mut Host, connection: &str) {
+        let room = host.keys.room_id.clone();
+        host.handle_server(ServerMessage::ViewerJoined { room, connection: connection.into() });
+    }
+
+    /// Admits the connection as the viewer `id`, as `Hello` does.
+    fn admit(host: &mut Host, connection: &str, id: u32) {
+        let identity = Identity { id, username: format!("viewer {id}"), away_since: None };
+        host.identities.insert(token(id), identity);
+        let slot = host.slots.get_mut(connection).unwrap();
+        slot.admitted = Some(Admitted { id, resume_token: token(id), ..admitted() });
+    }
+
+    fn token(id: u32) -> [u8; 32] {
+        let mut token = [0xa5; 32];
+        token[..4].copy_from_slice(&id.to_le_bytes());
+        token
+    }
+
+    /// The viewer `id` joins and loses their connection.
+    fn away(host: &mut Host, id: u32) {
+        let connection = format!("away {id}");
+        announced(host, &connection);
+        admit(host, &connection, id);
+        host.drop_slot(&connection, LeaveReason::Failed);
+    }
+
+    #[tokio::test]
+    async fn the_host_holds_at_most_forty_connections_whatever_the_service_announces() {
+        let (_dir, mut host) = host();
+        for n in 0..100 {
+            announced(&mut host, &format!("c{n}"));
+        }
+        assert_eq!(host.slots.len(), MAX_SLOTS);
+        // Room again once one ends.
+        host.drop_slot("c0", LeaveReason::Left);
+        announced(&mut host, "next");
+        assert!(host.slots.contains_key("next"));
+    }
+
+    #[tokio::test]
+    async fn an_announcement_repeated_for_an_admitted_viewer_leaves_it_as_it_is() {
+        let (_dir, mut host) = host();
+        announced(&mut host, "anna");
+        admit(&mut host, "anna", 1);
+        let peer = host.slots["anna"].peer.number();
+        announced(&mut host, "anna");
+        let slot = &host.slots["anna"];
+        assert_eq!(slot.admitted.as_ref().map(|a| a.id), Some(1));
+        assert_eq!(slot.peer.number(), peer);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_viewer_away_longest_is_forgotten_first() {
+        let (_dir, mut host) = host();
+        announced(&mut host, "here");
+        admit(&mut host, "here", 1000);
+        for id in 1..=MAX_AWAY as u32 {
+            away(&mut host, id);
+            tokio::time::advance(Duration::from_millis(1)).await;
+        }
+        assert_eq!(host.identities.len(), MAX_AWAY + 1);
+
+        away(&mut host, 101);
+        assert!(!host.identities.contains_key(&token(1)), "the one away longest is forgotten");
+        assert!(host.removed.contains(&token(1)), "and told so when they return");
+        assert!(host.identities.contains_key(&token(2)));
+        assert!(host.identities.contains_key(&token(101)));
+        assert!(
+            host.identities.contains_key(&token(1000)),
+            "a connected viewer is never forgotten"
+        );
+        assert_eq!(host.identities.len(), MAX_AWAY + 1);
+    }
+
+    #[tokio::test]
+    async fn at_most_two_hundred_removed_viewers_are_kept() {
+        let (_dir, mut host) = host();
+        for id in 0..250 {
+            let identity = Identity { id, username: "gone".into(), away_since: None };
+            host.identities.insert(token(id), identity);
+            host.revoke(token(id));
+            assert!(host.removed.len() <= MAX_REMOVED);
+        }
+        assert_eq!(host.removed.len(), MAX_REMOVED);
+        assert!(!host.removed.contains(&token(49)), "oldest first out");
+        assert!(host.removed.contains(&token(50)) && host.removed.contains(&token(249)));
+    }
+
+    #[tokio::test]
+    async fn a_new_code_ends_joins_with_the_old_one_and_forgets_who_is_away() {
+        let (_dir, mut host) = host();
+        announced(&mut host, "anna");
+        admit(&mut host, "anna", 1);
+        announced(&mut host, "joining");
+        away(&mut host, 2);
+
+        host.rotate_code();
+        assert!(host.slots.contains_key("anna"), "connected viewers stay");
+        assert!(!host.slots.contains_key("joining"));
+        assert!(host.identities.contains_key(&token(1)));
+        assert!(!host.identities.contains_key(&token(2)) && host.removed.contains(&token(2)));
+        // Joining with the new code works.
+        announced(&mut host, "new");
+        assert!(host.slots.contains_key("new"));
+    }
+
+    #[tokio::test]
+    async fn refusing_an_admitted_viewer_frees_its_unfinished_upload() {
+        use crate::shared_files::MAX_SESSION_BYTES;
+
+        let (_dir, mut host) = host();
+        host.view.allow_viewer_files();
+        announced(&mut host, "anna");
+        admit(&mut host, "anna", 1);
+        let size = MAX_SESSION_BYTES / 5;
+        let reserve = |host: &Host, viewer: u32| {
+            host.view.reserve_upload(viewer, "big.txt".into(), size, [7; 32], Purpose::Share)
+        };
+        let id = reserve(&host, 1).unwrap();
+        let assembly = Assembly::new(size, [7; 32]);
+        let upload = Upload { id, assembly, last: Instant::now(), group: "shared" };
+        host.slots.get_mut("anna").unwrap().admitted.as_mut().unwrap().upload = Some(upload);
+
+        // Refused on its own, without `revoke` freeing the viewer's room afterwards.
+        host.refuse("anna", RefusalReason::Removed);
+        for viewer in 2..7 {
+            assert!(reserve(&host, viewer).is_ok(), "viewer {viewer}: the session's room is free");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_code_also_ends_joins_with_a_code_the_service_made_the_host_leave() {
+        let (_dir, mut host) = host();
+        announced(&mut host, "joining");
+        // The service answered `RoomTaken`: the host moved to another code.
+        host.replace_code();
+        host.rotate_code();
+        assert!(!host.slots.contains_key("joining"));
+    }
+
+    #[tokio::test]
+    async fn removing_a_viewer_ends_its_connections_that_are_joining() {
+        let (_dir, mut host) = host();
+        announced(&mut host, "anna");
+        admit(&mut host, "anna", 1);
+        // Anna's app returning through the rejoin room, its offer verified.
+        let room = host.rejoin_room.clone();
+        host.handle_server(ServerMessage::ViewerJoined { room, connection: "back".into() });
+        host.slots.get_mut("back").unwrap().auth = Auth::Returning(Some(token(1)));
+
+        host.remove(1);
+        assert!(host.slots.is_empty(), "{:?}", host.slots.keys().collect::<Vec<_>>());
+        assert!(host.removed.contains(&token(1)));
+    }
+
+    #[test]
+    fn at_most_fifty_suggestions_wait_for_the_host() {
+        let mut requests = Requests::new(AgentId::OpenCode);
+        let now = Instant::now();
+        let send = |requests: &mut Requests, viewer: u32| {
+            requests.receive(viewer, 1, suggest("an idea"), "v".into(), now).0
+        };
+        // From many viewers, each within its own limit.
+        for viewer in 0..MAX_WAITING_SUGGESTIONS as u32 {
+            assert_eq!(send(&mut requests, viewer), Outcome::Received);
+        }
+        assert_eq!(send(&mut requests, 100), Outcome::RateLimited);
+        assert_eq!(requests.suggestions.len(), MAX_WAITING_SUGGESTIONS, "not stored");
+
+        // Room again once the host answers one.
+        requests.answer(0, 1, &Answer::Declined).unwrap();
+        assert_eq!(send(&mut requests, 101), Outcome::Received);
+        assert_eq!(send(&mut requests, 102), Outcome::RateLimited);
+
+        // Kept ones do not count.
+        for viewer in 1..=10 {
+            requests.answer(viewer, 1, &Answer::Kept).unwrap();
+        }
+        for viewer in 200..210 {
+            assert_eq!(send(&mut requests, viewer), Outcome::Received);
+        }
+        assert_eq!(send(&mut requests, 300), Outcome::RateLimited);
+    }
+
+    #[test]
+    fn at_most_fifty_links_wait_for_the_host() {
+        let mut requests = Requests::new(AgentId::OpenCode);
+        let now = Instant::now();
+        let send = |requests: &mut Requests, viewer: u32| {
+            requests.receive(viewer, 1, link("https://example.com/"), "v".into(), now).0
+        };
+        for viewer in 0..MAX_WAITING_LINKS as u32 {
+            assert_eq!(send(&mut requests, viewer), Outcome::Received);
+        }
+        assert_eq!(send(&mut requests, 100), Outcome::RateLimited);
+        assert_eq!(requests.links.len(), MAX_WAITING_LINKS, "not stored");
+
+        // Declined and shared ones do not count.
+        requests.answer_link(0, 1, false).unwrap();
+        assert_eq!(send(&mut requests, 101), Outcome::Received);
+        assert_eq!(send(&mut requests, 102), Outcome::RateLimited);
+        for viewer in 1..=10 {
+            requests.answer_link(viewer, 1, true).unwrap();
+        }
+        for viewer in 200..210 {
+            assert_eq!(send(&mut requests, viewer), Outcome::Received);
+        }
+        assert_eq!(send(&mut requests, 300), Outcome::RateLimited);
+        // Waiting links do not hold back suggestions.
+        let suggestion = requests.receive(400, 2, suggest("an idea"), "v".into(), now).0;
+        assert_eq!(suggestion, Outcome::Received);
     }
 
     fn suggest(text: &str) -> ViewerRequest {
@@ -2475,10 +2921,12 @@ mod tests {
         assert!(requests.answer_link(2, 2, true).is_none(), "another viewer's id");
         assert_eq!(requests.answer_link(1, 2, false).unwrap().state, SentLinkState::Declined);
 
-        // Only the newest are listed, oldest first, so the list always fits in one message.
+        // Only the newest are listed, oldest first, so the list always fits in one message. The
+        // host answers each, so they do not reach the bound on waiting links.
         for id in 3..(MAX_LINKS_LISTED as u32 + 10) {
             let later = now + REQUEST_REFILL * id;
             requests.receive(1, id, link("https://c.example/"), "anna".into(), later);
+            requests.answer_link(1, id, false).unwrap();
         }
         let mine = requests.my_links(1);
         assert_eq!(mine.len(), MAX_LINKS_LISTED);

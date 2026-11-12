@@ -17,7 +17,7 @@ use std::time::Duration;
 use specdeck_core::environment::Environment;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{HostConfig, HostSession};
-use specdeck_core::sharing::{Sharing, SharingConfig, SharingEvent};
+use specdeck_core::sharing::{HELLO_DEADLINE, JOIN_DEADLINE, Sharing, SharingConfig, SharingEvent};
 use specdeck_core::viewer::{CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession};
 use specdeck_protocol::control::PROTOCOL_VERSION;
 use specdeck_protocol::frames::Record;
@@ -213,6 +213,8 @@ impl Live {
                 username: "host".into(),
                 peer: loopback(),
                 viewer_limit: 20,
+                hello_deadline: HELLO_DEADLINE,
+                join_deadline: JOIN_DEADLINE,
             },
         );
         let code = tokio::time::timeout(SHORT, async {

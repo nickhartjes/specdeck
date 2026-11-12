@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use specdeck_core::output_log::{OutputLog, Record};
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::SessionView;
-use specdeck_core::sharing::{Sharing, SharingConfig, SharingEvent};
+use specdeck_core::sharing::{HELLO_DEADLINE, JOIN_DEADLINE, Sharing, SharingConfig, SharingEvent};
 use specdeck_core::viewer::{CONNECT_TIMEOUT, ViewerConfig, ViewerEvent, ViewerSession};
 use specdeck_protocol::AgentId;
 use specdeck_protocol::control::PROTOCOL_VERSION;
@@ -74,6 +74,8 @@ async fn viewer_matches_host(name: &str) {
             username: "host".into(),
             peer: loopback(),
             viewer_limit: 20,
+            hello_deadline: HELLO_DEADLINE,
+            join_deadline: JOIN_DEADLINE,
         },
     );
     let code = loop {

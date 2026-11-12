@@ -68,4 +68,4 @@ You see the session as in the app: the files, the terminal and documents in tabs
 
 ## When the connection drops
 
-If your connection drops, SpecDeck reconnects on its own and catches up; you do not miss anything. When the host ends the session, you can keep reading what was shared until you leave.
+If your connection drops, SpecDeck reconnects on its own and catches up; you do not miss anything. If the host made a new code while you were away, SpecDeck says *The host removed you from the session.* Ask the host for the new code and join with it. When the host ends the session, you can keep reading what was shared until you leave.

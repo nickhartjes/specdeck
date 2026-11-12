@@ -341,6 +341,11 @@ impl SessionView {
         self.files.lock().unwrap().store.release(upload);
     }
 
+    /// Frees the room of every unfinished upload of `viewer`, who was removed.
+    pub fn release_viewer(&self, viewer: u32) {
+        self.files.lock().unwrap().store.release_viewer(viewer);
+    }
+
     /// Shares a viewer's upload once all of it arrived and matched its hash. The switch is
     /// checked again: a file still on its way when the host turned it off is not shared.
     pub fn complete_upload(
@@ -386,6 +391,12 @@ impl SessionView {
                 self.changed();
             }
         }
+    }
+
+    /// Lets viewers share files in a view without a running agent, as the host's switch does.
+    #[cfg(test)]
+    pub(crate) fn allow_viewer_files(&self) {
+        self.files.lock().unwrap().viewers_allowed = true;
     }
 
     /// A view of a log without a running agent, for replaying a recording and for tests.

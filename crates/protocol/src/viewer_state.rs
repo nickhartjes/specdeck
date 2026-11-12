@@ -241,8 +241,8 @@ impl ViewerState {
             Ok(Frame::Event { seq, event }) => {
                 // Events arrive in order on one connection; after a reconnect the host continues
                 // from the last one this viewer had.
-                if seq >= self.next_event {
-                    self.next_event = seq + 1;
+                if let Some(next) = seq.checked_add(1).filter(|_| seq >= self.next_event) {
+                    self.next_event = next;
                     return (StreamUpdate::Timeline { seq, event }, None);
                 }
                 return (StreamUpdate::None, None);
@@ -255,7 +255,11 @@ impl ViewerState {
         match fresh.first().map(Record::seq) {
             None => (StreamUpdate::None, None),
             Some(first) if first == self.next_record => {
-                self.next_record = fresh.last().map_or(first, Record::seq) + 1;
+                // No record follows the largest sequence number; a host never gets there.
+                let Some(next) = fresh.last().map_or(first, Record::seq).checked_add(1) else {
+                    return (StreamUpdate::None, None);
+                };
+                self.next_record = next;
                 self.resend_requested = None;
                 (StreamUpdate::Records(fresh), None)
             }
@@ -421,6 +425,27 @@ mod tests {
             viewer.on_control(&control::encode(&braindump)),
             ControlUpdate::Braindump(vec![item])
         );
+    }
+
+    #[test]
+    fn nothing_is_applied_past_the_largest_sequence_number() {
+        let key = SessionKey::generate();
+        let mut viewer = viewer(&key);
+        viewer.next_record = u64::MAX - 1;
+        let record = |seq| Record::Output { seq, bytes: b"x".to_vec() };
+        let batch = Frame::History(vec![record(u64::MAX - 1), record(u64::MAX)]);
+        assert_eq!(viewer.on_stream(&key.encode(&batch)), (StreamUpdate::None, None));
+        assert_eq!(viewer.next_record, u64::MAX - 1);
+
+        let event = TimelineEvent {
+            output_seq: -1,
+            at: 5,
+            entry: crate::timeline::Entry::SessionStarted,
+            truncated: false,
+        };
+        let frame = Frame::Event { seq: u64::MAX, event };
+        assert_eq!(viewer.on_stream(&key.encode(&frame)), (StreamUpdate::None, None));
+        assert_eq!(viewer.next_event, 0);
     }
 
     #[test]

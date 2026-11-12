@@ -14,7 +14,7 @@ use specdeck_core::output_log::Record;
 use specdeck_core::peer::PeerConfig;
 use specdeck_core::session::{GiveError, HostConfig, HostSession, SessionEvent};
 use specdeck_core::shared_files::{PutError, Refusal};
-use specdeck_core::sharing::{AskCommand, Sharing, SharingConfig};
+use specdeck_core::sharing::{AskCommand, HELLO_DEADLINE, JOIN_DEADLINE, Sharing, SharingConfig};
 use specdeck_protocol::asks::{Card, CardSet, ReadTarget};
 use specdeck_protocol::links::LinkRefusal;
 use specdeck_protocol::timeline::Entry;
@@ -1224,6 +1224,8 @@ async fn read_requests_and_estimates_land_in_the_timeline_of_a_terminal_session(
             username: "Nick".into(),
             peer: PeerConfig { bind_address: Some("127.0.0.1".into()), ..PeerConfig::default() },
             viewer_limit: 20,
+            hello_deadline: HELLO_DEADLINE,
+            join_deadline: JOIN_DEADLINE,
         },
     );
     let ask = |command| sharing.ask(command);
