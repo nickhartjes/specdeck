@@ -2367,11 +2367,12 @@ async fn an_attempt_that_hangs_fails_after_ten_seconds_and_holds_nothing_up() {
     let vote = AskCommand::StartVote { task: "t".into(), cards: CardSet::TShirt };
     let _ = tokio::time::timeout(PAUSED_WAIT, sharing.ask(vote)).await.expect("stuck").unwrap();
     assert!(third.elapsed() < Duration::from_millis(100), "{:?}", third.elapsed());
-    // Closing ends the attempt with it.
+    // Closing ends the attempt with it: the connection is closed or reset.
     sharing.close();
     let mut buffer = [0; 1024];
-    while tokio::time::timeout(PAUSED_WAIT, third_socket.read(&mut buffer)).await.unwrap().unwrap()
-        > 0
+    while let Ok(read) =
+        tokio::time::timeout(PAUSED_WAIT, third_socket.read(&mut buffer)).await.expect("stuck")
+        && read > 0
     {}
     assert!(third.elapsed() < Duration::from_secs(1), "{:?}", third.elapsed());
 }
