@@ -59,6 +59,10 @@ struct AppState {
     settings_path: PathBuf,
     settings: Mutex<Settings>,
     diagnostics: Diagnostics,
+    /// What this run is and runs on, as `app.started` recorded it.
+    launch: diagnostics::run::Launch,
+    /// This run, until it stops cleanly (`run.json`).
+    run: diagnostics::run::Run,
     /// Where session processes keep their files (`session-processes`).
     paths: Paths,
     services: Services,
@@ -469,6 +473,7 @@ async fn export_diagnostics(state: &AppState, window: &str, path: &Path) -> Resu
     // The log files hold every process's events; the header needs no list of them.
     let status = window_status(state, window).await;
     let header = ExportHeader::new(status, &state.sharing_service(), &state.services.built_in)
+        .with_launch(&state.launch)
         .with_other_sessions(other_statuses);
     state.diagnostics.export(path, &header)
 }
@@ -505,6 +510,13 @@ async fn diagnostics_heartbeat(
     beat: Heartbeat,
 ) -> Result<(), String> {
     state.diagnostics.heartbeat(window.label(), beat);
+    Ok(())
+}
+
+/// A step on the start screen, such as the folder picker opening (`diagnostics.rs` `Step`).
+#[tauri::command]
+async fn diagnostics_step(step: diagnostics::Step) -> Result<(), String> {
+    step.record();
     Ok(())
 }
 
@@ -914,17 +926,18 @@ async fn start_hosting(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    if !state.sessions.lock().unwrap().is_free(window.label()) {
-        return Err("This window already shows a session. Open a new window for another.".into());
-    }
     let (username, verbose, browser, screenshots, start) = {
         let settings = state.settings.lock().unwrap();
-        let username = settings.username.clone().ok_or("Set your name first.")?;
         // Only Claude Code starts through a folder's command; other agents start as always.
         let start =
             settings.folder_start(&folder).filter(|_| agent == AgentId::ClaudeCode).cloned();
+        session_requested(agent, start.is_some());
+        let username = settings.username.clone().ok_or("Set your name first.")?;
         (username, settings.verbose_logging, settings.browser, settings.screenshots, start)
     };
+    if !state.sessions.lock().unwrap().is_free(window.label()) {
+        return Err("This window already shows a session. Open a new window for another.".into());
+    }
     let id = state.sessions.lock().unwrap().next_id();
     let launch = client::Launch {
         agent,
@@ -1833,6 +1846,27 @@ fn remove_leftover_session_files(dir: &Path, live: &[SessionId]) {
 }
 
 /// The `SPECDECK_PROFILE` of a debug build, unless it is the default one.
+/// Debug builds only: ends the app the way a native crash would, a few seconds after it
+/// started, for the tests of `app.crashed` (`SPECDECK_CRASH=access_violation` or
+/// `stack_overflow`).
+#[cfg(debug_assertions)]
+fn crash_soon(kind: String) {
+    #[allow(unconditional_recursion)]
+    fn overflow(depth: u64) -> u64 {
+        let frame = std::hint::black_box([depth; 512]);
+        overflow(depth + 1) + frame[0]
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        match kind.as_str() {
+            // SAFETY: none; it is meant to fault.
+            "access_violation" => unsafe { std::ptr::null_mut::<u8>().write_volatile(1) },
+            "stack_overflow" => drop(overflow(0)),
+            _ => {}
+        }
+    });
+}
+
 fn test_profile() -> Option<String> {
     std::env::var("SPECDECK_PROFILE")
         .ok()
@@ -2027,6 +2061,7 @@ fn open_session_window(app: &AppHandle, label: &str, attach: Option<SessionId>) 
         builder = builder.transparent(true);
     }
     let Ok(window) = builder.build() else { return };
+    window_opened(app, label);
     apply_zoom(&window, state.settings.lock().unwrap().zoom);
     let translucent = apply_material(&window);
     state.translucent.store(translucent, Ordering::Relaxed);
@@ -2406,7 +2441,7 @@ fn open_settings_window(app: &AppHandle) {
     }
     let title = if cfg!(target_os = "macos") { "Settings" } else { "SpecDeck Settings" };
     let appearance = app.state::<AppState>().settings.lock().unwrap().appearance;
-    let _ = navigation::app_window(
+    let built = navigation::app_window(
         app,
         "settings",
         WebviewUrl::App("index.html?window=settings".into()),
@@ -2419,6 +2454,38 @@ fn open_settings_window(app: &AppHandle) {
     .maximizable(false)
     .center()
     .build();
+    if built.is_ok() {
+        window_opened(app, "settings");
+    }
+}
+
+/// `session.requested`: the host asked to host a session, with which agent and whether it starts
+/// through a start command; never the folder.
+fn session_requested(agent: AgentId, start_command: bool) {
+    tracing::info!(
+        agent = specdeck_core::diag::agent_str(agent),
+        start_command,
+        "session.requested"
+    );
+}
+
+/// The kind of window `label` is, for the log: never its title.
+fn window_kind(label: &str) -> &'static str {
+    if is_session_window(label) {
+        "session"
+    } else if label == "settings" {
+        "settings"
+    } else if label.starts_with(browser::LABEL_PREFIX) {
+        "browser"
+    } else {
+        "other"
+    }
+}
+
+/// `window.opened`, once window `label` is built.
+fn window_opened(app: &AppHandle, label: &str) {
+    let windows = app.webview_windows().len();
+    tracing::info!(kind = window_kind(label), windows, "window.opened");
 }
 
 /// Tells the session windows that the settings changed, so they show the new name.
@@ -2511,12 +2578,25 @@ pub fn run() {
             ));
             let settings = Settings::load(&settings_path);
             diagnostics.set_verbose(settings.verbose_logging);
+            let launch = diagnostics::run::Launch::here(
+                &tauri::webview_version().unwrap_or_default(),
+                updates::this_install_updates_itself(),
+                settings.verbose_logging,
+            );
+            launch.record();
+            let (run, unclean) =
+                diagnostics::run::Run::begin(&paths.log_dir, &launch.version, SystemTime::now());
+            if let Some(unclean) = unclean {
+                unclean.record();
+            }
             // Before the first window, so it opens in the chosen appearance.
             app.handle().set_theme(settings.appearance.theme());
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 settings_path,
                 diagnostics,
+                launch,
+                run,
                 paths,
                 services: Services::from_environment(),
                 environment,
@@ -2541,6 +2621,17 @@ pub fn run() {
                     let diagnostics = &watched.state::<AppState>().diagnostics;
                     diagnostics.check_windows();
                     diagnostics.tick();
+                }
+            });
+            // Says every 10 s that this run is still going, for the next start to tell how long
+            // it lasted if it ends without stopping.
+            let alive = app.handle().clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(diagnostics::run::ALIVE_EVERY);
+                    alive.state::<AppState>().run.alive(SystemTime::now());
+                    #[cfg(windows)]
+                    diagnostics::reopen_if_new_day();
                 }
             });
             // Hosted sessions that outlived the last run get their windows back; without any,
@@ -2600,10 +2691,23 @@ pub fn run() {
                 // Whether something was opened, never what.
                 tracing::info!(opened, "notice.clicked");
             });
+            // Last, after everything that could set a filter of its own.
+            #[cfg(windows)]
+            diagnostics::install_exception_filter(&app.state::<AppState>().paths.log_dir);
+            #[cfg(debug_assertions)]
+            if let Ok(kind) = std::env::var("SPECDECK_CRASH") {
+                crash_soon(kind);
+            }
             Ok(())
         })
         .on_menu_event(on_menu_event)
         .on_window_event(|window, event| {
+            if let WindowEvent::Destroyed = event {
+                let label = window.label();
+                let windows = window.app_handle().webview_windows();
+                let windows = windows.keys().filter(|open| *open != label).count();
+                tracing::info!(kind = window_kind(label), windows, "window.closed");
+            }
             // Session windows only; the settings window comes and goes.
             if !is_session_window(window.label()) {
                 return;
@@ -2653,6 +2757,7 @@ pub fn run() {
             reconnect_viewer,
             diagnostics_export,
             diagnostics_heartbeat,
+            diagnostics_step,
             agent_versions,
             open_install_page,
             update_status,
@@ -2729,6 +2834,7 @@ pub fn run() {
         }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => drop(focus_or_open(app)),
+        RunEvent::Exit => app.state::<AppState>().run.end(SystemTime::now()),
         _ => {}
     });
 }
@@ -2785,6 +2891,32 @@ mod tests {
         let granted: Vec<String> = session.iter().chain(&settings).cloned().collect();
         assert_eq!(missing(&granted, &listed), Vec::<String>::new(), "listed, granted nowhere");
         assert_eq!(missing(&listed, &granted), Vec::<String>::new(), "granted, not a command");
+    }
+
+    #[test]
+    fn a_host_request_names_the_agent_and_start_command_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let (diagnostics, subscriber) =
+            Diagnostics::new(dir.path().to_owned(), diagnostics::APP_LOG);
+        tracing::subscriber::with_default(subscriber, || {
+            session_requested(AgentId::ClaudeCode, true);
+            session_requested(AgentId::Codex, false);
+        });
+        let recent = diagnostics.recent();
+        assert_eq!(recent[1]["event"], "session.requested");
+        assert_eq!(recent[1]["agent"], "claude_code");
+        assert_eq!(recent[1]["start_command"], true);
+        assert_eq!(recent[0]["agent"], "codex");
+        assert_eq!(recent[0]["start_command"], false);
+    }
+
+    #[test]
+    fn windows_are_logged_by_kind_only() {
+        assert_eq!(window_kind(MAIN_WINDOW), "session");
+        assert_eq!(window_kind("window-3"), "session");
+        assert_eq!(window_kind("settings"), "settings");
+        assert_eq!(window_kind(&browser::label(7)), "browser");
+        assert_eq!(window_kind("something-else"), "other");
     }
 
     #[test]
@@ -2848,6 +2980,8 @@ mod tests {
             settings_path: PathBuf::from("settings.json"),
             settings: Mutex::new(settings),
             diagnostics: Diagnostics::new(dir.join("logs"), diagnostics::APP_LOG).0,
+            launch: diagnostics::run::Launch::default(),
+            run: diagnostics::run::Run::begin(dir, "test", SystemTime::now()).0,
             paths: Paths {
                 run_dir: dir.join("run"),
                 log_dir: dir.join("logs"),

@@ -10,6 +10,8 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: tauri.invoke, Channel: class {}
 vi.mock('@tauri-apps/api/webviewWindow', () => ({
   getCurrentWebviewWindow: () => ({ listen: tauri.listen }),
 }));
+const dialog = vi.hoisted(() => ({ open: vi.fn() }));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: dialog.open, save: vi.fn() }));
 
 describe('binary channel messages', () => {
   const bytes = [1, 0, 0, 0, 2, 104, 105];
@@ -131,5 +133,36 @@ describe('appearance', () => {
     expect(handler).toHaveBeenCalledWith('light');
     stop();
     await vi.waitFor(() => expect(tauri.unlisten).toHaveBeenCalled());
+  });
+});
+
+describe('choosing a folder', () => {
+  const calls = () =>
+    tauri.invoke.mock.calls.filter(([command]) => command === 'diagnostics_step').map(([, args]) => args);
+
+  it('records the picker opening before it opens, then the pick, without the folder', async () => {
+    tauri.invoke.mockClear();
+    dialog.open.mockImplementationOnce(async () => {
+      expect(calls()).toEqual([{ step: 'folder_picker_opened' }]);
+      return '/Users/marker-user/project';
+    });
+    expect(await tauriBridge.chooseFolder()).toBe('/Users/marker-user/project');
+    expect(calls()).toEqual([{ step: 'folder_picker_opened' }, { step: 'folder_picked' }]);
+    expect(JSON.stringify(tauri.invoke.mock.calls)).not.toContain('marker');
+  });
+
+  it('records a cancelled picker', async () => {
+    tauri.invoke.mockClear();
+    dialog.open.mockResolvedValueOnce(null);
+    expect(await tauriBridge.chooseFolder()).toBeNull();
+    expect(calls()).toEqual([{ step: 'folder_picker_opened' }, { step: 'folder_picker_cancelled' }]);
+  });
+
+  it('opens the picker when the step cannot be recorded', async () => {
+    tauri.invoke.mockClear();
+    tauri.invoke.mockRejectedValue(new Error('no app'));
+    dialog.open.mockResolvedValueOnce('/tmp/x');
+    expect(await tauriBridge.chooseFolder()).toBe('/tmp/x');
+    tauri.invoke.mockReset();
   });
 });

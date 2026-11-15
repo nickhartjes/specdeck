@@ -56,13 +56,15 @@ As a viewer, **Reconnect** drops the connection and connects again at once. You 
 
 **Export Diagnostics…** saves one file, `specdeck-diagnostics-<date>-<time>.jsonl`, where you choose. You can open it in any text editor. It holds:
 
-- the SpecDeck version, your operating system, and whether you use the default sharing service or one of your own (not its address);
+- the SpecDeck version, your operating system and its version, the version of the system's web view, and whether you use the default sharing service or one of your own (not its address);
 - what the panel shows right now;
 - the diagnostic log of the last 7 days: when connections started and ended and why, sizes and timings, and whether they were direct or relayed. This includes the log of each session you hosted, also ones that have ended.
 
 It never holds terminal output, the timeline, what the agent was asked or did, invite codes, names, file paths or network addresses. SpecDeck sends it nowhere: attach it to your bug report yourself.
 
 If the window stops responding, so the panel does not open, choose **Help › Export Diagnostics…** from the menu bar instead: it works without the window. The log then also says when the window stopped responding and for how long.
+
+If SpecDeck closed by itself, start it again and export from there: the file then says that the run before ended unexpectedly, and on Windows how it crashed.
 
 #### From a browser
 
@@ -76,8 +78,11 @@ Besides the connections, the log records what goes wrong around the agent:
 - **The agent**: how SpecDeck found your environment (your login shell or its own) and how many entries `PATH` has, which agent started or why it could not (such as not installed, or the folder is gone), and the exit code when it stops. A session that stops without saying goodbye is recorded too.
 - **Claude Code's hooks and the timeline**: when the hook server starts and stops, and per minute how many of Claude Code's messages the timeline could not place, by event and tool name. Tools from MCP servers count as `mcp`, without the server's name. Screenshots left out of the timeline, and changes of shell commands that could not be tracked, with the step that failed.
 - **Updates**: each check, and why a check or download failed (offline, an HTTP error, a signature that does not match, or other), with the versions.
+- **Starts and stops**: each start, with the SpecDeck version, your operating system and its version, the web view's version, and whether this install updates itself; each quit; and, at the next start, a run that ended without quitting (a crash, the app being killed, or the computer losing power), with its version and about how long it ran. Each session you host also says its SpecDeck version when it starts.
+- **Crashes on Windows**: when Windows ends SpecDeck for a crash outside its own code, the crash's code and the file name of the part of Windows, the web view or SpecDeck it happened in, never its folder. Windows also records it as before.
+- **Windows and the start screen**: each window opening and closing (a session window, Settings, or Claude's browser) and how many are open, the folder picker opening and whether you picked a folder or cancelled, and which agent a session starts with and whether it starts through a start command. Never the folder, or a window's or session's title.
 
-None of these hold error messages, environment variables, prompts, file contents or paths. When the same thing goes wrong more than 30 times a minute, the log keeps the first 30 and then says how many it left out.
+None of these hold error messages, environment variables, prompts, file contents, paths or folder names. When the same thing goes wrong more than 30 times a minute, the log keeps the first 30 and then says how many it left out.
 
 ### The log
 

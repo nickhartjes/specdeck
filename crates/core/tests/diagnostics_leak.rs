@@ -53,6 +53,7 @@ const RENAMED_MARKER: &str = "Marker-Renamed-Text";
 const MCP_SERVER_MARKER: &str = "Marker-Mcp-Server";
 const PANIC_MARKER: &str = "Marker-Panic-Text";
 const MISSING_FOLDER_MARKER: &str = "Marker-Missing-Folder";
+const FOLDER_MARKER: &str = "Marker-Folder-Name";
 
 /// A fake Claude Code: prints the output marker, and on the line "go" reports a prompt, a tool
 /// call and a written code file holding the other markers through its hooks. Then echoes lines.
@@ -65,7 +66,7 @@ read go
 post '{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","prompt":"Marker-Prompt-Text"}'
 post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Read","tool_use_id":"r","tool_input":{"file_path":"marker-tool-path.rs"}}'
 post '{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"marker-code-path.rs"}}'
-echo 'const C: &str = "Marker-Code-Text";' > "$(dirname "$0")/marker-code-path.rs"
+echo 'const C: &str = "Marker-Code-Text";' > "$PWD/marker-code-path.rs"
 post '{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Write","tool_use_id":"w","tool_input":{"file_path":"marker-code-path.rs"},"tool_response":{"filePath":"marker-code-path.rs","originalFile":null,"content":"x"}}'
 post '{"hook_event_name":"PromptRenamed","prompt_id":"p1","prompt":"Marker-Renamed-Text"}'
 post '{"hook_event_name":"PreToolUse","tool_name":"mcp__Marker-Mcp-Server__tool","tool_input":{"x":"Marker-Renamed-Text"}}'
@@ -107,6 +108,12 @@ fn plain(value: &str) -> bool {
     value.len() <= 32 && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// A version, such as `1.8.0`, `10.0.26100` or `24.04/6.8.0-45-generic`.
+fn version(value: &str) -> bool {
+    value.len() <= 65
+        && value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn no_content_secrets_or_addresses_in_diagnostics() {
     let (capture, _guard) = Capture::start();
@@ -123,9 +130,12 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     executable::write_executable(&program, AGENT);
     let env: Environment =
         [("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))].into_iter().collect();
+    // The session runs in a folder whose name is a marker.
+    let folder = bin.path().join(FOLDER_MARKER);
+    std::fs::create_dir(&folder).unwrap();
     let config = HostConfig {
         agent: AgentId::ClaudeCode,
-        folder: bin.path().to_owned(),
+        folder: folder.clone(),
         cols: 80,
         rows: 24,
         data_dir: data.path().to_owned(),
@@ -135,6 +145,15 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
     // An agent that cannot start, in a folder whose name is a marker.
     let missing = HostConfig { folder: bin.path().join(MISSING_FOLDER_MARKER), ..config.clone() };
     HostSession::start(missing, &env).await.err().unwrap();
+    // The app's own run: a start after a run that ended unexpectedly, the folder picker, and a
+    // clean stop, with the marker folder as the log folder.
+    specdeck_diag::run::Launch::here("21624.5.1.11.3", true, true).record();
+    let (run, _) = specdeck_diag::run::Run::begin(&folder, "1.8.0", std::time::SystemTime::now());
+    specdeck_diag::run::Unclean { version: "1.8.0".into(), ran_s: 20 }.record();
+    specdeck_diag::Step::FolderPickerOpened.record();
+    specdeck_diag::Step::FolderPicked.record();
+    specdeck_diag::Step::FolderPickerCancelled.record();
+    run.end(std::time::SystemTime::now());
     // A panic whose message holds a marker and a path.
     specdeck_diag::install_panic_hook("test.panicked");
     let panic = std::panic::catch_unwind(|| panic!("{PANIC_MARKER} in {}", bin.path().display()));
@@ -405,6 +424,12 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         "hooks.listening",
         "timeline.unplaced",
         "test.panicked",
+        "app.started",
+        "app.ended_unexpectedly",
+        "app.stopped",
+        "folder_picker.opened",
+        "folder_picker.picked",
+        "folder_picker.cancelled",
     ] {
         assert!(
             names(name) > 0,
@@ -438,6 +463,7 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         MCP_SERVER_MARKER,
         PANIC_MARKER,
         MISSING_FOLDER_MARKER,
+        FOLDER_MARKER,
         "XL",
         TURN_SECRET,
         code.as_str(),
@@ -462,7 +488,10 @@ async fn no_content_secrets_or_addresses_in_diagnostics() {
         .filter(|(name, key, _)| {
             !(name.ends_with(".panicked") && ["thread", "location"].contains(&key.as_str()))
         })
-        .filter(|(_, _, value)| !plain(value))
+        .filter(|(_, key, value)| {
+            !plain(value)
+                && !(["version", "os_version", "webview"].contains(&key.as_str()) && version(value))
+        })
         .collect();
     assert!(unplain.is_empty(), "values that are not plain: {unplain:?}");
 
