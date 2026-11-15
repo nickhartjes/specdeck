@@ -71,6 +71,7 @@ pub fn no_filters(git: &Path, env: &Environment, dir: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
 
     /// Every git call SpecDeck makes in the session folder goes through [`command`].
@@ -98,11 +99,17 @@ mod tests {
                 Command::new(&git).args(args).current_dir(dir.path()).status().unwrap().success()
             )
         };
+        // The machine's own settings may name filters too (CI runners have Git LFS), so only
+        // the filter this test adds is looked for.
+        let ours = |settings: &[String]| {
+            settings.iter().filter(|s| s.starts_with("filter.specdeck-test.")).count()
+        };
         run(&["init", "-q"]);
-        assert_eq!(no_filters(&git, &env, dir.path()), Vec::<String>::new());
-        run(&["config", "filter.lfs.clean", "git-lfs clean -- %f"]);
+        assert_eq!(ours(&no_filters(&git, &env, dir.path())), 0);
+        run(&["config", "filter.specdeck-test.clean", "specdeck-test clean -- %f"]);
         let settings = no_filters(&git, &env, dir.path());
-        assert!(settings.contains(&"filter.lfs.clean=".to_owned()), "{settings:?}");
-        assert!(settings.contains(&"filter.lfs.process=".to_owned()), "{settings:?}");
+        assert_eq!(ours(&settings), 4, "{settings:?}");
+        assert!(settings.contains(&"filter.specdeck-test.clean=".to_owned()), "{settings:?}");
+        assert!(settings.contains(&"filter.specdeck-test.process=".to_owned()), "{settings:?}");
     }
 }

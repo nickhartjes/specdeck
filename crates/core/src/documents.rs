@@ -89,6 +89,7 @@ mod tests {
         FileRule::from(SessionFolder::new(dir, None))
     }
 
+    #[cfg(unix)]
     fn with_git(dir: &Path) -> FileRule {
         FileRule::new(dir, &Environment::from_process())
     }

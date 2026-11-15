@@ -295,6 +295,7 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    #[cfg(unix)]
     fn git(dir: &Path, args: &[&str]) {
         let output = Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
