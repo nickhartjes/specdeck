@@ -2331,21 +2331,37 @@ async fn an_attempt_that_hangs_fails_after_ten_seconds_and_holds_nothing_up() {
             let _ = accepted_tx.send((Instant::now(), socket));
         }
     });
+    // The first attempt starts with the session. Times are measured from there and from the
+    // host's own events, not from when the listener saw a connection: on the paused clock, time
+    // can move on while a real connection is still being accepted, so that moment can come up to
+    // a second late.
+    let start = Instant::now();
     let (sharing, mut events, _dir) = share_log(&url);
+    // How late the listener may see an attempt that started on time.
+    let late = Duration::from_millis(1_100);
 
-    let (first, _first) = next_accepted(&mut accepted).await;
+    let (_, _first) = next_accepted(&mut accepted).await;
     unavailable(&mut events).await;
-    let waited = first.elapsed();
+    let failed = Instant::now();
+    let waited = failed - start;
     assert!(waited >= Duration::from_secs(10), "{waited:?}");
     assert!(waited < Duration::from_millis(10_100), "{waited:?}");
 
-    // The usual backoff after each failed attempt: half a second, then a second.
+    // The usual backoff after each failed attempt: half a second, then a second. The second
+    // attempt starts half a second after the first failed and fails ten seconds later, so the
+    // third starts 11.5 seconds after the first failed.
     let (second, _second) = next_accepted(&mut accepted).await;
-    let gap = second - first;
-    assert!(gap >= Duration::from_millis(10_500) && gap < Duration::from_millis(10_600), "{gap:?}");
+    let gap = second - failed;
+    assert!(
+        gap >= Duration::from_millis(500) && gap < Duration::from_millis(500) + late,
+        "{gap:?}"
+    );
     let (third, mut third_socket) = next_accepted(&mut accepted).await;
-    let gap = third - second;
-    assert!(gap >= Duration::from_secs(11) && gap < Duration::from_millis(11_100), "{gap:?}");
+    let gap = third - failed;
+    assert!(
+        gap >= Duration::from_millis(11_500) && gap < Duration::from_millis(11_500) + late,
+        "{gap:?}"
+    );
 
     // The host's commands are answered while the attempt hangs.
     let vote = AskCommand::StartVote { task: "t".into(), cards: CardSet::TShirt };

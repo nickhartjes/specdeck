@@ -612,8 +612,13 @@ async fn nothing_of_a_claim_and_no_ids_while_a_host_is_away() {
 
         let text = log.text();
         assert!(text.contains("room.reclaimed"), "{text}");
-        for secret in ["MARKER", &connection, "127.0.0.1"] {
-            assert!(!text.contains(secret), "{secret} in the {format:?} log:\n{text}");
+        // Named, not printed: a failing test prints no secret by itself.
+        for (name, secret) in [
+            ("the marker", "MARKER"),
+            ("the connection", &connection),
+            ("the address", "127.0.0.1"),
+        ] {
+            assert!(!text.contains(secret), "{name} in the {format:?} log:\n{text}");
         }
         // Nor the claim's hash.
         let hash: String = {
