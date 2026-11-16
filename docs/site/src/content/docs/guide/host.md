@@ -47,8 +47,8 @@ SpecDeck cannot filter the terminal. Keep secrets out of what the agent or a com
 | To | Do this |
 |---|---|
 | See who is watching | Select the avatars at the top of the session |
-| Stop people from joining with the current code | Select the **new code** button next to the invite code. People already watching stay; share the new code with anyone still to join |
-| Remove someone | Select the avatars, then **Remove** next to their name, and confirm. They are disconnected immediately, and the invite code changes so they cannot rejoin with it |
+| Stop people from joining with the current code | Select the **new code** button next to the invite code. People already watching stay; share the new code with anyone still to join. Anyone who is not connected at that moment, because their connection dropped, needs the new code too, and anyone still joining with the old code is stopped |
+| Remove someone | Select the avatars, then **Remove** next to their name, and confirm. They are disconnected immediately, connections of theirs that were still joining end too, and the invite code changes so they cannot rejoin with it. Because the code changes, people who are not connected at that moment need the new code as well |
 | Limit the number of viewers | Select the avatars and set **Max viewers** (1 to 20). Lowering it never disconnects anyone already watching |
 | Let viewers open whole code files | Select the **sharing settings** button (sliders) and set **Code viewers can open**. It applies to changes Claude makes from then on |
 | Let viewers suggest prompts, or stop them | Select the **sharing settings** button and switch **Viewers can suggest prompts**. Nothing a viewer suggests reaches the agent until you send it. See [Prompt suggestions](#prompt-suggestions) |
@@ -77,7 +77,7 @@ When a suggestion arrives, SpecDeck tells you who suggests a prompt, without tak
 
 The viewer who suggested it sees what you did: sent, edited and sent, kept for later, or declined; a suggestion you remove shows as declined. Other viewers never see a suggestion while it waits or is kept. Once you send it, everyone's timeline shows the prompt as *suggested by* its author, with *edited* when you changed it. Answered suggestions stay under **Handled**.
 
-Waiting and kept suggestions stay while the session's window is closed, and are gone when the session ends; they are never written to disk. When you turn suggestions off, or remove a viewer, the suggestions waiting or kept stay, and you can still answer them. Each viewer can send three at once and then one every 10 seconds; SpecDeck asks them to wait beyond that.
+Waiting and kept suggestions stay while the session's window is closed, and are gone when the session ends; they are never written to disk. When you turn suggestions off, or remove a viewer, the suggestions waiting or kept stay, and you can still answer them. Each viewer can send three at once and then one every 10 seconds; SpecDeck asks them to wait beyond that. At most 50 suggestions and 50 links wait for you at once, from all viewers together; beyond that, viewers are asked to wait until you answer some.
 
 :::caution[Read a suggestion before you send it]
 A suggestion can contain anything, including instructions you would not give the agent yourself. Sending it is the same as typing it.

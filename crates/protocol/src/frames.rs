@@ -197,7 +197,7 @@ fn parse_history(raw: &[u8]) -> Result<Vec<Record>, FrameError> {
         _ => return Err(FrameError::Malformed),
     };
     // A batch is consecutive records.
-    if records.windows(2).any(|pair| pair[1].seq() != pair[0].seq() + 1) {
+    if records.windows(2).any(|pair| pair[0].seq().checked_add(1) != Some(pair[1].seq())) {
         return Err(FrameError::Malformed);
     }
     Ok(records)
@@ -374,6 +374,16 @@ mod tests {
         let mut bytes = key.encode(&output(7, "abcd"));
         bytes[0] = KIND_RESIZE;
         assert_eq!(verifier.decode(&bytes), Err(FrameError::BadSignature));
+    }
+
+    #[test]
+    fn a_batch_ends_at_the_largest_sequence_number_and_goes_no_further() {
+        let (key, verifier) = keys();
+        let record = |seq| Record::Output { seq, bytes: b"x".to_vec() };
+        let last = Frame::History(vec![record(u64::MAX - 1), record(u64::MAX)]);
+        assert_eq!(verifier.decode(&key.encode(&last)), Ok(last));
+        let past = Frame::History(vec![record(u64::MAX), record(0)]);
+        assert_eq!(verifier.decode(&key.encode(&past)), Err(FrameError::Malformed));
     }
 
     #[test]
