@@ -153,7 +153,7 @@ impl App {
 
     /// Reads until `done` returns true for an event, collecting terminal output on the way.
     async fn until(&mut self, terminal: &mut String, done: impl Fn(&Event) -> bool) -> Event {
-        tokio::time::timeout(WAIT, async {
+        let result = tokio::time::timeout(WAIT, async {
             loop {
                 match self.recv().await {
                     Frame::Data(records) => terminal.push_str(&String::from_utf8_lossy(&records)),
@@ -166,8 +166,39 @@ impl App {
                 }
             }
         })
-        .await
-        .unwrap_or_else(|_| panic!("timed out; terminal so far {terminal:?}"))
+        .await;
+        result.unwrap_or_else(|_| {
+            // The last frames both ways say what the test waited for in vain.
+            let last = self.log.iter().rev().take(12).rev();
+            let last: Vec<String> =
+                last.map(|frame| frame.to_string().chars().take(300).collect()).collect();
+            panic!("timed out; terminal so far {terminal:?}; last frames:\n{}", last.join("\n"))
+        })
+    }
+
+    /// The answer to command `id`, once `done` has also returned true for an event: the session
+    /// may send that event before or after the answer, and waiting for one would pass over the
+    /// other.
+    async fn answer_and(
+        &mut self,
+        terminal: &mut String,
+        id: u64,
+        done: impl Fn(&Event) -> bool,
+    ) -> Event {
+        let answer = std::cell::RefCell::new(None);
+        let seen = std::cell::Cell::new(false);
+        self.until(terminal, |event| {
+            match event {
+                Event::Answer { id: answered, .. } if *answered == id => {
+                    *answer.borrow_mut() = Some(event.clone());
+                }
+                event if done(event) => seen.set(true),
+                _ => {}
+            }
+            answer.borrow().is_some() && seen.get()
+        })
+        .await;
+        answer.into_inner().unwrap()
     }
 
     /// Reads terminal output until it contains `text`.
@@ -1088,15 +1119,15 @@ const NOTES: &str = "IyBOb3Rlcwo=";
 /// Shares `notes.md` as the host; its file id.
 async fn share_notes(app: &mut App, terminal: &mut String) -> u32 {
     app.send(&Command::ShareFile { id: 1, name: "notes.md".into(), data: NOTES.into() }).await;
-    let answer = app.until(terminal, |e| matches!(e, Event::Answer { id: 1, .. })).await;
+    let answer = app
+        .answer_and(terminal, 1, |e| {
+            matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["files"][0]["name"] == "notes.md")
+        })
+        .await;
     let Event::Answer { value: Some(info), error: None, .. } = answer else { panic!("{answer:?}") };
     assert_eq!(info["name"], "notes.md");
     assert_eq!(info["kind"], "markdown");
     assert_eq!(info["byLabel"], "Nick");
-    app.until(terminal, |e| {
-        matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["files"][0]["name"] == "notes.md")
-    })
-    .await;
     info["file"].as_u64().unwrap() as u32
 }
 
@@ -1344,24 +1375,11 @@ async fn braindump_in_the_snapshot(app: &mut App, terminal: &mut String, prompt:
 
 async fn add_a_note(app: &mut App, terminal: &mut String) {
     app.send(&Command::AddNote { id: 1, text: "Edge cases".into() }).await;
-    // The answer and the new list come in either order: waiting for one would pass over the
-    // other.
-    let added = std::cell::RefCell::new(None);
-    let listed = std::cell::Cell::new(false);
-    app.until(terminal, |e| {
-        match e {
-            Event::Answer { id: 1, .. } => *added.borrow_mut() = Some(e.clone()),
-            Event::HostEvent { event }
-                if event["type"] == "shared-files" && event["braindump"][0]["note"] == true =>
-            {
-                listed.set(true);
-            }
-            _ => {}
-        }
-        added.borrow().is_some() && listed.get()
-    })
-    .await;
-    let added = added.into_inner().unwrap();
+    let added = app
+        .answer_and(terminal, 1, |e| {
+            matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["braindump"][0]["note"] == true)
+        })
+        .await;
     let Event::Answer { value: Some(info), .. } = added else { panic!("{added:?}") };
     assert_eq!(info["name"], "nick-note-1.md");
 }
