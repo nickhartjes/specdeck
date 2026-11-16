@@ -557,8 +557,8 @@ async fn taken_rooms_are_recorded_without_room_ids_or_the_claim() {
         secrets.push(room);
         secrets.extend(claim);
     }
-    // The count only: a failing test prints no code, room or claim.
-    assert!(secrets.len() >= 5, "{} secrets heard", secrets.len());
+    // No message: a failing test prints nothing about the code, rooms or claims.
+    assert!(secrets.len() >= 5);
     let captured = capture.events();
     for name in ["host.code_in_use", "host.rejoin_room_taken"] {
         assert_eq!(captured.iter().filter(|e| e.name == name).count(), 1, "{name}: {captured:?}");
