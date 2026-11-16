@@ -121,19 +121,7 @@ You can enter a `ws://` sharing service in Settings. SpecDeck marks it as not en
 
 The macOS app has no Apple Developer ID and is not notarized, and the Windows installer is not signed, so your system warns on first launch. The AppImage and `.deb` are not signed either. Updates are signed, with SpecDeck's own key.
 
-**What you can do:** install with Homebrew, which checks the download against the hash in its cask, or with Nix, or build from source.
-
-### No checksums or build provenance
-
-Releases have no published checksums, software bill of materials or build attestations, so you cannot check a download against the build that made it. The sharing service image is the exception: it is signed by the release workflow.
-
-**What you can do:** as above.
-
-### The release workflow trusts tagged actions
-
-The build uses third-party GitHub Actions by version tag, not by fixed commit. A compromised action could change what a release contains.
-
-**What you can do:** build from source or with Nix.
+**What you can do:** [check your download](/specdeck/install/#check-your-download) against the release's checksums and its build provenance before you allow it, install with Homebrew, which checks the download against the hash in its cask, or with Nix, or build from source.
 
 ## By design
 

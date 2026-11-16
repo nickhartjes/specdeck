@@ -1,0 +1,136 @@
+name: Dependency audit
+
+# Checks the Rust and npm dependencies against the public advisory databases once a week, and
+# whether crates.io has a newer datachannel than the patched copy in vendor/datachannel
+# (release-integrity: Dependencies watched for advisories). Findings go to one open issue,
+# "Dependency audit": created on the first finding, updated by each later run, closed by a clean
+# one. Dependabot's security updates still come as before; this also covers crates with no fixed
+# version, yanked crates and the vendored copy. To ignore a Rust advisory, see .cargo/audit.toml.
+on:
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: audit
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TITLE: Dependency audit
+  # Installed from source with the runner's Rust, at this version.
+  CARGO_AUDIT_VERSION: 0.23.0
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Node and pnpm pinned in mise.toml.
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          install_args: node pnpm
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit --version "$CARGO_AUDIT_VERSION"
+
+      # Each check appends a section to findings.md when it finds something; a check that cannot
+      # run fails the job instead, so a broken audit is not mistaken for a clean one.
+      - name: Rust advisories
+        run: |
+          set -uo pipefail
+          cargo audit --deny warnings > cargo-audit.txt 2>&1
+          status=$?
+          cat cargo-audit.txt
+          if [ "$status" -ne 0 ]; then
+            if ! grep -q -e '^Crate:' -e '^ID:' cargo-audit.txt; then
+              echo "::error::cargo audit failed without a finding"
+              exit 1
+            fi
+            {
+              echo "## Rust (\`cargo audit\`)"
+              echo
+              echo '```'
+              cat cargo-audit.txt
+              echo '```'
+              echo
+            } >> findings.md
+          fi
+
+      - name: npm advisories
+        run: |
+          set -uo pipefail
+          for dir in . docs/site docs/video; do
+            pnpm audit --prod --dir "$dir" > pnpm-audit.txt 2>&1
+            status=$?
+            cat pnpm-audit.txt
+            if [ "$status" -ne 0 ]; then
+              if ! grep -qi -e 'vulnerabilit' -e 'severity' pnpm-audit.txt; then
+                echo "::error::pnpm audit failed in $dir without a finding"
+                exit 1
+              fi
+              {
+                echo "## npm in \`$dir\` (\`pnpm audit --prod\`)"
+                echo
+                echo '```'
+                cat pnpm-audit.txt
+                echo '```'
+                echo
+              } >> findings.md
+            fi
+          done
+
+      - name: Upstream datachannel
+        run: |
+          set -euo pipefail
+          vendored=$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' vendor/datachannel/Cargo.toml)
+          upstream=$(curl -sSf -A "specdeck-audit (github.com/$GITHUB_REPOSITORY)" https://crates.io/api/v1/crates/datachannel |
+            jq -r .crate.max_stable_version)
+          echo "vendored $vendored, crates.io $upstream"
+          if [ -z "$vendored" ] || [ -z "$upstream" ] || [ "$upstream" = null ]; then
+            echo "::error::Could not read the datachannel versions"
+            exit 1
+          fi
+          newest=$(printf '%s\n%s\n' "$vendored" "$upstream" | sort -V | tail -n 1)
+          if [ "$upstream" != "$vendored" ] && [ "$newest" = "$upstream" ]; then
+            {
+              echo '## Vendored datachannel'
+              echo
+              echo "crates.io has datachannel $upstream; vendor/datachannel is $vendored. See \"Following upstream\" in vendor/datachannel/PATCHED.md."
+              echo
+            } >> findings.md
+          fi
+
+      - name: Open, update or close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          number=$(gh issue list --state open --author app/github-actions --search "\"$TITLE\" in:title" \
+            --json number,title --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          if [ ! -s findings.md ]; then
+            echo "Nothing found."
+            if [ -n "$number" ]; then
+              gh issue close "$number" --comment "A clean run: nothing found ($RUN_URL)."
+            fi
+            exit 0
+          fi
+          {
+            echo "Found by the weekly dependency audit ([run]($RUN_URL), $(date -u +%Y-%m-%d)). Each run replaces this text; the issue closes when a run finds nothing."
+            echo
+            # An issue body holds at most 65,536 characters.
+            head -c 60000 findings.md
+          } > body.md
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file body.md
+          else
+            gh issue create --title "$TITLE" --body-file body.md
+          fi

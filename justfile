@@ -23,6 +23,22 @@ check:
     pnpm typecheck
     pnpm test
     node --test 'scripts/*.test.mjs'
+    just check-scripts
+
+# Check the workflows' pins and permissions, the cask script, and that the relay manifests and the
+# image's pnpm match the rest. Shell scripts, so not on Windows, where CI's macOS and Linux
+# runs cover them.
+[unix]
+check-scripts:
+    scripts/check-workflows.sh
+    scripts/check-workflows.test.sh
+    scripts/render-cask.test.sh
+    scripts/check-relay-manifests.sh
+    scripts/check-pnpm-version.sh
+
+[windows]
+check-scripts:
+    @echo "The shell checks run on macOS and Linux."
 
 # Build the web viewer's WebAssembly package (crates/web/pkg) with the wasm-bindgen CLI from mise.toml
 web-wasm:

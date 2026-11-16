@@ -14,17 +14,22 @@ concurrency:
   group: docs-${{ github.ref }}
   cancel-in-progress: true
 
+# The deploy job adds what Pages needs.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # Starlight's "last updated" dates come from the git history.
           fetch-depth: 0
 
       # Node and pnpm pinned in mise.toml.
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           install_args: node pnpm
 
@@ -38,7 +43,7 @@ jobs:
       - run: pnpm check-links
         working-directory: docs/site
 
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: docs/site/dist
 
@@ -54,4 +59,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

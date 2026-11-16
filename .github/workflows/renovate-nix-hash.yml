@@ -4,10 +4,11 @@ name: Renovate Nix hash
 # breaks the Nix build until the hash is updated, which Renovate cannot do itself. This builds only
 # the npm dependencies, takes the hash Nix reports, and commits it to the Renovate branch.
 # renovate.json ignores this bot's commits, so Renovate keeps updating the branch. The commit is
-# pushed with RENOVATE_NIX_HASH_TOKEN, a fine-grained personal access token for this repository
-# with Contents read and write only, so the pull request runs CI and Nix for it as for any other
-# push. Without that secret it is pushed with GITHUB_TOKEN, which starts no workflows: CI and Nix
-# are then started by hand, and the pull request's own runs for the commit wait for approval.
+# pushed with this run's own GITHUB_TOKEN, given to git push alone: the checkout keeps no
+# credential, so Nix and the build run without one, and no token outlives the run
+# (release-integrity: No long-lived token for dependency updates). A push with GITHUB_TOKEN starts
+# no workflows, so this starts CI and Nix for the new commit itself; their checks show on the pull
+# request.
 on:
   push:
     branches: ['renovate/**']
@@ -28,14 +29,11 @@ permissions:
 jobs:
   hash:
     runs-on: ubuntu-26.04
-    env:
-      HAS_TOKEN: ${{ secrets.RENOVATE_NIX_HASH_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Also the credential git push uses below; the commit's author stays the bot.
-          token: ${{ secrets.RENOVATE_NIX_HASH_TOKEN || github.token }}
-      - uses: cachix/install-nix-action@v31
+          persist-credentials: false
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
       - name: Update the hash if it changed
         id: update
         run: |
@@ -53,13 +51,17 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -am "Update the pnpm dependency hash in nix/package.nix"
-          git push
-          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+      # The token is given to this step only, after Nix has run.
+      - name: Push the new hash
+        if: steps.update.outputs.committed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" "HEAD:${GITHUB_REF_NAME}"
       - name: Start CI and Nix for the new commit
-        if: steps.update.outputs.pushed == 'true' && env.HAS_TOKEN != 'true'
+        if: steps.update.outputs.committed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "::warning::RENOVATE_NIX_HASH_TOKEN is not set; the pull request's CI and Nix runs for this commit need approval."
           gh workflow run ci.yml --ref "$GITHUB_REF_NAME"
           gh workflow run nix.yml --ref "$GITHUB_REF_NAME"

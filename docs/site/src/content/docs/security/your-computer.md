@@ -68,5 +68,7 @@ The `.deb`, Nix and builds from source never check; their package manager or you
 | AppImage and `.deb` | No |
 | Updates | Yes, with SpecDeck's update key, checked by the app |
 | Sharing service image | Yes, a keyless Sigstore signature from the release workflow, in the public transparency log. See [The web viewer's code](/specdeck/self-host/overview/#the-web-viewers-code) for the `cosign verify` command |
+| Checksums | Every release has a `SHA256SUMS` file with the SHA-256 hash of each installer and update file. Check a download with `sha256sum --check --ignore-missing SHA256SUMS` |
+| Build provenance | Every installer and update file has a build provenance attestation, signed by GitHub for the release workflow at the release's tag and recorded in the public transparency log. Check a download with `gh attestation verify <file> --repo nickhartjes/specdeck` |
 
-Releases have no published checksums, software bill of materials or build provenance yet. To be sure of what you run, use Homebrew or Nix, or [build from source](/specdeck/install/#from-source-debian-ubuntu-and-wsl). See [Known limits](/specdeck/security/known-limits/#releases).
+[Check your download](/specdeck/install/#check-your-download) says what a good result looks like, and how to compare a hash on macOS and Windows. The update key is used only by a release job that builds nothing, so code that runs during the build cannot read it. Releases have no software bill of materials yet.

@@ -17,8 +17,11 @@ RUN cargo build --release --locked -p specdeck-web --target wasm32-unknown-unkno
 
 # The web viewer's page (app/ui/dist-web).
 FROM node:26-trixie-slim AS ui
+# The pnpm of mise.toml, which CI and the release pass in; `just check` fails when this default
+# differs from it.
+ARG PNPM_VERSION=12.18.0
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
-    npm install --global pnpm@12.16.1
+    npm install --global "pnpm@${PNPM_VERSION}"
 WORKDIR /src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY app/ui/package.json app/ui/

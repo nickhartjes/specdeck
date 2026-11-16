@@ -27,3 +27,15 @@ Upstream (`lerouxrgd/datachannel-rs` master and libdatachannel master) still has
 code. A datachannel version this copy does not match leaves the patch unused (Cargo only warns),
 and the connection test in `datachannel_close.rs` then fails. When upgrading, check whether
 upstream fixed it; if not, copy the new release here and apply the change again.
+
+## Following upstream
+
+The weekly dependency audit (`.github/workflows/audit.yml`) compares this copy's version with
+the newest datachannel on crates.io, and says so in the "Dependency audit" issue when upstream
+is ahead. That issue is the signal to update:
+
+1. Replace this folder with the new release from crates.io, keeping this file.
+2. Apply the change described above to `src/peerconnection.rs` again, unless upstream fixed it.
+3. Update the version here, in the comment in the root `Cargo.toml`, and in `Cargo.lock`.
+4. Run `cargo test --workspace --test datachannel_close` (`crates/core/tests/datachannel_close.rs`):
+   its tests must pass.

@@ -15,6 +15,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 # Line tables are enough for test backtraces; full debug info made the Rust caches 2 GB per
 # platform, close to GitHub's 10 GB for all caches, and slowed linking.
 env:
@@ -28,7 +31,9 @@ jobs:
         os: [macos-latest, windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Linux packages for Tauri
         if: runner.os == 'Linux'
@@ -37,12 +42,12 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       # Tools pinned in mise.toml: Rust, Node, pnpm, just, cmake.
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
 
       # Also saved when a later step fails: otherwise every failing run starts cold.
       # Saved from main only: PRs restore main's cache. Each OS's cache is 1.2-1.7 GB, so PR copies
       # pushed the total past GitHub's 10 GB and got caches evicted, which made runs start cold.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -82,7 +87,7 @@ jobs:
         shell: bash
         run: scripts/check-session-binary.sh target/release/bundle
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installers-${{ matrix.os }}
           path: |
@@ -97,9 +102,12 @@ jobs:
   image:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - run: docker build -f docker/server.Dockerfile -t specdeck-server:ci .
+      # With the pnpm of mise.toml, as the release builds it.
+      - run: docker build --build-arg PNPM_VERSION="$(sed -n 's/^pnpm = "\(.*\)"$/\1/p' mise.toml)" -f docker/server.Dockerfile -t specdeck-server:ci .
 
       - name: Serve the web viewer from the image
         run: |
@@ -110,12 +118,15 @@ jobs:
           curl -sf http://127.0.0.1:8080/join | grep -q '<div id="root">'
           curl -sfI http://127.0.0.1:8080/join | grep -qi '^content-security-policy:'
 
-  # The Compose relay as self-hosters start it: coturn exits on options it no longer accepts
-  # (4.18 refuses --no-dtls), and a Renovate bump of the image would otherwise ship that unnoticed.
+  # The Compose and Kubernetes relays as self-hosters start them: coturn exits on options it no
+  # longer accepts (4.18 refuses --no-dtls), and a Renovate bump of the image would otherwise ship
+  # that unnoticed. scripts/check-relay-manifests.sh keeps both on the same version.
   relay:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Start the Compose relay
         working-directory: deploy/compose
@@ -131,3 +142,29 @@ jobs:
           docker compose logs coturn
           id=$(docker compose ps --all --quiet coturn)
           test "$(docker inspect --format '{{.State.Running}} {{.RestartCount}}' "$id")" = "true 0"
+          # Both use the host's ports.
+          docker compose down
+
+      # The manifest's image and arguments, with its $(…) variables filled in, as its pod runs them:
+      # as nobody, with a read-only root and the state directory writable.
+      - name: Start the Kubernetes relay
+        run: |
+          set -euo pipefail
+          manifest=deploy/k8s/base/coturn.yaml
+          image=$(sed -n 's/^ *image: *\(coturn\/coturn:[^ ]*\)$/\1/p' "$manifest")
+          # The manifest's $(…) are Kubernetes variables, quoted on purpose.
+          # shellcheck disable=SC2016
+          mapfile -t args < <(
+            awk '/^ *args:$/ { on = 1; next } on && /^ *[a-z]+:/ { on = 0 } on && /^ *- --/ { sub(/^ *- /, ""); print }' "$manifest" |
+              sed -e 's/\$(TURN_EXTERNAL_IP)/127.0.0.1/' -e 's/\$(TURN_SECRET)/ci/' -e 's/\$(POD_IP)/127.0.0.1/'
+          )
+          # shellcheck disable=SC2016
+          if [ -z "$image" ] || [ "${#args[@]}" -lt 10 ] || printf '%s\n' "${args[@]}" | grep -q '\$('; then
+            echo "::error::Could not read the image and arguments from $manifest"
+            exit 1
+          fi
+          docker run --detach --name k8s-relay --network host --user 65534:65534 --read-only \
+            --tmpfs /var/lib/coturn:uid=65534,gid=65534 "$image" "${args[@]}"
+          sleep 10
+          docker logs k8s-relay
+          test "$(docker inspect --format '{{.State.Running}} {{.RestartCount}}' k8s-relay)" = "true 0"
