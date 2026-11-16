@@ -11,6 +11,7 @@ SpecDeck says why on the start screen:
 |---|---|
 | That code does not work | Check the code with the host. Codes stop working when the host ends the session or makes a new code |
 | This session is full | The host reached their viewer limit |
+| The host removed you from the session | The host removed you, or made a new code while your connection was down. Ask the host for the new code and join with it |
 | Too many attempts | Several wrong codes were tried from your network. Wait a minute |
 | SpecDeck cannot reach its sharing service | Check your internet connection, and the [sharing service in Settings](/specdeck/guide/settings/#sharing-service) |
 | Your network does not allow the connection | Your network blocks UDP. Try another network, such as your phone's hotspot |

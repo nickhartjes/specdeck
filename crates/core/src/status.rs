@@ -3,12 +3,12 @@
 //! the session folder.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use serde_json::{Map, Value, json};
 use specdeck_protocol::timeline::{Entry, RateLimit};
 
 use crate::environment::Environment;
+use crate::git;
 
 /// Environment variable with the host's own status-line command, run by the relay script.
 pub const HOST_STATUS_LINE_ENV: &str = "SPECDECK_STATUSLINE_COMMAND";
@@ -172,17 +172,24 @@ pub fn git_entry(folder: &Path, env: &Environment) -> Entry {
     let Some(git) = env.find_executable("git") else {
         return Entry::Git { folder: folder_name, branch, dirty, ahead, behind, worktree };
     };
+    // `status` may run a clean filter to compare a file, so the folder's filters are switched off.
+    // A submodule's own settings are not read here, so `status` does not look into submodules.
+    let no_filters = git::no_filters(&git, env, folder);
     let run = |args: &[&str]| {
-        let mut command = Command::new(&git);
-        command.args(args).current_dir(folder).stdin(Stdio::null()).stderr(Stdio::null());
-        command.env_clear().envs(env.iter());
+        let mut command = git::command(&git, env, folder);
+        command.args(&no_filters).args(args);
         let output = command.output().ok().filter(|output| output.status.success())?;
         Some(String::from_utf8_lossy(&output.stdout).into_owned())
     };
 
-    if let Some(status) =
-        run(&["--no-optional-locks", "status", "--porcelain=v2", "--branch", "-uno"])
-    {
+    if let Some(status) = run(&[
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "-uno",
+        "--ignore-submodules=all",
+    ]) {
         for line in status.lines() {
             if let Some(head) = line.strip_prefix("# branch.head ") {
                 branch = Some(if head == "(detached)" { "detached".into() } else { head.into() });
@@ -218,8 +225,9 @@ pub fn git_entry(folder: &Path, env: &Environment) -> Entry {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use std::process::{Command, Stdio};
 
     fn object(value: Value) -> Map<String, Value> {
         value.as_object().unwrap().clone()
@@ -463,5 +471,132 @@ mod tests {
                 worktree: Some("wt-feature".into())
             }
         );
+    }
+
+    /// A test repository whose settings would leave `marker` when SpecDeck's git ran them.
+    #[cfg(unix)]
+    pub(crate) fn repository_with_a_trap(dir: &Path, marker: &Path) -> PathBuf {
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("a.txt"), "one").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-q", "-m", "first"]);
+        let trap = dir.join(".git/trap.sh");
+        std::fs::write(&trap, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&trap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        trap
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_s_file_system_monitor_does_not_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("ran");
+        let trap = repository_with_a_trap(dir.path(), &marker);
+        let status = Command::new("git")
+            .args(["config", "core.fsmonitor", &trap.to_string_lossy()])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        // Touched since the index was written, so git asks the monitor.
+        std::fs::write(dir.path().join("a.txt"), "two").unwrap();
+        let entry = git_entry(dir.path(), &Environment::from_process());
+        assert!(
+            matches!(entry, Entry::Git { branch: Some(ref b), dirty: true, .. } if b == "main")
+        );
+        assert!(!marker.exists(), "the monitor ran");
+    }
+
+    /// A submodule's own settings name a clean filter; SpecDeck's `git status` does not look into
+    /// the submodule, so the filter does not run.
+    #[cfg(unix)]
+    #[test]
+    fn a_submodule_s_filter_does_not_run() {
+        let base = tempfile::tempdir().unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let status = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(["-c", "protocol.file.allow=always"])
+                .args(args)
+                .current_dir(dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        let lib = base.path().join("lib");
+        std::fs::create_dir(&lib).unwrap();
+        git(&lib, &["init", "-q"]);
+        std::fs::write(lib.join("a.txt"), "a").unwrap();
+        git(&lib, &["add", "."]);
+        git(&lib, &["commit", "-q", "-m", "lib"]);
+        let project = base.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        git(&project, &["init", "-q", "-b", "main"]);
+        git(&project, &["submodule", "add", "-q", &lib.to_string_lossy(), "vendor/lib"]);
+        git(&project, &["commit", "-q", "-m", "submodule"]);
+
+        let marker = base.path().join("ran");
+        let trap = base.path().join("trap.sh");
+        std::fs::write(&trap, format!("#!/bin/sh\ncat >/dev/null\ntouch '{}'\n", marker.display()))
+            .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&trap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let sub = project.join("vendor/lib");
+        git(&sub, &["config", "filter.trap.clean", &trap.to_string_lossy()]);
+        std::fs::write(sub.join(".gitattributes"), "*.txt filter=trap\n").unwrap();
+        // Same size, newer time: git compares the content, through the filter.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(sub.join("a.txt"), "b").unwrap();
+
+        let entry = git_entry(&project, &Environment::from_process());
+        assert!(matches!(entry, Entry::Git { branch: Some(ref b), .. } if b == "main"));
+        assert!(!marker.exists(), "the submodule's clean filter ran");
+    }
+
+    /// git for Windows takes the null device `NUL` as the hooks path, and runs no monitor.
+    #[cfg(windows)]
+    #[test]
+    fn the_folder_s_file_system_monitor_does_not_run_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(dir.path())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(dir.path().join("a.txt"), "one").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-q", "-m", "first"]);
+        let marker = dir.path().join("ran");
+        let trap = dir.path().join(".git").join("trap.cmd");
+        std::fs::write(&trap, format!("@echo off\r\ntype nul > \"{}\"\r\n", marker.display()))
+            .unwrap();
+        git(&["config", "core.fsmonitor", &trap.to_string_lossy()]);
+        std::fs::write(dir.path().join("a.txt"), "two").unwrap();
+        let entry = git_entry(dir.path(), &Environment::from_process());
+        assert!(
+            matches!(entry, Entry::Git { branch: Some(ref b), dirty: true, .. } if b == "main")
+        );
+        assert!(!marker.exists(), "the monitor ran");
     }
 }

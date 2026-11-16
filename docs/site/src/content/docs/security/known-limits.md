@@ -17,13 +17,13 @@ The room id the sharing service sees is made from the invite code, so whoever ru
 
 There is no step where the host lets each viewer in. Whoever has the code joins, up to the viewer limit, and sees the whole session so far before the host can remove them.
 
-**What you can do:** share the code only with the people you mean, in a private channel; make a new code once everyone has joined; lower the viewer limit to the number of people you expect.
+**What you can do:** share the code only with the people you mean, in a private channel; make a new code once everyone has joined; lower the viewer limit to the number of people you expect. People who are away when you make a new code, because their connection dropped, need the new code to come back.
 
 ### Codes do not expire
 
 A code works until the host makes a new one or ends the session, however long that is.
 
-**What you can do:** use **New code** once everyone has joined, and end sessions you no longer need.
+**What you can do:** use **New code** once everyone has joined, and end sessions you no longer need. People who are away at that moment need the new code to come back.
 
 ## The sharing service
 
