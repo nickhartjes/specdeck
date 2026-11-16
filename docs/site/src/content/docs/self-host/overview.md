@@ -55,10 +55,6 @@ So watching in a browser means trusting the people who run the sharing service, 
 
 The page needs nothing extra to deploy: it is built into the server image.
 
-## The image's name
-
-The image is `ghcr.io/nickhartjes/specdeck-server`. Up to 1.6 it was called `ghcr.io/nickhartjes/specdeck-signalling`; until 1.9.0, every release is also published under that name, as the same signed image, so a setup that still uses it keeps getting updates. From 1.9.0 on, only `specdeck-server` gets new releases. To move, change the image name in your Compose file or overlay; the [Docker Compose](/specdeck/self-host/docker-compose/#update) and [Kubernetes](/specdeck/self-host/kubernetes/#upgrading-from-16) guides have the steps.
-
 ## Why run your own
 
 SpecDeck releases come with a built-in sharing service. Run your own when your team wants to decide where that service runs and who operates it, or when your network only allows certain servers.
