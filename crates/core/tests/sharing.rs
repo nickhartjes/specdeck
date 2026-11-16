@@ -2877,13 +2877,11 @@ async fn an_attempt_that_hangs_fails_after_ten_seconds_and_holds_nothing_up() {
         }
     });
     // The first attempt starts with the session. Times are measured from there and from the
-    // host's own events, not from when the listener saw a connection: on the paused clock, time
-    // can move on while a real connection is still being accepted, so that moment can come up to
-    // a second late.
+    // host's own events. The listener can see a connection late: while a real connection is
+    // being accepted, the paused clock moves on to the next timer, seconds ahead. So when it
+    // saw an attempt bounds the attempt's start only from below.
     let start = Instant::now();
     let (sharing, mut events, _dir) = share_log(&url);
-    // How late the listener may see an attempt that started on time.
-    let late = Duration::from_millis(1_100);
 
     let (_, _first) = next_accepted(&mut accepted).await;
     unavailable(&mut events).await;
@@ -2894,24 +2892,27 @@ async fn an_attempt_that_hangs_fails_after_ten_seconds_and_holds_nothing_up() {
 
     // The usual backoff after each failed attempt: half a second, then a second. The second
     // attempt starts half a second after the first failed and fails ten seconds later, so the
-    // third starts 11.5 seconds after the first failed.
+    // third starts 11.5 seconds after the first failed. Each is seen before its own ten seconds
+    // would have run out.
+    let attempt = Duration::from_secs(10);
     let (second, _second) = next_accepted(&mut accepted).await;
     let gap = second - failed;
     assert!(
-        gap >= Duration::from_millis(500) && gap < Duration::from_millis(500) + late,
+        gap >= Duration::from_millis(500) && gap < Duration::from_millis(500) + attempt,
         "{gap:?}"
     );
     let (third, mut third_socket) = next_accepted(&mut accepted).await;
     let gap = third - failed;
     assert!(
-        gap >= Duration::from_millis(11_500) && gap < Duration::from_millis(11_500) + late,
+        gap >= Duration::from_millis(11_500) && gap < Duration::from_millis(11_500) + attempt,
         "{gap:?}"
     );
 
     // The host's commands are answered while the attempt hangs.
     let vote = AskCommand::StartVote { task: "t".into(), cards: CardSet::TShirt };
+    let asked = Instant::now();
     let _ = tokio::time::timeout(PAUSED_WAIT, sharing.ask(vote)).await.expect("stuck").unwrap();
-    assert!(third.elapsed() < Duration::from_millis(100), "{:?}", third.elapsed());
+    assert!(asked.elapsed() < Duration::from_millis(100), "{:?}", asked.elapsed());
     // Closing ends the attempt with it: the connection is closed or reset. Timed on the real
     // clock: while the test waits for the real socket, the paused clock moves on to the next
     // timer, so it says nothing about how long closing took. On the real clock, an attempt
