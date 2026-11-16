@@ -111,11 +111,18 @@ impl Environment {
         self.vars.iter()
     }
 
-    /// Finds an executable on this environment's `PATH`, as a shell would.
+    /// Finds an executable on this environment's `PATH`, then in WinGet's user links on Windows.
     pub fn find_executable(&self, name: &str) -> Option<PathBuf> {
-        let path = self.get("PATH")?;
         let cwd = std::env::current_dir().ok()?;
-        which::which_in(name, Some(path), cwd).ok()
+        let found = self.get("PATH").and_then(|path| which::which_in(name, Some(path), &cwd).ok());
+        found.or_else(|| {
+            if !cfg!(windows) {
+                return None;
+            }
+            // A desktop launcher can still have an older PATH after WinGet installs a CLI.
+            let links = PathBuf::from(self.get("LOCALAPPDATA")?).join(r"Microsoft\WinGet\Links");
+            which::which_in(name, Some(links.as_os_str()), cwd).ok()
+        })
     }
 }
 
@@ -215,6 +222,21 @@ mod tests {
         // The test process's own environment, as the app has it: Windows spells it `Path`.
         let env = Environment::from_process();
         assert!(env.find_executable("cmd").is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn winget_links_are_found_when_the_launchers_path_is_stale() {
+        let local = tempfile::tempdir().unwrap();
+        let links = local.path().join(r"Microsoft\WinGet\Links");
+        std::fs::create_dir_all(&links).unwrap();
+        let agent = links.join("test-specdeck-agent.exe");
+        std::fs::write(&agent, []).unwrap();
+
+        let mut env = Environment::default();
+        env.set("LocalAppData", local.path());
+        env.set("Path", local.path());
+        assert_eq!(env.find_executable("test-specdeck-agent"), Some(agent));
     }
 
     #[test]
