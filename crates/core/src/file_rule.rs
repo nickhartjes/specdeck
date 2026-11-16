@@ -293,6 +293,7 @@ fn existing_parent(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::process::Command;
 
     #[cfg(unix)]

@@ -62,6 +62,7 @@ pub fn from_file_tool(payload: &HookPayload, rule: &FileRule) -> Option<Document
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::environment::Environment;
     use crate::session_folder::SessionFolder;
     use serde_json::json;
