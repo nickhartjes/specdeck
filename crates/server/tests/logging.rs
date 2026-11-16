@@ -377,16 +377,17 @@ async fn nothing_to_join_with_and_no_addresses() {
 
         let text = log.text();
         assert!(text.contains("peer.joined"), "{text}");
-        for secret in [
-            "MARKER",
-            &connection,
-            &username,
-            &credential,
-            "127.0.0.1",
-            "192.0.2.44",
-            "turn.example.com",
+        // Named, not printed: a failing test prints no secret by itself.
+        for (name, secret) in [
+            ("the marker", "MARKER"),
+            ("the connection", &connection),
+            ("the TURN username", &username),
+            ("the TURN credential", &credential),
+            ("the address", "127.0.0.1"),
+            ("the candidate's address", "192.0.2.44"),
+            ("the relay's host", "turn.example.com"),
         ] {
-            assert!(!text.contains(secret), "{secret} in the {format:?} log:\n{text}");
+            assert!(!text.contains(secret), "{name} in the {format:?} log:\n{text}");
         }
     }
 }
