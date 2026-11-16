@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import axe from 'axe-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Bridge } from '../api/bridge';
 import type { HostEvent } from '../api/types';
@@ -133,6 +134,25 @@ describe('host screen', () => {
     act(() => emit({ type: 'sharing', state: 'ready', code: 'ABCD1234EFGH' }));
     expect(screen.queryByText(/Sharing is unavailable/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('Invite code')).toHaveTextContent('ABCD-1234-EFGH');
+  });
+
+  it('says the code was replaced because someone else used it, until dismissed', async () => {
+    await setup();
+    act(() => {
+      emit({ type: 'code-replaced', reason: 'in-use' });
+      emit({ type: 'sharing', state: 'ready', code: 'R8WN3CJD6FQE' });
+    });
+    const notice = screen.getByText(/Someone else was using your invite code/).closest('[role="status"]') as HTMLElement;
+    expect(notice).toHaveTextContent(
+      'Someone else was using your invite code on the sharing service, so SpecDeck made a new one. Share the new code; the old code and link may lead to another session.',
+    );
+    // It names no code: the new one is in the toolbar, the old one is someone else's now.
+    expect(notice.textContent).not.toMatch(/7K2M|R8WN/);
+    expect(screen.getByLabelText('Invite code')).toHaveTextContent('R8WN-3CJD-6FQE');
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+    expect(results.violations.map((v) => v.id)).toEqual([]);
+    await userEvent.click(within(notice).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/Someone else was using your invite code/)).not.toBeInTheDocument();
   });
 
   it('shows what an agent without a timeline waits on when the window opens again', async () => {

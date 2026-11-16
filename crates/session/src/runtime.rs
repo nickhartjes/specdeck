@@ -21,7 +21,7 @@ use specdeck_core::session::{GiveError, HostConfig, HostSession, SessionEvent};
 use specdeck_core::shared_files::{PutError, Refusal};
 use specdeck_core::sharing::{
     Answer, AskCommand, HELLO_DEADLINE, HostAsks, HostLink, HostSuggestion, JOIN_DEADLINE,
-    MAX_VIEWERS, Sharing, SharingConfig, SharingEvent, SharingStatus,
+    MAX_VIEWERS, ReplaceReason, Sharing, SharingConfig, SharingEvent, SharingStatus,
 };
 use specdeck_protocol::asks::{ReadView, VoteView};
 use specdeck_protocol::control::{
@@ -102,6 +102,11 @@ pub enum HostEvent {
     Sharing {
         state: SharingState,
         code: Option<String>,
+    },
+    /// The invite code was replaced without the host asking, and why; the window shows it until
+    /// the host dismisses it. An app of the previous release drops it.
+    CodeReplaced {
+        reason: ReplaceReason,
     },
     /// Whether the sharing service serves the web viewer, once checked.
     WebViewer {
@@ -303,6 +308,8 @@ struct Ui {
     asks: HostAsks,
     asks_at: std::time::Instant,
     ask_notices: AskNotices,
+    /// A replaced code no window heard about, for the next window that attaches.
+    code_replaced: Option<ReplaceReason>,
     events: Option<EventSink>,
     observer: Observer,
     last_summary: Option<Summary>,
@@ -444,6 +451,7 @@ impl HostRuntime {
             asks: HostAsks::default(),
             asks_at: std::time::Instant::now(),
             ask_notices: AskNotices::new(),
+            code_replaced: None,
             events: None,
             observer,
             last_summary: None,
@@ -513,6 +521,13 @@ impl HostRuntime {
                             let notice = ui.observe();
                             drop(ui);
                             notice.tell();
+                        }
+                        Some(SharingEvent::CodeReplaced { reason }) => {
+                            let mut ui = shared.lock().unwrap();
+                            ui.send(HostEvent::CodeReplaced { reason });
+                            if ui.events.is_none() {
+                                ui.code_replaced = Some(reason);
+                            }
                         }
                         Some(SharingEvent::Allowed { suggestions }) => {
                             let mut ui = shared.lock().unwrap();
@@ -646,6 +661,9 @@ impl HostRuntime {
             };
             ui.events = Some(events);
             ui.send(snapshot);
+            if let Some(reason) = ui.code_replaced.take() {
+                ui.send(HostEvent::CodeReplaced { reason });
+            }
         }
         self.session.set_host_window(true);
 

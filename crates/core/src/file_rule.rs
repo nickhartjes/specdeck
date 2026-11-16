@@ -602,6 +602,8 @@ mod tests {
         }
         let mean = start.elapsed() / 20;
         println!("file rule: {mean:?} per file");
-        assert!(mean < std::time::Duration::from_millis(50), "{mean:?}");
+        // Starting git takes most of it, and starting a process is slow on Windows.
+        let limit = if cfg!(windows) { 150 } else { 50 };
+        assert!(mean < std::time::Duration::from_millis(limit), "{mean:?}");
     }
 }

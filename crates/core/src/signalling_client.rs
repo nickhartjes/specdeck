@@ -19,7 +19,7 @@ const KEEPALIVE: Duration = Duration::from_secs(30);
 
 /// Sends messages to the signalling service. Dropping it closes the connection.
 #[derive(Clone)]
-pub struct SignallingSender(mpsc::UnboundedSender<ClientMessage>);
+pub struct SignallingSender(pub(crate) mpsc::UnboundedSender<ClientMessage>);
 
 impl SignallingSender {
     /// Returns false if the connection is gone.

@@ -5,8 +5,14 @@
 //! Everything it holds is bounded (`sharing-service-limits`): connections in total and per client
 //! network, rooms, viewers per host, relayed set-up messages, and each connection's backlog. TURN
 //! credentials go only to connections that host or have joined a room.
+//!
+//! A room belongs to the host that opened it (`room-ownership`): a host may send a claim, a
+//! secret of its own, and only a connection that presents it gets the room from another
+//! connection. When the host's connection ends, a room with a claim is kept for it for a while,
+//! and viewers who join meanwhile wait for the host to return.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,9 +26,10 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
+use sha2::{Digest, Sha256};
 use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage};
 use tokio::net::TcpListener;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::MissedTickBehavior;
 
 mod limits;
@@ -42,12 +49,17 @@ const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 const SOCKET_BUFFER_BYTES: usize = 8 * 1024;
 /// Longest room id. The app's are 32 hex characters.
 const MAX_ROOM_BYTES: usize = 64;
+/// Shortest and longest claim. The app's are 64 hex characters; a short one could be guessed.
+const MIN_CLAIM_BYTES: usize = 32;
+const MAX_CLAIM_BYTES: usize = 64;
 /// Rooms one host connection may hold. The app holds at most 3: its rejoin room, and its old and
 /// new code's rooms while it replaces the code.
 const MAX_ROOMS_PER_HOST: usize = 4;
 /// Viewers joined to one host connection. The app admits at most 20; the margin covers viewers
 /// that rejoin.
 const MAX_VIEWERS_PER_HOST: usize = 40;
+/// Viewers waiting for one room whose host is away: as many as could join it.
+const MAX_WAITING_PER_ROOM: usize = MAX_VIEWERS_PER_HOST;
 /// Messages, and their bytes, waiting for a connection that does not read; far more than a join
 /// needs. A connection whose backlog is full is closed.
 const OUTBOUND_QUEUE: usize = 256;
@@ -56,6 +68,14 @@ const OUTBOUND_BYTES: usize = 256 * 1024;
 /// `SIGNALS_PER_SECOND`. A join takes an offer, an answer and some tens of candidates.
 const SIGNAL_BURST: f64 = 100.0;
 const SIGNALS_PER_SECOND: f64 = 20.0;
+/// Other messages a connection may send: this many at once, then `MESSAGES_PER_SECOND`. A host
+/// needs 3 to connect and 2 per new code, a viewer 2.
+const MESSAGE_BURST: f64 = 20.0;
+const MESSAGES_PER_SECOND: f64 = 2.0;
+/// How often rooms kept for a host that is away are checked for the end of their hold time.
+const EXPIRY_TICK: Duration = Duration::from_secs(5);
+/// How long a connection gets to close when the service stops.
+const CLOSE_GRACE: Duration = Duration::from_secs(1);
 
 type ConnectionId = String;
 
@@ -81,6 +101,12 @@ pub struct Config {
     pub max_connections_per_ip: usize,
     /// Open rooms in total; more are refused with `ServerBusy`.
     pub max_rooms: usize,
+    /// New rooms a client network may open within `window`. Asking for rooms is a way to find
+    /// out whether they exist, and kept rooms can push others out when the service is full.
+    pub rooms_per_ip: usize,
+    /// Rooms kept for hosts that are away, per client network; more are closed when their host
+    /// leaves, as rooms without a claim are.
+    pub max_kept_rooms_per_ip: usize,
     /// How long a connection may stay open without hosting or joining a room.
     pub idle_timeout: Duration,
     /// How long a TURN credentials request from a connection that has not hosted or joined yet
@@ -88,6 +114,14 @@ pub struct Config {
     pub turn_grace: Duration,
     /// How often the service's load is logged, when it changed.
     pub stats_interval: Duration,
+    /// How long a room with a claim is kept for its host after the host's connection ended.
+    /// Zero keeps nothing.
+    pub room_hold: Duration,
+    /// How often each connection is pinged.
+    pub ping_interval: Duration,
+    /// A connection from which nothing arrived for this long, not even an answer to a ping, is
+    /// closed.
+    pub unresponsive_after: Duration,
 }
 
 impl Default for Config {
@@ -102,9 +136,14 @@ impl Default for Config {
             max_connections: 2_000,
             max_connections_per_ip: 100,
             max_rooms: 4_000,
+            rooms_per_ip: 30,
+            max_kept_rooms_per_ip: 16,
             idle_timeout: Duration::from_secs(30),
             turn_grace: Duration::from_secs(2),
             stats_interval: Duration::from_secs(5 * 60),
+            room_hold: Duration::from_secs(5 * 60),
+            ping_interval: Duration::from_secs(30),
+            unresponsive_after: Duration::from_secs(90),
         }
     }
 }
@@ -112,6 +151,8 @@ impl Default for Config {
 pub struct Service {
     config: Config,
     inner: Mutex<Inner>,
+    /// Set when the service stops; every connection then closes.
+    stopping: watch::Sender<bool>,
 }
 
 impl Default for Service {
@@ -121,11 +162,13 @@ impl Default for Service {
 }
 
 struct Inner {
-    /// Open rooms by id.
+    /// Open rooms, and rooms kept for a host that is away, by id.
     rooms: HashMap<String, Room>,
     connections: HashMap<ConnectionId, Connection>,
     failed_joins: RateLimiter<IpAddr>,
     room_joins: RateLimiter<String>,
+    /// New rooms per client network.
+    rooms_opened: RateLimiter<IpAddr>,
     /// Connections per client network, upgrades in progress included.
     networks: HashMap<IpAddr, usize>,
     connection_total: usize,
@@ -142,16 +185,42 @@ struct Inner {
     last_stats: (usize, usize, usize, u64),
     turn: Option<TurnConfig>,
     max_rooms: usize,
+    room_hold: Duration,
+    rooms_per_ip: usize,
+    max_kept_rooms_per_ip: usize,
 }
 
 struct Room {
-    /// The host connection holding it.
-    host: ConnectionId,
+    /// The client network of the connection holding it, or that it is kept for.
+    network: IpAddr,
+    /// The host connection holding it, or that it is kept for a host that is away.
+    state: RoomState,
+    /// SHA-256 of the claim it was opened with; a room without one belongs to its connection.
+    claim: Option<[u8; 32]>,
     /// Its number in the log.
     number: u64,
     opened: Instant,
     /// Viewers that joined through it.
     joined: u64,
+}
+
+enum RoomState {
+    Held(ConnectionId),
+    /// Kept for a host that is away, until `until`; `waiting` viewers joined meanwhile.
+    Away {
+        since: Instant,
+        until: Instant,
+        waiting: Vec<ConnectionId>,
+    },
+}
+
+impl Room {
+    fn host(&self) -> Option<&str> {
+        match &self.state {
+            RoomState::Held(host) => Some(host),
+            RoomState::Away { .. } => None,
+        }
+    }
 }
 
 struct Connection {
@@ -163,19 +232,29 @@ struct Connection {
     /// Asked for TURN credentials before hosting or joining.
     turn_wanted: bool,
     /// Set-up messages relayed from this connection, per viewer connection.
-    signals: HashMap<ConnectionId, SignalLimit>,
+    signals: HashMap<ConnectionId, Bucket>,
+    /// Its other messages.
+    messages: Bucket,
+    /// The room it waits for, whose host is away.
+    waiting: Option<String>,
 }
 
-struct SignalLimit {
+struct Bucket {
     bucket: TokenBucket,
     /// Told it was rate limited since its last relayed message. A flood is answered once, not
     /// once per message.
     told: bool,
 }
 
+/// What a connection's writer sends.
+enum Outgoing {
+    Text(String),
+    Ping,
+}
+
 /// Encoded messages on their way to a connection's socket.
 struct Outbox {
-    tx: mpsc::Sender<String>,
+    tx: mpsc::Sender<Outgoing>,
     /// Bytes queued and not yet written.
     bytes: Arc<AtomicUsize>,
     /// Notified to close the connection, when its backlog is full.
@@ -201,7 +280,10 @@ enum Role {
         viewers: HashSet<ConnectionId>,
     },
     Viewer {
+        /// Empty once the room it joined through moved to another connection.
         host: ConnectionId,
+        /// The room it joined through.
+        room: String,
         /// Its number in the log.
         number: u64,
         joined: Instant,
@@ -221,8 +303,33 @@ pub fn router(service: Arc<Service>) -> Router {
 
 /// Serves until the listener fails.
 pub async fn serve(listener: TcpListener, service: Arc<Service>) -> std::io::Result<()> {
+    serve_until(listener, service, std::future::pending()).await
+}
+
+/// Serves until `shutdown` completes, then stops accepting connections, closes the open ones with
+/// a WebSocket close, and returns once they are gone.
+pub async fn serve_until(
+    listener: TcpListener,
+    service: Arc<Service>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
     tokio::spawn(report(Arc::downgrade(&service)));
-    axum::serve(listener, router(service).into_make_service_with_connect_info::<SocketAddr>()).await
+    let stopping = service.clone();
+    let shutdown = async move {
+        shutdown.await;
+        stopping.stop();
+    };
+    axum::serve(
+        listener,
+        router(service.clone()).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await?;
+    // Upgraded connections run on their own; wait for them to close.
+    while service.connection_count() > 0 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Ok(())
 }
 
 async fn upgrade(
@@ -263,7 +370,7 @@ impl Drop for Slot {
 }
 
 async fn refuse_busy(mut socket: WebSocket) {
-    let busy = ServerMessage::Error { code: ErrorCode::ServerBusy };
+    let busy = ServerMessage::Error { code: ErrorCode::ServerBusy, room: None };
     let text = serde_json::to_string(&busy).expect("server messages always encode");
     if socket.send(Message::Text(text.into())).await.is_ok() {
         let _ = socket.send(Message::Close(None)).await;
@@ -299,12 +406,19 @@ fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted_proxies: usize) -> IpAdd
 }
 
 /// Logs the load every `stats_interval` when it changed, and the counts of bursts once their
-/// minute is over, until the service is dropped.
+/// minute is over, and ends the hold time of rooms kept for a host that is away, until the
+/// service is dropped.
 async fn report(service: Weak<Service>) {
-    let Some(every) = service.upgrade().map(|service| service.config.stats_interval) else {
+    let Some((every, hold)) =
+        service.upgrade().map(|service| (service.config.stats_interval, service.config.room_hold))
+    else {
         return;
     };
-    let mut tick = tokio::time::interval(every.min(log::WINDOW));
+    let mut period = every.min(log::WINDOW).min(EXPIRY_TICK);
+    if !hold.is_zero() {
+        period = period.min(hold);
+    }
+    let mut tick = tokio::time::interval(period);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut last = Instant::now();
     loop {
@@ -313,6 +427,7 @@ async fn report(service: Weak<Service>) {
         let now = Instant::now();
         let mut inner = service.inner.lock().unwrap();
         inner.throttle.flush(now);
+        inner.expire(now);
         if now.duration_since(last) >= every {
             last = now;
             inner.stats();
@@ -322,29 +437,54 @@ async fn report(service: Weak<Service>) {
 
 async fn handle(socket: WebSocket, service: Arc<Service>, slot: Slot) {
     let (mut sink, mut stream) = socket.split();
-    let (tx, mut rx) = mpsc::channel::<String>(OUTBOUND_QUEUE);
+    let (tx, mut rx) = mpsc::channel::<Outgoing>(OUTBOUND_QUEUE);
     let close = Arc::new(Notify::new());
     let bytes = Arc::new(AtomicUsize::new(0));
+    let pings = tx.clone();
     let outbox = Outbox { tx, bytes: bytes.clone(), close: close.clone() };
     let id = service.connect(outbox, slot.network);
+    let mut stopping = service.stopping.subscribe();
 
-    let writer = tokio::spawn(async move {
-        while let Some(text) = rx.recv().await {
-            let len = text.len();
-            if sink.send(Message::Text(text.into())).await.is_err() {
+    // Ends after a close frame, or when the socket fails.
+    let mut writer = tokio::spawn(async move {
+        while let Some(outgoing) = rx.recv().await {
+            let (message, len) = match outgoing {
+                Outgoing::Text(text) => {
+                    let len = text.len();
+                    (Message::Text(text.into()), len)
+                }
+                Outgoing::Ping => (Message::Ping(Default::default()), 0),
+            };
+            if sink.send(message).await.is_err() {
                 break;
             }
             bytes.fetch_sub(len, Ordering::Relaxed);
         }
+        let _ = sink.send(Message::Close(None)).await;
     });
 
     let idle = tokio::time::sleep(service.config.idle_timeout);
     tokio::pin!(idle);
     let mut idle_checked = false;
     let mut grace: Option<Pin<Box<tokio::time::Sleep>>> = None;
-    loop {
+    // Liveness (room-ownership decision 5): a ping every `ping_interval`, and a deadline that
+    // every frame read moves.
+    let mut ping = tokio::time::interval_at(
+        tokio::time::Instant::now() + service.config.ping_interval,
+        service.config.ping_interval,
+    );
+    ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let deadline = tokio::time::sleep(service.config.unresponsive_after);
+    tokio::pin!(deadline);
+    let mut stopped = *stopping.borrow_and_update();
+    while !stopped {
         tokio::select! {
-            message = stream.next() => match message {
+            message = stream.next() => {
+                if matches!(message, Some(Ok(_))) {
+                    let next = tokio::time::Instant::now() + service.config.unresponsive_after;
+                    deadline.as_mut().reset(next);
+                }
+                match message {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
                     Ok(message) => {
                         if matches!(message, ClientMessage::TurnCredentials) && grace.is_none() {
@@ -353,8 +493,7 @@ async fn handle(socket: WebSocket, service: Arc<Service>, slot: Slot) {
                         service.handle(&id, message);
                     }
                     Err(_) => {
-                        service.socket_error(SocketError::BadMessage);
-                        service.reply(&id, ServerMessage::Error { code: ErrorCode::BadMessage });
+                        service.bad_message(&id);
                     }
                 },
                 Some(Err(error)) => {
@@ -363,7 +502,17 @@ async fn handle(socket: WebSocket, service: Arc<Service>, slot: Slot) {
                 }
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Ok(_)) => {}
+                }
             },
+            _ = ping.tick() => {
+                // A full queue closes the connection through its backlog check soon enough.
+                let _ = pings.try_send(Outgoing::Ping);
+            }
+            () = &mut deadline => {
+                service.socket_error(SocketError::Unresponsive);
+                break;
+            }
+            _ = stopping.changed() => stopped = true,
             () = &mut idle, if !idle_checked => {
                 if !service.is_member(&id) {
                     log::idle_closed();
@@ -380,7 +529,15 @@ async fn handle(socket: WebSocket, service: Arc<Service>, slot: Slot) {
     }
 
     service.disconnect(&id);
-    writer.abort();
+    if stopped {
+        // The writer sends a close frame once its queue is empty.
+        drop(pings);
+        if tokio::time::timeout(CLOSE_GRACE, &mut writer).await.is_err() {
+            writer.abort();
+        }
+    } else {
+        writer.abort();
+    }
     drop(slot);
 }
 
@@ -391,6 +548,7 @@ impl Service {
             connections: HashMap::new(),
             failed_joins: RateLimiter::new(config.failed_joins_per_ip, config.window),
             room_joins: RateLimiter::new(config.joins_per_room, config.window),
+            rooms_opened: RateLimiter::new(config.rooms_per_ip, config.window),
             networks: HashMap::new(),
             connection_total: 0,
             limits: log::Limits::default(),
@@ -401,8 +559,21 @@ impl Service {
             last_stats: (0, 0, 0, 0),
             turn: config.turn.clone(),
             max_rooms: config.max_rooms,
+            room_hold: config.room_hold,
+            rooms_per_ip: config.rooms_per_ip,
+            max_kept_rooms_per_ip: config.max_kept_rooms_per_ip,
         };
-        Self { config, inner: Mutex::new(inner) }
+        Self { config, inner: Mutex::new(inner), stopping: watch::Sender::new(false) }
+    }
+
+    /// Closes every connection, as the service stops.
+    fn stop(&self) {
+        let (connections, rooms) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.connection_total, inner.rooms.len())
+        };
+        log::stopping(connections, rooms);
+        self.stopping.send_replace(true);
     }
 
     fn connect(&self, outbox: Outbox, network: IpAddr) -> ConnectionId {
@@ -414,6 +585,8 @@ impl Service {
             turn: None,
             turn_wanted: false,
             signals: HashMap::new(),
+            messages: Bucket::new(MESSAGE_BURST, MESSAGES_PER_SECOND, Instant::now()),
+            waiting: None,
         };
         self.inner.lock().unwrap().connections.insert(id.clone(), connection);
         id
@@ -422,13 +595,24 @@ impl Service {
     fn handle(&self, from: &str, message: ClientMessage) {
         let mut inner = self.inner.lock().unwrap();
         let now = Instant::now();
+        // Set-up messages have their own limit, per viewer connection.
+        if !matches!(message, ClientMessage::Signal { .. }) && !inner.take_message(from, now) {
+            return;
+        }
+        // The room a `room-taken` names.
+        let mut named = None;
         // The event that logs a refusal, for the messages whose refusals are logged.
         type Refused = Option<fn(Refusal) -> Burst>;
         let (result, refused): (_, Refused) = match message {
-            ClientMessage::Host { room } => (
-                check_room(&room).and_then(|()| inner.open_room(from, room, now)),
-                Some(Burst::RoomRefused),
-            ),
+            ClientMessage::Host { room, claim } => {
+                named = Some(room.clone());
+                let checked = check_room(&room).and_then(|()| check_claim(claim.as_deref()));
+                let claim = claim.map(|claim| Sha256::digest(claim.as_bytes()).into());
+                (
+                    checked.and_then(|()| inner.open_room(from, room, claim, now)),
+                    Some(Burst::RoomRefused),
+                )
+            }
             ClientMessage::CloseRoom { room } => {
                 (check_room(&room).and_then(|()| inner.close_room(from, &room, now)), None)
             }
@@ -437,7 +621,13 @@ impl Service {
                 Some(Burst::PeerRefused),
             ),
             ClientMessage::Signal { connection, payload } => {
-                (inner.relay(from, &connection, payload, now), None)
+                let relayed = inner.relay(from, &connection, payload, now);
+                // A signal for a pair that does not exist has no bucket of its own: it counts
+                // against the sender's messages, as any other message would.
+                if relayed == Err(ErrorCode::UnknownConnection) && !inner.take_message(from, now) {
+                    return;
+                }
+                (relayed, None)
             }
             ClientMessage::TurnCredentials => (inner.turn_credentials(from), None),
         };
@@ -445,12 +635,19 @@ impl Service {
             if let (Some(burst), Some(reason)) = (refused, refusal(code)) {
                 inner.throttle.record(burst(reason), now);
             }
-            inner.send(from, ServerMessage::Error { code });
+            let room = named.filter(|_| code == ErrorCode::RoomTaken);
+            inner.send(from, ServerMessage::Error { code, room });
         }
     }
 
-    fn reply(&self, to: &str, message: ServerMessage) {
-        self.inner.lock().unwrap().send(to, message);
+    /// Answers a message that is not one of the protocol's, within the sender's message limit.
+    fn bad_message(&self, from: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        let now = Instant::now();
+        inner.throttle.record(Burst::SocketError(SocketError::BadMessage), now);
+        if inner.take_message(from, now) {
+            inner.send(from, ServerMessage::Error { code: ErrorCode::BadMessage, room: None });
+        }
     }
 
     fn socket_error(&self, kind: SocketError) {
@@ -466,9 +663,10 @@ impl Service {
     fn turn_grace_over(&self, id: &str) {
         let mut inner = self.inner.lock().unwrap();
         let Some(connection) = inner.connections.get_mut(id) else { return };
-        if connection.turn_wanted && !connection.is_member() {
+        // A viewer waiting for its host gets its credentials when it is joined.
+        if connection.turn_wanted && !connection.is_member() && connection.waiting.is_none() {
             connection.turn_wanted = false;
-            inner.send(id, ServerMessage::Error { code: ErrorCode::TurnUnavailable });
+            inner.send(id, ServerMessage::Error { code: ErrorCode::TurnUnavailable, room: None });
         }
     }
 
@@ -478,8 +676,24 @@ impl Service {
         let now = Instant::now();
         match connection.role {
             Role::Host { rooms, viewers } => {
-                for room in rooms {
-                    if let Some(room) = inner.rooms.remove(&room) {
+                let hold = inner.room_hold;
+                for id in rooms {
+                    let kept = inner.kept_rooms(connection.network);
+                    let keep = kept < inner.max_kept_rooms_per_ip;
+                    let Some(room) = inner.rooms.get_mut(&id) else { continue };
+                    if room.claim.is_some() && !hold.is_zero() && !keep {
+                        let max = inner.max_kept_rooms_per_ip;
+                        inner.limit_reached(Limit::KeptRoomsPerNetwork, max);
+                        if let Some(room) = inner.rooms.remove(&id) {
+                            room.closed(now, Closed::HostLeft);
+                        }
+                    } else if room.claim.is_some() && !hold.is_zero() {
+                        // Kept for the host to return to (room-ownership decision 3).
+                        let waiting = Vec::new();
+                        room.state = RoomState::Away { since: now, until: now + hold, waiting };
+                        let (number, joined) = (room.number, room.joined);
+                        log::room_away(number, joined, inner.rooms.len());
+                    } else if let Some(room) = inner.rooms.remove(&id) {
                         room.closed(now, Closed::HostLeft);
                     }
                 }
@@ -487,7 +701,7 @@ impl Service {
                     inner.send(&viewer, ServerMessage::PeerLeft { connection: viewer.clone() });
                 }
             }
-            Role::Viewer { host, number, joined } => {
+            Role::Viewer { host, number, joined, .. } => {
                 log::peer_left(number, now.duration_since(joined));
                 if let Some(Connection { role: Role::Host { viewers, .. }, signals, .. }) =
                     inner.connections.get_mut(&host)
@@ -497,11 +711,19 @@ impl Service {
                 }
                 inner.send(&host, ServerMessage::PeerLeft { connection: id.to_owned() });
             }
-            Role::New => {}
+            Role::New => {
+                if let Some(room) = connection.waiting
+                    && let Some(Room { state: RoomState::Away { waiting, .. }, .. }) =
+                        inner.rooms.get_mut(&room)
+                {
+                    waiting.retain(|viewer| viewer != id);
+                }
+            }
         }
     }
 
-    /// Number of open rooms, for tests and health reporting.
+    /// Number of open rooms and rooms kept for a host that is away, for tests and health
+    /// reporting.
     pub fn room_count(&self) -> usize {
         self.inner.lock().unwrap().rooms.len()
     }
@@ -554,6 +776,39 @@ fn check_room(room: &str) -> Result<(), ErrorCode> {
     if room.len() > MAX_ROOM_BYTES { Err(ErrorCode::BadMessage) } else { Ok(()) }
 }
 
+fn check_claim(claim: Option<&str>) -> Result<(), ErrorCode> {
+    match claim {
+        Some(claim) if !(MIN_CLAIM_BYTES..=MAX_CLAIM_BYTES).contains(&claim.len()) => {
+            Err(ErrorCode::BadMessage)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Whether `presented` is the room's claim, compared in constant time. A room without a claim
+/// matches nothing.
+fn claim_matches(room: Option<&[u8; 32]>, presented: Option<&[u8; 32]>) -> bool {
+    let (Some(room), Some(presented)) = (room, presented) else { return false };
+    room.iter().zip(presented).fold(0u8, |diff, (a, b)| diff | (a ^ b)) == 0
+}
+
+impl Bucket {
+    fn new(burst: f64, per_second: f64, now: Instant) -> Self {
+        Self { bucket: TokenBucket::new(burst, per_second, now), told: false }
+    }
+
+    /// Takes one token. Over the limit, says whether to tell the sender: once per run of
+    /// dropped messages.
+    fn take(&mut self, now: Instant) -> Result<(), bool> {
+        if self.bucket.take(now) {
+            self.told = false;
+            Ok(())
+        } else {
+            Err(!std::mem::replace(&mut self.told, true))
+        }
+    }
+}
+
 impl Inner {
     /// Queues `message` for `to`. A connection whose backlog is full is closed: it is not
     /// reading, and buffering more would only grow memory.
@@ -563,7 +818,10 @@ impl Inner {
         let len = text.len();
         let queued = outbox.bytes.fetch_add(len, Ordering::Relaxed) + len;
         let full = queued > OUTBOUND_BYTES
-            || matches!(outbox.tx.try_send(text), Err(mpsc::error::TrySendError::Full(_)));
+            || matches!(
+                outbox.tx.try_send(Outgoing::Text(text)),
+                Err(mpsc::error::TrySendError::Full(_))
+            );
         if full {
             outbox.close.notify_one();
             self.throttle.record(Burst::SocketError(SocketError::BacklogFull), Instant::now());
@@ -652,24 +910,69 @@ impl Inner {
         self.send(id, credentials);
     }
 
-    fn open_room(&mut self, from: &str, room: String, now: Instant) -> Result<(), ErrorCode> {
-        match self.rooms.get(&room) {
-            Some(open) if open.host != from => return Err(ErrorCode::RoomTaken),
-            Some(_) => {}
-            None if self.rooms.len() >= self.max_rooms => {
-                self.limit_reached(Limit::Rooms, self.rooms.len());
+    /// Takes one of `from`'s message tokens. Over the limit the message is dropped, and the
+    /// sender is told once per run (room-ownership decision 6).
+    fn take_message(&mut self, from: &str, now: Instant) -> bool {
+        let Some(connection) = self.connections.get_mut(from) else { return false };
+        match connection.messages.take(now) {
+            Ok(()) => true,
+            Err(tell) => {
+                self.limit_reached(Limit::Messages, MESSAGE_BURST as usize);
+                if tell {
+                    let limited = ServerMessage::Error { code: ErrorCode::RateLimited, room: None };
+                    self.send(from, limited);
+                }
+                false
+            }
+        }
+    }
+
+    /// Who gets a room (room-ownership decision 2): a room nobody holds goes to `from`; a room
+    /// another connection holds, or that is kept for a host that is away, only with its claim.
+    fn open_room(
+        &mut self,
+        from: &str,
+        room: String,
+        claim: Option<[u8; 32]>,
+        now: Instant,
+    ) -> Result<(), ErrorCode> {
+        let network = self.connections.get(from).ok_or(ErrorCode::UnknownConnection)?.network;
+        // Asking for rooms that exist is guessing too: same limit as wrong codes.
+        if self.failed_joins.exceeded(&network, now) {
+            return Err(ErrorCode::RateLimited);
+        }
+        self.expire_room(&room, now);
+        let taking = match self.rooms.get(&room) {
+            Some(open) if open.host() == Some(from) => false,
+            Some(open) if claim_matches(open.claim.as_ref(), claim.as_ref()) => true,
+            Some(_) => {
+                self.failed_joins.record(network, now);
+                return Err(ErrorCode::RoomTaken);
+            }
+            None => false,
+        };
+        let connection = self.connections.get(from).ok_or(ErrorCode::UnknownConnection)?;
+        match &connection.role {
+            Role::Host { rooms, .. }
+                if !rooms.contains(&room) && rooms.len() >= MAX_ROOMS_PER_HOST =>
+            {
+                self.limit_reached(Limit::RoomsPerHost, MAX_ROOMS_PER_HOST);
                 return Err(ErrorCode::ServerBusy);
             }
-            None => {}
+            Role::Viewer { .. } => return Err(ErrorCode::BadMessage),
+            Role::New if connection.waiting.is_some() => return Err(ErrorCode::BadMessage),
+            _ => {}
         }
-        let connection = self.connections.get_mut(from).ok_or(ErrorCode::UnknownConnection)?;
-        if let Role::Host { rooms, .. } = &connection.role
-            && !rooms.contains(&room)
-            && rooms.len() >= MAX_ROOMS_PER_HOST
-        {
-            self.limit_reached(Limit::RoomsPerHost, MAX_ROOMS_PER_HOST);
+        let new = !self.rooms.contains_key(&room);
+        if new && self.rooms_opened.exceeded(&network, now) {
+            self.limit_reached(Limit::RoomsPerNetwork, self.rooms_per_ip);
+            return Err(ErrorCode::RateLimited);
+        }
+        if new && self.rooms.len() >= self.max_rooms && !self.evict(now) {
+            self.limit_reached(Limit::Rooms, self.rooms.len());
             return Err(ErrorCode::ServerBusy);
         }
+        let connection = self.connections.get_mut(from).ok_or(ErrorCode::UnknownConnection)?;
         let turn_wanted = connection.turn_wanted;
         match &mut connection.role {
             Role::New => {
@@ -679,28 +982,158 @@ impl Inner {
             Role::Host { rooms, .. } => {
                 rooms.insert(room.clone());
             }
-            Role::Viewer { .. } => return Err(ErrorCode::BadMessage),
+            Role::Viewer { .. } => unreachable!("refused above"),
         }
-        if !self.rooms.contains_key(&room) {
+        let mut waiting = Vec::new();
+        if taking {
+            let open = self.rooms.get_mut(&room).expect("checked above");
+            let state = std::mem::replace(&mut open.state, RoomState::Held(from.to_owned()));
+            open.network = network;
+            let number = open.number;
+            match state {
+                RoomState::Held(old) => {
+                    log::room_reclaimed(number, Duration::ZERO, 0);
+                    self.move_away_from(&old, &room);
+                }
+                RoomState::Away { since, waiting: viewers, .. } => {
+                    log::room_reclaimed(number, now.duration_since(since), viewers.len());
+                    waiting = viewers;
+                }
+            }
+        } else if !self.rooms.contains_key(&room) {
             let number = self.next_room;
             self.next_room += 1;
-            let open = Room { host: from.to_owned(), number, opened: now, joined: 0 };
+            let state = RoomState::Held(from.to_owned());
+            let open = Room { network, state, claim, number, opened: now, joined: 0 };
+            self.rooms_opened.record(network, now);
             self.rooms.insert(room.clone(), open);
             log::room_opened(number, self.rooms.len());
         }
-        self.send(from, ServerMessage::RoomOpened { room });
+        self.send(from, ServerMessage::RoomOpened { room: room.clone() });
         if turn_wanted {
             self.give_turn(from);
+        }
+        // Viewers that waited for the host join now, in the order they came.
+        for viewer in waiting {
+            let Some(connection) = self.connections.get_mut(&viewer) else { continue };
+            if connection.waiting.take().as_deref() != Some(room.as_str())
+                || !matches!(connection.role, Role::New)
+            {
+                continue;
+            }
+            if let Err(code) = self.admit(&viewer, from, &room, now) {
+                self.send(&viewer, ServerMessage::Error { code, room: None });
+            }
         }
         Ok(())
     }
 
+    /// Takes `room` out of the connection `old`, as another connection presented its claim. The
+    /// viewers that joined through it are told their host left, as when a host disconnects.
+    fn move_away_from(&mut self, old: &str, room: &str) {
+        let Some(Connection { role: Role::Host { rooms, viewers }, .. }) =
+            self.connections.get_mut(old)
+        else {
+            return;
+        };
+        rooms.remove(room);
+        let viewers: Vec<ConnectionId> = viewers.iter().cloned().collect();
+        let mut moved = Vec::new();
+        for viewer in viewers {
+            if let Some(Connection { role: Role::Viewer { host, room: through, .. }, .. }) =
+                self.connections.get_mut(&viewer)
+                && through == room
+            {
+                // No connection has an empty id: neither side can relay to the other any more.
+                host.clear();
+                moved.push(viewer);
+            }
+        }
+        if let Some(Connection { role: Role::Host { viewers, .. }, signals, .. }) =
+            self.connections.get_mut(old)
+        {
+            for viewer in &moved {
+                viewers.remove(viewer);
+                signals.remove(viewer);
+            }
+        }
+        for viewer in moved {
+            self.send(&viewer, ServerMessage::PeerLeft { connection: viewer.clone() });
+            self.send(old, ServerMessage::PeerLeft { connection: viewer });
+        }
+    }
+
+    /// Rooms kept for hosts from `network` that are away.
+    fn kept_rooms(&self, network: IpAddr) -> usize {
+        self.rooms
+            .values()
+            .filter(|open| open.network == network && matches!(open.state, RoomState::Away { .. }))
+            .count()
+    }
+
+    /// Ends the hold time of `room`, when it is kept for a host that is away and its time is
+    /// over.
+    fn expire_room(&mut self, room: &str, now: Instant) {
+        if let Some(Room { state: RoomState::Away { until, .. }, .. }) = self.rooms.get(room)
+            && *until <= now
+        {
+            self.end_hold(room, now, Closed::HoldExpired);
+        }
+    }
+
+    /// Ends the hold time of every room whose time is over.
+    fn expire(&mut self, now: Instant) {
+        let over: Vec<String> = self
+            .rooms
+            .iter()
+            .filter(|(_, open)| matches!(open.state, RoomState::Away { until, .. } if until <= now))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for room in over {
+            self.end_hold(&room, now, Closed::HoldExpired);
+        }
+    }
+
+    /// Releases the room kept longest for a host that is away, to make place for a new room.
+    /// False when no room is kept.
+    fn evict(&mut self, now: Instant) -> bool {
+        let oldest = self
+            .rooms
+            .iter()
+            .filter_map(|(id, open)| match open.state {
+                RoomState::Away { until, .. } => Some((until, id)),
+                RoomState::Held(_) => None,
+            })
+            .min()
+            .map(|(_, id)| id.clone());
+        let Some(room) = oldest else { return false };
+        self.end_hold(&room, now, Closed::Evicted);
+        true
+    }
+
+    /// Removes a room kept for a host that is away; the viewers waiting for it are told it does
+    /// not exist.
+    fn end_hold(&mut self, room: &str, now: Instant, why: Closed) {
+        let Some(open) = self.rooms.remove(room) else { return };
+        open.closed(now, why);
+        if let RoomState::Away { waiting, .. } = open.state {
+            for viewer in waiting {
+                if let Some(connection) = self.connections.get_mut(&viewer) {
+                    connection.waiting = None;
+                    let missing =
+                        ServerMessage::Error { code: ErrorCode::RoomNotFound, room: None };
+                    self.send(&viewer, missing);
+                }
+            }
+        }
+    }
+
     fn close_room(&mut self, from: &str, room: &str, now: Instant) -> Result<(), ErrorCode> {
-        if self.rooms.get(room).map(|open| open.host.as_str()) != Some(from) {
+        if self.rooms.get(room).and_then(Room::host) != Some(from) {
             return Err(ErrorCode::RoomNotFound);
         }
         if let Some(open) = self.rooms.remove(room) {
-            open.closed(now, Closed::Closed);
+            open.closed(now, Closed::ByHost);
         }
         if let Some(Connection { role: Role::Host { rooms, .. }, .. }) =
             self.connections.get_mut(from)
@@ -719,28 +1152,57 @@ impl Inner {
             return Err(ErrorCode::RateLimited);
         }
         self.room_joins.record(room_key, now);
-        let Some(host) = self.rooms.get(room).map(|open| open.host.clone()) else {
+        self.expire_room(room, now);
+        let Some(open) = self.rooms.get_mut(room) else {
             self.failed_joins.record(network, now);
             return Err(ErrorCode::RoomNotFound);
         };
+        let number = open.number;
+        let host = match &mut open.state {
+            RoomState::Held(host) => host.clone(),
+            RoomState::Away { waiting, .. } => {
+                // Waits for the host to return (room-ownership decision 4).
+                let viewer = self.connections.get(from).ok_or(ErrorCode::UnknownConnection)?;
+                if !matches!(viewer.role, Role::New) || viewer.waiting.is_some() {
+                    return Err(ErrorCode::BadMessage);
+                }
+                if waiting.len() >= MAX_WAITING_PER_ROOM {
+                    self.limit_reached(Limit::WaitingPerRoom, MAX_WAITING_PER_ROOM);
+                    return Err(ErrorCode::ServerBusy);
+                }
+                waiting.push(from.to_owned());
+                log::peer_waiting(number, waiting.len());
+                if let Some(viewer) = self.connections.get_mut(from) {
+                    viewer.waiting = Some(room.to_owned());
+                }
+                return Ok(());
+            }
+        };
+        let viewer = self.connections.get(from).ok_or(ErrorCode::UnknownConnection)?;
+        if !matches!(viewer.role, Role::New) || viewer.waiting.is_some() {
+            return Err(ErrorCode::BadMessage);
+        }
+        self.admit(from, &host, room, now)
+    }
+
+    /// Joins the new connection `from` to `host` through `room`.
+    fn admit(&mut self, from: &str, host: &str, room: &str, now: Instant) -> Result<(), ErrorCode> {
         if let Some(Connection { role: Role::Host { viewers, .. }, .. }) =
-            self.connections.get(&host)
+            self.connections.get(host)
             && viewers.len() >= MAX_VIEWERS_PER_HOST
         {
             self.limit_reached(Limit::ViewersPerHost, MAX_VIEWERS_PER_HOST);
             return Err(ErrorCode::ServerBusy);
         }
         let viewer = self.connections.get_mut(from).ok_or(ErrorCode::UnknownConnection)?;
-        if !matches!(viewer.role, Role::New) {
-            return Err(ErrorCode::BadMessage);
-        }
         let number = self.next_peer;
         self.next_peer += 1;
-        viewer.role = Role::Viewer { host: host.clone(), number, joined: now };
+        viewer.role =
+            Role::Viewer { host: host.to_owned(), room: room.to_owned(), number, joined: now };
         let turn_wanted = viewer.turn_wanted;
         let mut viewers_on_host = 0;
         if let Some(Connection { role: Role::Host { viewers, .. }, .. }) =
-            self.connections.get_mut(&host)
+            self.connections.get_mut(host)
         {
             viewers.insert(from.to_owned());
             viewers_on_host = viewers.len();
@@ -751,7 +1213,7 @@ impl Inner {
         }
         self.send(from, ServerMessage::Joined { connection: from.to_owned() });
         self.send(
-            &host,
+            host,
             ServerMessage::ViewerJoined { room: room.to_owned(), connection: from.to_owned() },
         );
         if turn_wanted {
@@ -775,6 +1237,9 @@ impl Inner {
         else {
             return Err(ErrorCode::UnknownConnection);
         };
+        if host.is_empty() {
+            return Err(ErrorCode::UnknownConnection);
+        }
         let to = if from == connection {
             host.clone()
         } else if from == host {
@@ -783,16 +1248,14 @@ impl Inner {
             return Err(ErrorCode::UnknownConnection);
         };
         let sender = self.connections.get_mut(from).ok_or(ErrorCode::UnknownConnection)?;
-        let limit = sender.signals.entry(connection.to_owned()).or_insert_with(|| SignalLimit {
-            bucket: TokenBucket::new(SIGNAL_BURST, SIGNALS_PER_SECOND, now),
-            told: false,
-        });
-        if !limit.bucket.take(now) {
-            let told = std::mem::replace(&mut limit.told, true);
+        let limit = sender
+            .signals
+            .entry(connection.to_owned())
+            .or_insert_with(|| Bucket::new(SIGNAL_BURST, SIGNALS_PER_SECOND, now));
+        if let Err(tell) = limit.take(now) {
             self.limit_reached(Limit::SignalsPerViewer, SIGNAL_BURST as usize);
-            return if told { Ok(()) } else { Err(ErrorCode::RateLimited) };
+            return if tell { Err(ErrorCode::RateLimited) } else { Ok(()) };
         }
-        limit.told = false;
         self.send(&to, ServerMessage::Signal { connection: connection.to_owned(), payload });
         Ok(())
     }

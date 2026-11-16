@@ -109,6 +109,23 @@ describe('viewer screen', () => {
     expect(screen.queryByText(/Connection lost/)).not.toBeInTheDocument();
   });
 
+  it('keeps joining while attempts fail, and says it waits for the host when joining takes long', () => {
+    vi.useFakeTimers();
+    try {
+      setup();
+      act(() => emit({ type: 'reconnecting' }));
+      expect(screen.getByText('Joining the session…')).toBeInTheDocument();
+      expect(screen.queryByText(/Connection lost/)).not.toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(20_000));
+      expect(screen.getByRole('status')).toHaveTextContent('Waiting for the host…');
+      expect(screen.queryByText(/network/)).not.toBeInTheDocument();
+      join();
+      expect(screen.queryByText('Waiting for the host…')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('lets the viewer keep reading after the host ends the session', () => {
     setup();
     join();

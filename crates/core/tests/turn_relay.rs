@@ -139,7 +139,7 @@ fn ice_servers(message: ServerMessage) -> Vec<String> {
 /// TURN credentials, so the room comes first.
 async fn host(room: &str) -> (Socket, Vec<String>) {
     let mut host_ws: Socket = tokio_tungstenite::connect_async(signalling_url()).await.unwrap().0;
-    send(&mut host_ws, ClientMessage::Host { room: room.into() }).await;
+    send(&mut host_ws, ClientMessage::Host { room: room.into(), claim: None }).await;
     assert!(matches!(recv(&mut host_ws).await, ServerMessage::RoomOpened { .. }));
     send(&mut host_ws, ClientMessage::TurnCredentials).await;
     let ice = ice_servers(recv(&mut host_ws).await);

@@ -36,9 +36,17 @@ use crate::ice::turn_url_with_credentials;
 use crate::peer::{Channel, LinkState, Peer, PeerConfig, PeerEvent};
 use crate::signalling_client;
 
-/// How long joining may take before the viewer is told the network does not allow the
-/// connection; also how long one reconnection attempt may take.
+/// How long joining may take, from the service's first answer, before the viewer is told the
+/// network does not allow the connection; also how long one reconnection attempt, or one attempt
+/// that gets no answer, may take.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How many connect timeouts a viewer joining for the first time waits for a host that is away
+/// (`room-ownership` design decision 4): the service parks its join without an answer until the
+/// host is back. 15 times 20 seconds is 5 minutes, the time the service keeps a host's room by
+/// default (`SPECDECK_ROOM_HOLD_SECONDS`). Counted in connect timeouts so tests with a short one
+/// wait less.
+pub const HOST_AWAY_ATTEMPTS: u32 = 15;
 
 #[derive(Clone, Debug)]
 pub struct ViewerConfig {
@@ -124,7 +132,8 @@ pub enum ViewerEvent {
     Reconnecting,
     /// Not admitted; final.
     Refused(RefusalReason),
-    /// The code does not match an open session; final.
+    /// The code does not match an open session, or its host did not come back while this viewer
+    /// waited; final.
     InvalidCode,
     /// Too many attempts from this network; final.
     RateLimited,
@@ -132,7 +141,8 @@ pub enum ViewerEvent {
     ServiceUnavailable,
     /// The signalling service is at a capacity limit; final.
     ServiceBusy,
-    /// No connection could be made, for example because the network blocks UDP; final.
+    /// The service answered, but no connection could be made, for example because the network
+    /// blocks UDP; final.
     CannotConnect,
     /// The host closed the session; final.
     Ended,
@@ -225,6 +235,8 @@ impl ViewerSession {
             state: ViewerState::new(code),
             events,
             joined_at: Instant::now(),
+            answered_at: None,
+            waited: false,
             attempt: 0,
             connected_at: None,
             status: status_tx,
@@ -420,6 +432,11 @@ struct Viewer {
     state: ViewerState,
     events: UnboundedSender<ViewerEvent>,
     joined_at: Instant,
+    /// When the service first answered this viewer's join; joining may take [`CONNECT_TIMEOUT`]
+    /// from then.
+    answered_at: Option<Instant>,
+    /// Whether an attempt to join got no answer: the service parks a join while the host is away.
+    waited: bool,
     /// Connection attempts so far, the current one included.
     attempt: u32,
     /// When the current attempt's control channel opened.
@@ -450,6 +467,9 @@ enum Outcome {
     Retry(AttemptEnd),
     /// Interrupted on purpose: reconnect after this long.
     Interrupted(Duration),
+    /// Joining for the first time, the service did not answer: it waits for the host to come
+    /// back. Try again, as the service closes a connection that idles longer.
+    NoAnswer,
     Left,
 }
 
@@ -459,6 +479,7 @@ impl Outcome {
             Outcome::Final(_) => AttemptEnd::Final,
             Outcome::Retry(reason) => *reason,
             Outcome::Interrupted(_) => AttemptEnd::Interrupted,
+            Outcome::NoAnswer => AttemptEnd::Timeout,
             Outcome::Left => AttemptEnd::Left,
         }
     }
@@ -507,16 +528,13 @@ impl Viewer {
                     return;
                 }
                 Outcome::Interrupted(outage) => outage,
-                // Joining keeps failing, for example because no relay address can be had.
-                Outcome::Retry(_)
-                    if !self.state.admitted_once()
-                        && self.joined_at.elapsed() >= self.config.connect_timeout =>
-                {
-                    self.status.send_modify(|status| status.phase = ViewerPhase::Ended);
-                    let _ = self.events.send(ViewerEvent::CannotConnect);
-                    return;
-                }
-                Outcome::Retry(_) => {
+                Outcome::Retry(_) | Outcome::NoAnswer => {
+                    self.waited |= matches!(outcome, Outcome::NoAnswer);
+                    if let Some(event) = self.join_given_up() {
+                        self.status.send_modify(|status| status.phase = ViewerPhase::Ended);
+                        let _ = self.events.send(event);
+                        return;
+                    }
                     // Back off only while attempts keep failing.
                     if self.state.admitted_once() && !admitted_before {
                         retry = FIRST_RETRY;
@@ -547,6 +565,26 @@ impl Viewer {
                     },
                 }
             }
+        }
+    }
+
+    /// Whether a viewer that was never admitted stops trying after a failed attempt, and what it
+    /// is told.
+    fn join_given_up(&self) -> Option<ViewerEvent> {
+        if self.state.admitted_once() {
+            return None;
+        }
+        let timeout = self.config.connect_timeout;
+        match self.answered_at {
+            // Joining keeps failing, for example because no relay address can be had.
+            Some(at) if at.elapsed() >= timeout => Some(ViewerEvent::CannotConnect),
+            Some(_) => None,
+            // The host did not come back while the service kept its room, or longer: by then the
+            // service has ended the room and the host's app may have made a new code.
+            None if self.waited => (self.joined_at.elapsed() >= timeout * HOST_AWAY_ATTEMPTS)
+                .then_some(ViewerEvent::InvalidCode),
+            // Never answered, and not by waiting: for example the service closes each attempt.
+            None => (self.joined_at.elapsed() >= timeout).then_some(ViewerEvent::CannotConnect),
         }
     }
 
@@ -592,11 +630,11 @@ impl Viewer {
         self.files_open = false;
         self.catch_up = None;
         self.transfers.reconnected();
-        // Joining has one deadline across attempts; each reconnection attempt has its own.
-        let deadline = if self.state.admitted_once() {
-            Instant::now() + self.config.connect_timeout
-        } else {
-            self.joined_at + self.config.connect_timeout
+        // Joining has one deadline across attempts, from the service's first answer; each
+        // reconnection attempt, and each attempt to join that is not answered yet, has its own.
+        let mut deadline = match self.answered_at {
+            Some(at) if !self.state.admitted_once() => at + self.config.connect_timeout,
+            _ => Instant::now() + self.config.connect_timeout,
         };
 
         loop {
@@ -634,7 +672,14 @@ impl Viewer {
                 },
                 _ = traffic.tick() => self.traffic.report_viewer(),
                 _ = tokio::time::sleep_until(deadline), if !connected => {
-                    return if self.state.admitted_once() { Outcome::Retry(AttemptEnd::Timeout) } else { Outcome::Final(ViewerEvent::CannotConnect) };
+                    return if self.state.admitted_once() {
+                        Outcome::Retry(AttemptEnd::Timeout)
+                    } else if self.answered_at.is_some() {
+                        Outcome::Final(ViewerEvent::CannotConnect)
+                    } else {
+                        // Silence, not a refusal: the service waits for the host to come back.
+                        Outcome::NoAnswer
+                    };
                 }
                 message = server.recv() => match message {
                     None if !connected => return Outcome::Retry(AttemptEnd::SignallingClosed),
@@ -656,7 +701,7 @@ impl Viewer {
                             }
                         }
                     }
-                    Some(ServerMessage::Error { code }) => match code {
+                    Some(ServerMessage::Error { code, .. }) => match code {
                         ErrorCode::TurnUnavailable if connection.is_some() && peer.is_none() => {
                             match self.offer(&ice_servers, &peer_tx) {
                                 Some(new_peer) => peer = Some(new_peer),
@@ -666,6 +711,9 @@ impl Viewer {
                         // After the host closed the session its room is gone.
                         ErrorCode::RoomNotFound if self.state.admitted_once() => return Outcome::Final(ViewerEvent::Ended),
                         ErrorCode::RoomNotFound => return Outcome::Final(ViewerEvent::InvalidCode),
+                        // Waiting for the host, each attempt counts as a join of its room; the code
+                        // was right, so keep waiting.
+                        ErrorCode::RateLimited if self.waited && !self.state.admitted_once() => return Outcome::NoAnswer,
                         ErrorCode::RateLimited => return Outcome::Final(ViewerEvent::RateLimited),
                         // Before the first admission a full service is final; later, keep trying.
                         ErrorCode::ServerBusy if self.state.admitted_once() => return Outcome::Retry(AttemptEnd::ServiceBusy),
@@ -673,6 +721,11 @@ impl Viewer {
                         _ => {}
                     },
                     Some(ServerMessage::Joined { connection: id }) => {
+                        if !self.state.admitted_once() && self.answered_at.is_none() {
+                            let now = Instant::now();
+                            self.answered_at = Some(now);
+                            deadline = now + self.config.connect_timeout;
+                        }
                         connection = Some(id);
                         signalling.send(ClientMessage::TurnCredentials);
                     }
@@ -1019,6 +1072,8 @@ mod tests {
             state: ViewerState::new(InviteCode::generate()),
             events,
             joined_at: Instant::now(),
+            answered_at: None,
+            waited: false,
             attempt: 1,
             connected_at: None,
             status: watch::channel(ViewerStatus::default()).0,

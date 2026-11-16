@@ -62,6 +62,8 @@ pub(crate) enum SocketError {
     BadMessage,
     /// Stopped reading until its backlog was full.
     BacklogFull,
+    /// Nothing arrived from it for too long, not even an answer to a ping.
+    Unresponsive,
 }
 
 impl fmt::Display for SocketError {
@@ -72,6 +74,7 @@ impl fmt::Display for SocketError {
             SocketError::Protocol => "protocol",
             SocketError::BadMessage => "bad_message",
             SocketError::BacklogFull => "backlog_full",
+            SocketError::Unresponsive => "unresponsive",
         })
     }
 }
@@ -80,15 +83,22 @@ impl fmt::Display for SocketError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Closed {
     /// The host closed it, as when it replaces its code.
-    Closed,
+    ByHost,
+    /// The host left without closing it, and it had no claim to keep it for.
     HostLeft,
+    /// It was kept for a host that was away, and the host did not return in time.
+    HoldExpired,
+    /// It was kept for a host that was away, and released to make place for a new room.
+    Evicted,
 }
 
 impl fmt::Display for Closed {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
-            Closed::Closed => "closed",
+            Closed::ByHost => "closed",
             Closed::HostLeft => "host_left",
+            Closed::HoldExpired => "hold_expired",
+            Closed::Evicted => "evicted",
         })
     }
 }
@@ -103,6 +113,14 @@ pub(crate) enum Limit {
     ViewersPerHost,
     SignalsPerViewer,
     Backlog,
+    /// Messages per connection.
+    Messages,
+    /// Viewers waiting for one room whose host is away.
+    WaitingPerRoom,
+    /// New rooms per client network within a minute.
+    RoomsPerNetwork,
+    /// Rooms kept for hosts that are away, per client network.
+    KeptRoomsPerNetwork,
 }
 
 impl fmt::Display for Limit {
@@ -115,6 +133,10 @@ impl fmt::Display for Limit {
             Limit::ViewersPerHost => "viewers_per_host",
             Limit::SignalsPerViewer => "signals_per_viewer",
             Limit::Backlog => "backlog",
+            Limit::Messages => "messages",
+            Limit::WaitingPerRoom => "waiting_per_room",
+            Limit::RoomsPerNetwork => "rooms_per_network",
+            Limit::KeptRoomsPerNetwork => "kept_rooms_per_network",
         })
     }
 }
@@ -146,6 +168,11 @@ pub fn started(turn: bool, web_viewer: bool) {
     info!(target: TARGET, version = env!("CARGO_PKG_VERSION"), turn, web_viewer, "service.started");
 }
 
+/// The service was asked to stop, with this many connections open and rooms held or kept.
+pub(crate) fn stopping(connections: usize, rooms: usize) {
+    info!(target: TARGET, connections, rooms, "service.stopping");
+}
+
 pub fn no_turn() {
     warn!(target: TARGET, "service.no_turn");
 }
@@ -162,6 +189,23 @@ pub(crate) fn room_opened(room: u64, rooms_open: usize) {
 /// `viewers` joined through the room while it was open.
 pub(crate) fn room_closed(room: u64, viewers: u64, lasted: Duration, why: Closed) {
     info!(target: TARGET, room, viewers, lasted_s = seconds(lasted), why = %why, "room.closed");
+}
+
+/// The host of a room that has a claim left; the room is kept for it. `viewers` joined through
+/// the room so far.
+pub(crate) fn room_away(room: u64, viewers: u64, rooms: usize) {
+    info!(target: TARGET, room, viewers, rooms, "room.away");
+}
+
+/// A connection presented the room's claim and took the room: back after the host was `away`
+/// (zero when taken from a connection that was still open), with `waiting` viewers to join.
+pub(crate) fn room_reclaimed(room: u64, away: Duration, waiting: usize) {
+    info!(target: TARGET, room, away_s = seconds(away), waiting, "room.reclaimed");
+}
+
+/// A viewer waits for a room whose host is away; `waiting` viewers wait for it now.
+pub(crate) fn peer_waiting(room: u64, waiting: usize) {
+    info!(target: TARGET, room, waiting, "peer.waiting");
 }
 
 pub(crate) fn peer_joined(room: u64, peer: u64, viewers_on_host: usize) {
@@ -458,6 +502,13 @@ mod tests {
         assert_eq!(SocketError::TooLarge.to_string(), "too_large");
         assert_eq!(SocketError::BacklogFull.to_string(), "backlog_full");
         assert_eq!(Closed::HostLeft.to_string(), "host_left");
+        assert_eq!(Closed::HoldExpired.to_string(), "hold_expired");
+        assert_eq!(Closed::Evicted.to_string(), "evicted");
+        assert_eq!(SocketError::Unresponsive.to_string(), "unresponsive");
+        assert_eq!(Limit::Messages.to_string(), "messages");
+        assert_eq!(Limit::WaitingPerRoom.to_string(), "waiting_per_room");
+        assert_eq!(Limit::RoomsPerNetwork.to_string(), "rooms_per_network");
+        assert_eq!(Limit::KeptRoomsPerNetwork.to_string(), "kept_rooms_per_network");
         assert_eq!(Limit::ConnectionsPerNetwork.to_string(), "connections_per_network");
         assert_eq!(Setting::LogLevel.to_string(), "SPECDECK_LOG_LEVEL");
     }

@@ -105,7 +105,18 @@ impl App {
             assert!(Instant::now() < deadline, "no socket");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let connection = connect(socket).await.unwrap();
+        // The socket's file exists from `bind`, a moment before the process listens on it, so a
+        // refused connection is tried again.
+        let connection = loop {
+            match connect(socket).await {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    assert!(Instant::now() < deadline, "the socket refused: {error}");
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("{error}"),
+            }
+        };
         let mut app = App { connection, log: Vec::new() };
         let hello = Frozen::Hello { protocol, release: "test".into() };
         app.send_frame(Frame::control(&hello).unwrap()).await;
@@ -142,7 +153,7 @@ impl App {
 
     /// Reads until `done` returns true for an event, collecting terminal output on the way.
     async fn until(&mut self, terminal: &mut String, done: impl Fn(&Event) -> bool) -> Event {
-        tokio::time::timeout(WAIT, async {
+        let result = tokio::time::timeout(WAIT, async {
             loop {
                 match self.recv().await {
                     Frame::Data(records) => terminal.push_str(&String::from_utf8_lossy(&records)),
@@ -155,8 +166,39 @@ impl App {
                 }
             }
         })
-        .await
-        .unwrap_or_else(|_| panic!("timed out; terminal so far {terminal:?}"))
+        .await;
+        result.unwrap_or_else(|_| {
+            // The last frames both ways say what the test waited for in vain.
+            let last = self.log.iter().rev().take(12).rev();
+            let last: Vec<String> =
+                last.map(|frame| frame.to_string().chars().take(300).collect()).collect();
+            panic!("timed out; terminal so far {terminal:?}; last frames:\n{}", last.join("\n"))
+        })
+    }
+
+    /// The answer to command `id`, once `done` has also returned true for an event: the session
+    /// may send that event before or after the answer, and waiting for one would pass over the
+    /// other.
+    async fn answer_and(
+        &mut self,
+        terminal: &mut String,
+        id: u64,
+        done: impl Fn(&Event) -> bool,
+    ) -> Event {
+        let answer = std::cell::RefCell::new(None);
+        let seen = std::cell::Cell::new(false);
+        self.until(terminal, |event| {
+            match event {
+                Event::Answer { id: answered, .. } if *answered == id => {
+                    *answer.borrow_mut() = Some(event.clone());
+                }
+                event if done(event) => seen.set(true),
+                _ => {}
+            }
+            answer.borrow().is_some() && seen.get()
+        })
+        .await;
+        answer.into_inner().unwrap()
     }
 
     /// Reads terminal output until it contains `text`.
@@ -429,6 +471,81 @@ async fn a_session_without_its_app_ends_itself_after_the_grace_period() {
     assert_eq!(viewer_until(&mut viewer, ViewerEvent::is_final).await, ViewerEvent::Ended);
     process.exits().await;
     assert!(!process.entry().exists());
+}
+
+/// A sharing service on which another connection holds the first room the host asks for: the
+/// room of its invite code.
+async fn signalling_with_the_code_taken() -> String {
+    use futures_util::{SinkExt, StreamExt};
+    use specdeck_protocol::signalling::{ClientMessage, ErrorCode, ServerMessage};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut first = true;
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(message)) = socket.next().await {
+                let Message::Text(text) = message else { continue };
+                let Ok(ClientMessage::Host { room, .. }) = serde_json::from_str(&text) else {
+                    continue;
+                };
+                let answer = if std::mem::take(&mut first) {
+                    ServerMessage::Error { code: ErrorCode::RoomTaken, room: Some(room) }
+                } else {
+                    ServerMessage::RoomOpened { room }
+                };
+                let json = serde_json::to_string(&answer).unwrap();
+                socket.send(Message::Text(json.into())).await.unwrap();
+            }
+        }
+    });
+    url
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_code_someone_else_holds_is_replaced_and_the_window_is_told_once() {
+    let url = signalling_with_the_code_taken().await;
+    let folder = tempfile::tempdir().unwrap();
+    let mut process = Process_::launch(600);
+    let mut app = App::connect(&process.socket).await;
+    let code = started(&mut app, folder.path(), &url).await;
+
+    // No window was open: the first one to attach hears it, after the snapshot with the new code.
+    let mut terminal = String::new();
+    app.send(&Command::Attach).await;
+    let snapshot = app
+        .until(
+            &mut terminal,
+            |event| matches!(event, Event::HostEvent { event } if event["type"] == "snapshot"),
+        )
+        .await;
+    let Event::HostEvent { event: snapshot } = snapshot else { unreachable!() };
+    let shown = InviteCode::parse(snapshot["code"].as_str().unwrap()).unwrap();
+    assert_eq!(shown, code);
+    let replaced = app.until(&mut terminal, |event| matches!(event, Event::HostEvent { .. })).await;
+    let Event::HostEvent { event: replaced } = replaced else { unreachable!() };
+    assert_eq!(replaced, serde_json::json!({ "type": "code-replaced", "reason": "in-use" }));
+
+    // A window that attaches later does not hear it again.
+    app.send(&Command::Detach).await;
+    app.send(&Command::Attach).await;
+    app.until(
+        &mut terminal,
+        |event| matches!(event, Event::HostEvent { event } if event["type"] == "snapshot"),
+    )
+    .await;
+    app.send(&Command::End).await;
+    let ended = app
+        .until(&mut terminal, |event| {
+            matches!(event, Event::Ended)
+                || matches!(event, Event::HostEvent { event } if event["type"] == "code-replaced")
+        })
+        .await;
+    assert!(matches!(ended, Event::Ended), "{ended:?}");
+    process.exits().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1002,15 +1119,15 @@ const NOTES: &str = "IyBOb3Rlcwo=";
 /// Shares `notes.md` as the host; its file id.
 async fn share_notes(app: &mut App, terminal: &mut String) -> u32 {
     app.send(&Command::ShareFile { id: 1, name: "notes.md".into(), data: NOTES.into() }).await;
-    let answer = app.until(terminal, |e| matches!(e, Event::Answer { id: 1, .. })).await;
+    let answer = app
+        .answer_and(terminal, 1, |e| {
+            matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["files"][0]["name"] == "notes.md")
+        })
+        .await;
     let Event::Answer { value: Some(info), error: None, .. } = answer else { panic!("{answer:?}") };
     assert_eq!(info["name"], "notes.md");
     assert_eq!(info["kind"], "markdown");
     assert_eq!(info["byLabel"], "Nick");
-    app.until(terminal, |e| {
-        matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["files"][0]["name"] == "notes.md")
-    })
-    .await;
     info["file"].as_u64().unwrap() as u32
 }
 
@@ -1258,13 +1375,13 @@ async fn braindump_in_the_snapshot(app: &mut App, terminal: &mut String, prompt:
 
 async fn add_a_note(app: &mut App, terminal: &mut String) {
     app.send(&Command::AddNote { id: 1, text: "Edge cases".into() }).await;
-    let added = app.until(terminal, |e| matches!(e, Event::Answer { id: 1, .. })).await;
+    let added = app
+        .answer_and(terminal, 1, |e| {
+            matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["braindump"][0]["note"] == true)
+        })
+        .await;
     let Event::Answer { value: Some(info), .. } = added else { panic!("{added:?}") };
     assert_eq!(info["name"], "nick-note-1.md");
-    app.until(terminal, |e| {
-        matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["braindump"][0]["note"] == true)
-    })
-    .await;
 }
 
 /// Gives the note with a prompt, then finds nothing new to give.
