@@ -10,6 +10,8 @@ pub mod code_files;
 pub mod diag;
 pub mod documents;
 pub mod environment;
+pub mod file_rule;
+pub mod git;
 pub mod hooks;
 pub mod ice;
 pub mod launcher;

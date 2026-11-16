@@ -1236,6 +1236,10 @@ async fn the_braindump_is_given_as_one_prompt_ending_with_its_paths() {
     braindump_in_the_snapshot(&mut app, &mut terminal, true).await;
     app.until_text(&mut terminal, "ready").await;
     add_a_note(&mut app, &mut terminal).await;
+    // An agent's instruction file is written under another name.
+    app.send(&Command::AddToBraindump { id: 5, name: "AGENTS.md".into(), data: NOTES.into() })
+        .await;
+    app.until(&mut terminal, |e| matches!(e, Event::Answer { id: 5, value: Some(_), .. })).await;
     give_with_a_prompt(&mut app, &mut terminal, folder.path()).await;
 
     app.send(&Command::End).await;
@@ -1273,11 +1277,18 @@ async fn give_with_a_prompt(app: &mut App, terminal: &mut String, folder: &Path)
     app.send(&Command::GiveBraindump { id: 3, prompt: Some("Read\r\nthese".into()) }).await;
     let given = app.until(terminal, |e| matches!(e, Event::Answer { id: 3, .. })).await;
     let Event::Answer { value: Some(paths), .. } = given else { panic!("{given:?}") };
-    assert_eq!(paths, serde_json::json!(["shared/braindump/nick-note-1.md"]));
+    assert_eq!(
+        paths,
+        serde_json::json!([
+            "shared/braindump/nick-note-1.md",
+            "shared/braindump/AGENTS (shared).md"
+        ])
+    );
     assert_eq!(
         std::fs::read_to_string(folder.join("shared/braindump/nick-note-1.md")).unwrap(),
         "Edge cases"
     );
+    assert!(!folder.join("shared/braindump/AGENTS.md").exists());
     tokio::time::timeout(WAIT, async {
         while !bytes_read(terminal).contains("0d") {
             if let Frame::Data(records) = app.recv().await {
@@ -1287,7 +1298,10 @@ async fn give_with_a_prompt(app: &mut App, terminal: &mut String, folder: &Path)
     })
     .await
     .expect("nothing was submitted");
-    let typed = format!("{}0d", hex("Read\nthese\n\nshared/braindump/nick-note-1.md"));
+    let typed = format!(
+        "{}0d",
+        hex("Read\nthese\n\nshared/braindump/nick-note-1.md\nshared/braindump/AGENTS (shared).md")
+    );
     assert_eq!(bytes_read(terminal), typed, "one prompt, submitted once");
     nothing_new_to_give(app, terminal, &typed).await;
 }

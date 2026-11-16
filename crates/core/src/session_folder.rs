@@ -37,11 +37,38 @@ impl SessionFolder {
     /// Whether `path` is inside the folder once symlinks are resolved. A path that does not exist
     /// counts by its nearest existing parent; one that cannot be resolved at all, by its text.
     pub fn contains(&self, path: &str) -> bool {
+        self.inside(path).is_some()
+    }
+
+    /// The file `path` names, as the one to read: a relative path joined to the session folder,
+    /// symlinks resolved (through its nearest existing parent for a file that is gone), and only
+    /// when that is below the resolved folder (`keep-private-files-private` design decision 2).
+    /// When the folder or the path cannot be resolved at all, by its text.
+    pub fn inside(&self, path: &str) -> Option<PathBuf> {
         let path = self.absolute(path);
         match (resolve(&path), &self.resolved) {
-            (Some(path), Some(folder)) => below(&path, folder).is_some(),
-            _ => below(&path, &self.folder).is_some(),
+            (Some(real), Some(folder)) => below(&real, folder).is_some().then_some(real),
+            _ => below(&path, &self.folder).is_some().then_some(path),
         }
+    }
+
+    /// The folder that [`inside`](Self::inside) paths are below: resolved when it can be.
+    pub fn root(&self) -> &Path {
+        self.resolved.as_deref().unwrap_or(&self.folder)
+    }
+
+    /// `path` relative to the folder by its text, as the agent named it, symlinks not resolved;
+    /// `None` when it is not below the folder by its text.
+    pub fn relative(&self, path: &str) -> Option<PathBuf> {
+        let full = self.absolute(path);
+        below(&full, &self.folder)
+            .or_else(|| below(&full, self.resolved.as_deref()?))
+            .map(Path::to_owned)
+    }
+
+    /// `path` made absolute: a relative path joined to the session folder.
+    pub fn absolute_path(&self, path: &str) -> String {
+        self.absolute(path).to_string_lossy().into_owned()
     }
 
     /// `path` as viewers see it: relative inside the folder, `~/…` elsewhere in the home folder,
@@ -129,6 +156,58 @@ mod tests {
         let notes = home.path().join(".claude/notes.md");
         assert!(!session.contains(&text(&notes)));
         assert_eq!(session.display(&text(&notes)), "~/.claude/notes.md");
+    }
+
+    #[test]
+    fn inside_gives_the_file_to_read() {
+        let project = tempfile::tempdir().unwrap();
+        let real = project.path().canonicalize().unwrap();
+        std::fs::create_dir(real.join("docs")).unwrap();
+        std::fs::write(real.join("docs/plan.md"), "").unwrap();
+        let session = folder(project.path(), None);
+        assert_eq!(
+            session.inside(&text(&real.join("docs/plan.md"))),
+            Some(real.join("docs/plan.md"))
+        );
+        assert_eq!(session.inside("docs/plan.md"), Some(real.join("docs/plan.md")));
+        // Gone, or not there yet: through its nearest existing parent.
+        assert_eq!(session.inside("docs/new/a.md"), Some(real.join("docs/new/a.md")));
+        assert_eq!(session.inside("../x"), None);
+        assert_eq!(session.inside("a/../../x"), None);
+        assert_eq!(session.inside("docs/../../x"), None);
+        assert_eq!(session.inside(""), None);
+    }
+
+    #[test]
+    fn a_relative_path_is_read_in_the_session_folder_not_the_working_directory() {
+        // `src/session_folder.rs` exists below the tests' working directory (the crate).
+        assert!(Path::new("src/session_folder.rs").exists());
+        let project = tempfile::tempdir().unwrap();
+        let real = project.path().canonicalize().unwrap();
+        let session = folder(project.path(), None);
+        assert_eq!(
+            session.inside("src/session_folder.rs"),
+            Some(real.join("src/session_folder.rs"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inside_refuses_a_symlink_pointing_out() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(home.path().join("secret.txt"), "").unwrap();
+        std::os::unix::fs::symlink(home.path().join("secret.txt"), project.join("link.txt"))
+            .unwrap();
+        std::os::unix::fs::symlink(home.path(), project.join("up")).unwrap();
+        let session = folder(&project, None);
+        assert_eq!(session.inside("link.txt"), None);
+        assert_eq!(session.inside("up/secret.txt"), None);
+        assert_eq!(
+            session.inside("up/project/a.txt"),
+            Some(project.canonicalize().unwrap().join("a.txt"))
+        );
     }
 
     #[test]
