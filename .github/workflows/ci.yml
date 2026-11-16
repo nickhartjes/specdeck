@@ -15,6 +15,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The jobs only read the repository; a job that needs more asks for it itself.
+permissions:
+  contents: read
+
 # Line tables are enough for test backtraces; full debug info made the Rust caches 2 GB per
 # platform, close to GitHub's 10 GB for all caches, and slowed linking.
 env:

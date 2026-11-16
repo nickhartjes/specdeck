@@ -66,7 +66,7 @@ mod tests {
         else {
             panic!()
         };
-        assert!(username.starts_with("1700000600:"), "{username}");
+        assert!(username.starts_with("1700000600:"));
         assert_eq!(credential, password("s", &username));
         assert_eq!(urls, ["turn:127.0.0.1:3478"]);
         assert_eq!(ttl_seconds, 600);

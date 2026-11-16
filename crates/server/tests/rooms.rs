@@ -371,7 +371,8 @@ async fn asking_again_returns_the_same_credentials() {
         let ServerMessage::TurnCredentials { username, .. } = host.recv().await else { panic!() };
         usernames.push(username);
     }
-    assert!(usernames.iter().all(|username| *username == usernames[0]), "{usernames:?}");
+    // No message: the usernames are credentials.
+    assert!(usernames.iter().all(|username| *username == usernames[0]));
 }
 
 #[tokio::test]
