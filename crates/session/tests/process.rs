@@ -105,7 +105,18 @@ impl App {
             assert!(Instant::now() < deadline, "no socket");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let connection = connect(socket).await.unwrap();
+        // The socket's file exists from `bind`, a moment before the process listens on it, so a
+        // refused connection is tried again.
+        let connection = loop {
+            match connect(socket).await {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    assert!(Instant::now() < deadline, "the socket refused: {error}");
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("{error}"),
+            }
+        };
         let mut app = App { connection, log: Vec::new() };
         let hello = Frozen::Hello { protocol, release: "test".into() };
         app.send_frame(Frame::control(&hello).unwrap()).await;
@@ -1333,13 +1344,26 @@ async fn braindump_in_the_snapshot(app: &mut App, terminal: &mut String, prompt:
 
 async fn add_a_note(app: &mut App, terminal: &mut String) {
     app.send(&Command::AddNote { id: 1, text: "Edge cases".into() }).await;
-    let added = app.until(terminal, |e| matches!(e, Event::Answer { id: 1, .. })).await;
-    let Event::Answer { value: Some(info), .. } = added else { panic!("{added:?}") };
-    assert_eq!(info["name"], "nick-note-1.md");
+    // The answer and the new list come in either order: waiting for one would pass over the
+    // other.
+    let added = std::cell::RefCell::new(None);
+    let listed = std::cell::Cell::new(false);
     app.until(terminal, |e| {
-        matches!(e, Event::HostEvent { event } if event["type"] == "shared-files" && event["braindump"][0]["note"] == true)
+        match e {
+            Event::Answer { id: 1, .. } => *added.borrow_mut() = Some(e.clone()),
+            Event::HostEvent { event }
+                if event["type"] == "shared-files" && event["braindump"][0]["note"] == true =>
+            {
+                listed.set(true);
+            }
+            _ => {}
+        }
+        added.borrow().is_some() && listed.get()
     })
     .await;
+    let added = added.into_inner().unwrap();
+    let Event::Answer { value: Some(info), .. } = added else { panic!("{added:?}") };
+    assert_eq!(info["name"], "nick-note-1.md");
 }
 
 /// Gives the note with a prompt, then finds nothing new to give.
