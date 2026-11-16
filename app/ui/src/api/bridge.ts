@@ -154,6 +154,12 @@ export interface Bridge {
   sendLink(url: string, title: string | null, sessionOnly: boolean): Promise<void>;
   /** Opens shared link `id` of this window's session in the default browser; never an address the window names. */
   openLink(id: number): Promise<void>;
+  /**
+   * Opens a link from a document, a plan, an answer or a shared Markdown file in the system
+   * browser, after the same check as shared links; fails with "This link can't be opened." The
+   * window itself never leaves SpecDeck.
+   */
+  openContentLink(url: string): Promise<void>;
   /** Answers the host's read request `ask`; fails for a question the host would refuse. */
   answerRead(ask: number, answer: ReadAnswer): Promise<void>;
   /** Votes in round `round` of the host's vote `ask`; null takes the vote back. */

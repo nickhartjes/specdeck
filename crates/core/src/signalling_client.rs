@@ -127,12 +127,26 @@ mod tests {
     #[tokio::test]
     async fn records_connecting_and_closing_without_the_address() {
         let (capture, _guard) = crate::capture::Capture::start();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("ws://{}/signal", listener.local_addr().unwrap());
-        drop(listener);
-        assert!(connect(&url).await.is_err());
-        let failed = capture.named("signalling.connect_failed");
-        assert_eq!(failed[0].field("reason"), Some("refused"));
+        // A port just freed refuses connections, unless a test running alongside takes it in the
+        // meantime; then another free port is tried.
+        let mut reason = None;
+        for _ in 0..5 {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("ws://{}/signal", listener.local_addr().unwrap());
+            drop(listener);
+            if connect(&url).await.is_ok() {
+                continue;
+            }
+            let failed = capture.named("signalling.connect_failed");
+            reason = failed.last().and_then(|event| event.field("reason")).map(str::to_owned);
+            if reason.as_deref() == Some("refused") {
+                break;
+            }
+        }
+        assert_eq!(reason.as_deref(), Some("refused"));
+        // What a port taken in the meantime recorded is left out below.
+        let connected_before = capture.named("signalling.connected").len();
+        let closed_before = capture.named("signalling.closed").len();
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/signal", listener.local_addr().unwrap());
@@ -145,8 +159,10 @@ mod tests {
         server.await.unwrap();
         assert!(receiver.recv().await.is_none());
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(capture.named("signalling.connected").len(), 1);
-        assert_eq!(capture.named("signalling.closed")[0].field("reason"), Some("closed"));
+        assert_eq!(capture.named("signalling.connected").len(), connected_before + 1);
+        let closed = capture.named("signalling.closed");
+        assert_eq!(closed.len(), closed_before + 1);
+        assert_eq!(closed[closed_before].field("reason"), Some("closed"));
         assert!(capture.events().iter().all(|e| !format!("{e:?}").contains("127.0.0.1")));
     }
 }

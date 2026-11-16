@@ -6,16 +6,17 @@ description: Join with an invite code or a link, and choose how you follow sessi
 ## Join
 
 - **With a link:** click the link the host shared.
-  - A `specdeck://join/…` link opens SpecDeck, which joins.
+  - A `specdeck://join/…` link opens SpecDeck, which asks **Join this session?** with the invite code and the name you join with. **Join** joins; **Cancel** connects nowhere and leaves you on the start screen. SpecDeck asks because any web page can open such a link, not only the host's message. Without a name set, it asks for your name first.
   - A web link (`https://…/join#…`) opens in your browser with two choices: **Open in the SpecDeck app**, or **Watch in this browser** (see [below](#watch-in-a-browser)).
   - Hosts copy a web link when their sharing service serves the web viewer.
+  - A link you paste into **Join a session** yourself joins without asking, unless it names another sharing service (see [below](#through-another-sharing-service)).
 - **With a code:** under **Join a session** (or **File › Join a Session…**, **⌘J** on macOS, **Ctrl+Shift+J** on Windows and Linux), type or paste the invite code or link and select **Join**. Upper or lower case and dashes do not matter, and the code is formatted as you type.
 
 If the window you are using already shows a session, a link opens in a new window and the other session keeps running. If a link does not work, SpecDeck says so on the start screen; see [Troubleshooting](/specdeck/guide/troubleshooting/) for what each message means.
 
 ## Through another sharing service
 
-A join link also names the host's sharing service. If it is not the one you use, for example because the host's team [runs its own](/specdeck/self-host/overview/), SpecDeck asks **Join through …?** before it connects:
+A join link also names the host's sharing service. If it is not the one you use, for example because the host's team [runs its own](/specdeck/self-host/overview/), SpecDeck asks **Join through …?**, with the invite code and your name, before it connects. This is the only question such a link asks:
 
 - **Join** uses that service for this session only.
 - Tick **Use this service from now on** to make it your sharing service in [Settings](/specdeck/guide/settings/).
@@ -50,6 +51,7 @@ If you cannot install SpecDeck, for example on a company laptop, you can watch i
 You see the session as in the app: the files, the terminal and documents in tabs, the timeline, the people, the status bar, and the Overview, Developer and Present layouts.
 
 - **Your name, layout and appearance** stay in this browser only. There is no account. Choose **System**, **Light** or **Dark** in the layout menu in the toolbar; System follows your browser.
+- **Links in documents and answers** open in a new tab. That tab cannot reach or change the session's tab, and is not told which page it came from. Only web addresses open, as [in the app](/specdeck/guide/documents/#links-in-documents).
 - **The code** is removed from the address bar once the page has read it, and is never sent to the server: it sits after the `#`, which browsers keep to themselves.
 - **Each page joins only sessions on its own sharing service.** An invite for another service gets a link to that service's own page, never a connection from this one.
 - **The page's code comes from the sharing service**, so watching in a browser means trusting whoever runs it. See [The web viewer's code](/specdeck/security/sharing-service/#the-web-viewers-code).

@@ -31,7 +31,7 @@ Check an agent by running it in a terminal: it should start without asking you t
 
 The first time you open SpecDeck, it asks what others should call you. To change it later, select **Change** next to your name on the start screen, or open [Settings](/specdeck/guide/settings/).
 
-Two people may use the same name; the second is shown as `Anna (2)`. Names are labels, not logins: anyone with the invite code can join under any name.
+Two people may use the same name; the second is shown as `Anna (2)`. Invisible and text-direction characters are left out of names, so `Anna` with a hidden character is still the second `Anna`, and a name of only such characters is refused. Names are labels, not logins: anyone with the invite code can join under any name.
 
 ## Next
 

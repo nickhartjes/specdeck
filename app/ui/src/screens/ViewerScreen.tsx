@@ -45,6 +45,7 @@ import { createViewerNotices, DEFAULT_VIEWER_NOTIFICATIONS } from '../model/view
 import { createNoticeList, type ListOpen } from '../model/noticeList';
 import { createSharedNotices } from '../model/sharedNotices';
 import { NotificationBell } from '../components/NotificationBell';
+import { shownNames } from '../model/names';
 
 /** What to tell the viewer when their session ends, and whether they can still read it. */
 export const END_MESSAGES: Record<EndReason, { title: string; text: string; keepReading?: boolean; retry?: boolean }> = {
@@ -360,7 +361,7 @@ export function ViewerScreen({ code, server, layout: stored, onLayout, screenRea
     if (joined.current) return;
     joined.current = true;
     bridge
-      .joinSession(code, server ?? null, (data) => workspace.current?.terminalData(data), onEvent)
+      .joinSession(code, server ?? null, (data) => workspace.current?.terminalData(data), (event) => onEvent(shownNames(event)))
       .catch((error) => onLeave({ code, server, message: errorMessage(error) }));
     // Joins once per screen; leaving is explicit or happens when the window closes.
     // eslint-disable-next-line react-hooks/exhaustive-deps

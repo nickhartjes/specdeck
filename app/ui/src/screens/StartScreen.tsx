@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { shownName } from '../model/names';
 import {
   Bot,
   Braces,
@@ -167,9 +168,10 @@ function Welcome({ onProfile }: { onProfile: (profile: Profile) => void }) {
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!name.trim()) return setError('Enter the name others should see.');
+    const shown = shownName(name);
+    if (!shown) return setError('Enter the name others should see.');
     try {
-      onProfile(await bridge.setUsername(name));
+      onProfile(await bridge.setUsername(shown));
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -216,8 +218,9 @@ function NameBadge({ profile, onProfile }: { profile: Profile; onProfile: (profi
         className="me"
         onSubmit={async (event) => {
           event.preventDefault();
-          if (!name.trim()) return;
-          onProfile(await bridge.setUsername(name));
+          const shown = shownName(name);
+          if (!shown) return;
+          onProfile(await bridge.setUsername(shown));
           setEditing(false);
         }}
       >

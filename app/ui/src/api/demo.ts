@@ -894,6 +894,7 @@ export function demoBridge(screen: string): Bridge {
     },
     // The demo opens nothing.
     openLink: async () => {},
+    openContentLink: async () => {},
     takeJoinLink: async () => null,
     takeStartCommand: async () => null,
     setSessionTitle: async () => {},

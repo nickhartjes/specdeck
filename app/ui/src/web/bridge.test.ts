@@ -156,6 +156,16 @@ describe('web bridge', () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
+  it('opens a content link in a new tab without access back, and only web addresses', async () => {
+    const open = vi.fn();
+    const page = bridge({ open, openableLink: (url) => (/^https?:\/\//.test(url) ? url : undefined) });
+    await page.openContentLink('https://example.com/guide');
+    expect(open).toHaveBeenCalledWith('https://example.com/guide', '_blank', 'noopener,noreferrer');
+    await expect(page.openContentLink('file:///etc/passwd')).rejects.toThrow('can’t be opened');
+    await expect(page.openContentLink('javascript:alert(1)')).rejects.toThrow('can’t be opened');
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
   it('can only watch', async () => {
     const page = bridge();
     await expect(page.startHosting('claude-code', '/tmp', 80, 24)).rejects.toThrow('only watch');
