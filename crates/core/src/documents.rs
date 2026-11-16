@@ -62,8 +62,6 @@ pub fn from_file_tool(payload: &HookPayload, rule: &FileRule) -> Option<Document
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use crate::environment::Environment;
     use crate::session_folder::SessionFolder;
     use serde_json::json;
 
@@ -88,11 +86,6 @@ mod tests {
 
     fn session(dir: &Path) -> FileRule {
         FileRule::from(SessionFolder::new(dir, None))
-    }
-
-    #[cfg(unix)]
-    fn with_git(dir: &Path) -> FileRule {
-        FileRule::new(dir, &Environment::from_process())
     }
 
     fn payload(tool: &str, path: &str) -> HookPayload {
@@ -138,32 +131,6 @@ mod tests {
         assert_eq!(from_file_tool(&post("Write", &path), &session(dir.path())), None);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn ignored_documents_are_not_read_tracked_ones_are() {
-        let dir = tempfile::tempdir().unwrap();
-        let git = |args: &[&str]| {
-            let status = std::process::Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-                .args(args)
-                .current_dir(dir.path())
-                .output()
-                .unwrap()
-                .status;
-            assert!(status.success(), "git {args:?}");
-        };
-        git(&["init", "-q"]);
-        std::fs::write(dir.path().join(".gitignore"), "*.local.md\n").unwrap();
-        std::fs::write(dir.path().join("README.md"), "# Readme").unwrap();
-        git(&["add", "."]);
-        git(&["commit", "-q", "-m", "first"]);
-        std::fs::write(dir.path().join("notes.local.md"), "# Mine").unwrap();
-        let rule = with_git(dir.path());
-        assert_eq!(from_file_tool(&post("Write", &dir.path().join("notes.local.md")), &rule), None);
-        let readme = from_file_tool(&post("Edit", &dir.path().join("README.md")), &rule);
-        assert_eq!(readme.and_then(|doc| doc.text).as_deref(), Some("# Readme"));
-    }
-
     #[test]
     fn reads_the_text_an_edit_left_on_disk() {
         let dir = tempfile::tempdir().unwrap();
@@ -207,20 +174,6 @@ mod tests {
         assert_eq!(from_file_tool(&post("Write", &memory), &session(&project)), None);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn a_document_through_a_symlink_pointing_outside_is_not_read() {
-        let home = tempfile::tempdir().unwrap();
-        let project = home.path().join("project");
-        let notes = home.path().join("notes");
-        std::fs::create_dir(&project).unwrap();
-        std::fs::create_dir(&notes).unwrap();
-        std::fs::write(notes.join("plan.md"), "# Private").unwrap();
-        std::os::unix::fs::symlink(&notes, project.join("notes")).unwrap();
-        let through_link = project.join("notes/plan.md");
-        assert_eq!(from_file_tool(&post("Edit", &through_link), &session(&project)), None);
-    }
-
     #[test]
     fn large_documents_come_without_text() {
         let dir = tempfile::tempdir().unwrap();
@@ -229,5 +182,56 @@ mod tests {
         assert_eq!(read(&path).unwrap().text, None);
         std::fs::write(&path, "x".repeat(MAX_DOCUMENT_BYTES as usize)).unwrap();
         assert!(read(&path).unwrap().text.is_some());
+    }
+
+    #[cfg(unix)]
+    mod unix {
+        use super::*;
+        use crate::environment::Environment;
+
+        fn with_git(dir: &Path) -> FileRule {
+            FileRule::new(dir, &Environment::from_process())
+        }
+
+        #[test]
+        fn ignored_documents_are_not_read_tracked_ones_are() {
+            let dir = tempfile::tempdir().unwrap();
+            let git = |args: &[&str]| {
+                let status = std::process::Command::new("git")
+                    .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                    .args(args)
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap()
+                    .status;
+                assert!(status.success(), "git {args:?}");
+            };
+            git(&["init", "-q"]);
+            std::fs::write(dir.path().join(".gitignore"), "*.local.md\n").unwrap();
+            std::fs::write(dir.path().join("README.md"), "# Readme").unwrap();
+            git(&["add", "."]);
+            git(&["commit", "-q", "-m", "first"]);
+            std::fs::write(dir.path().join("notes.local.md"), "# Mine").unwrap();
+            let rule = with_git(dir.path());
+            assert_eq!(
+                from_file_tool(&post("Write", &dir.path().join("notes.local.md")), &rule),
+                None
+            );
+            let readme = from_file_tool(&post("Edit", &dir.path().join("README.md")), &rule);
+            assert_eq!(readme.and_then(|doc| doc.text).as_deref(), Some("# Readme"));
+        }
+
+        #[test]
+        fn a_document_through_a_symlink_pointing_outside_is_not_read() {
+            let home = tempfile::tempdir().unwrap();
+            let project = home.path().join("project");
+            let notes = home.path().join("notes");
+            std::fs::create_dir(&project).unwrap();
+            std::fs::create_dir(&notes).unwrap();
+            std::fs::write(notes.join("plan.md"), "# Private").unwrap();
+            std::os::unix::fs::symlink(&notes, project.join("notes")).unwrap();
+            let through_link = project.join("notes/plan.md");
+            assert_eq!(from_file_tool(&post("Edit", &through_link), &session(&project)), None);
+        }
     }
 }

@@ -293,24 +293,6 @@ fn existing_parent(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use std::process::Command;
-
-    #[cfg(unix)]
-    fn git(dir: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(["-c", "protocol.file.allow=always"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
 
     fn write(dir: &Path, name: &str, text: &str) -> String {
         let path = dir.join(name);
@@ -405,188 +387,15 @@ mod tests {
         assert_eq!(rule.decide("../plan.md"), Err(NotShown::Outside));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn a_symlink_to_a_private_file_is_private() {
-        let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), ".env", "TOKEN=1");
-        std::os::unix::fs::symlink(dir.path().join(".env"), dir.path().join("settings.txt"))
-            .unwrap();
-        let rule = FileRule::from(SessionFolder::new(dir.path(), None));
-        assert_eq!(rule.decide("settings.txt"), Err(NotShown::Private));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ignored_files_are_not_shown_tracked_ones_are() {
-        let dir = tempfile::tempdir().unwrap();
-        git(dir.path(), &["init", "-q"]);
-        write(dir.path(), ".gitignore", "build/\n*.log\n");
-        write(dir.path(), "tracked.log", "kept");
-        git(dir.path(), &["add", "-f", "tracked.log", ".gitignore"]);
-        git(dir.path(), &["commit", "-q", "-m", "first"]);
-        let untracked = write(dir.path(), "build/x.ts", "export {}");
-        let rule = rule(dir.path());
-        assert_eq!(rule.decide(&untracked), Err(NotShown::Ignored));
-        assert_eq!(rule.decide("build/new/gone.ts"), Err(NotShown::Ignored), "not there yet");
-        assert!(rule.shown("tracked.log").is_some(), "tracked although a pattern matches");
-        write(dir.path(), "main.ts", "export {}");
-        assert!(rule.shown("main.ts").is_some());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_submodule_answers_for_its_own_files() {
-        let base = tempfile::tempdir().unwrap();
-        let lib = base.path().join("lib");
-        std::fs::create_dir(&lib).unwrap();
-        git(&lib, &["init", "-q"]);
-        write(&lib, ".gitignore", "build/\n");
-        git(&lib, &["add", "."]);
-        git(&lib, &["commit", "-q", "-m", "lib"]);
-        let project = base.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        git(&project, &["init", "-q"]);
-        git(&project, &["submodule", "add", "-q", &lib.to_string_lossy(), "vendor/lib"]);
-        let out = write(&project, "vendor/lib/build/out.txt", "secret");
-        let rule = rule(&project);
-        assert_eq!(rule.decide(&out), Err(NotShown::Ignored));
-        write(&project, "vendor/lib/src.txt", "ok");
-        assert!(rule.shown("vendor/lib/src.txt").is_some());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_clone_below_a_folder_that_is_no_repository() {
-        let project = tempfile::tempdir().unwrap();
-        let api = project.path().join("api");
-        std::fs::create_dir(&api).unwrap();
-        git(&api, &["init", "-q"]);
-        write(&api, ".gitignore", "local.json\n");
-        write(&api, "local.json", "{}");
-        write(&api, "server.ts", "export {}");
-        write(project.path(), "notes.txt", "notes");
-        let rule = rule(project.path());
-        assert_eq!(rule.decide("api/local.json"), Err(NotShown::Ignored));
-        assert!(rule.shown("api/server.ts").is_some());
-        assert!(rule.shown("notes.txt").is_some(), "in no repository: nothing is ignored");
-    }
-
-    /// A shell command's files are decided together, each with its own answer, with one git call
-    /// for each repository.
-    #[cfg(unix)]
-    #[test]
-    fn many_files_are_decided_at_once() {
-        let base = tempfile::tempdir().unwrap();
-        let lib = base.path().join("lib");
-        std::fs::create_dir(&lib).unwrap();
-        git(&lib, &["init", "-q"]);
-        write(&lib, ".gitignore", "build/\n");
-        git(&lib, &["add", "."]);
-        git(&lib, &["commit", "-q", "-m", "lib"]);
-        let project = base.path().join("project");
-        std::fs::create_dir(&project).unwrap();
-        git(&project, &["init", "-q"]);
-        write(&project, ".gitignore", "*.log\n!keep.log\n");
-        write(&project, "tracked.log", "kept");
-        git(&project, &["add", "-f", ".gitignore", "tracked.log"]);
-        git(&project, &["submodule", "add", "-q", &lib.to_string_lossy(), "vendor/lib"]);
-        let mut paths = Vec::new();
-        for (name, text) in [
-            ("a.txt", "a"),
-            ("run.log", "log"),
-            ("keep.log", "kept"),
-            ("vendor/lib/build/out.txt", "out"),
-            ("vendor/lib/src.txt", "src"),
-            (".env", "TOKEN=1"),
-            ("dir with space/b.txt", "b"),
-        ] {
-            write(&project, name, text);
-            paths.push(name.to_owned());
-        }
-        paths.push("tracked.log".into());
-        paths.push("../outside.txt".into());
-        let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-        let rule = rule(&project);
-        let reasons: Vec<Option<NotShown>> =
-            rule.decide_all(&paths).into_iter().map(Result::err).collect();
-        assert_eq!(
-            reasons,
-            [
-                None,
-                Some(NotShown::Ignored),
-                None,
-                Some(NotShown::Ignored),
-                None,
-                Some(NotShown::Private),
-                None,
-                None,
-                Some(NotShown::Outside),
-            ]
-        );
-        let one_by_one: Vec<Option<NotShown>> =
-            paths.iter().map(|path| rule.decide(path).err()).collect();
-        assert_eq!(reasons, one_by_one);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_damaged_repository_shows_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        git(dir.path(), &["init", "-q"]);
-        write(dir.path(), "a.txt", "a");
-        std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
-        assert_eq!(rule(dir.path()).decide("a.txt"), Err(NotShown::CheckFailed));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_repository_made_during_the_session_is_asked() {
-        let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "notes.txt", "x");
-        let rule = rule(dir.path());
-        assert!(rule.shown("notes.txt").is_some(), "in no repository yet");
-        git(dir.path(), &["init", "-q"]);
-        write(dir.path(), ".gitignore", "secret.json\n");
-        write(dir.path(), "secret.json", "{}");
-        assert_eq!(rule.decide("secret.json"), Err(NotShown::Ignored));
-        assert!(rule.shown("notes.txt").is_some());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_private_folder_reached_through_a_symlink_is_private() {
-        let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "keys/config", "Host x");
-        std::os::unix::fs::symlink(dir.path().join("keys"), dir.path().join(".ssh")).unwrap();
-        let rule = FileRule::from(SessionFolder::new(dir.path(), None));
-        assert_eq!(rule.decide(".ssh/config"), Err(NotShown::Private));
-        let absolute = dir.path().join(".ssh/config");
-        assert_eq!(rule.decide(&absolute.to_string_lossy()), Err(NotShown::Private));
-        assert!(rule.shown("keys/config").is_some(), "by its own name, the folder is not private");
-    }
-
     #[test]
     fn without_git_nothing_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
         #[cfg(unix)]
-        git(dir.path(), &["init", "-q"]);
+        unix::git(dir.path(), &["init", "-q"]);
         write(dir.path(), ".gitignore", "build/\n");
         write(dir.path(), "build/x.ts", "export {}");
         let no_git: Environment = [("PATH", "/nowhere")].into_iter().collect();
         assert!(FileRule::new(dir.path(), &no_git).shown("build/x.ts").is_some());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_ignore_check_runs_no_file_system_monitor() {
-        let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("ran");
-        let trap = crate::status::tests::repository_with_a_trap(dir.path(), &marker);
-        git(dir.path(), &["config", "core.fsmonitor", &trap.to_string_lossy()]);
-        write(dir.path(), "a.txt", "changed");
-        assert!(rule(dir.path()).shown("a.txt").is_some());
-        assert!(!marker.exists(), "the monitor ran");
     }
 
     /// The rule runs on the hook path, before the hook is answered.
@@ -605,5 +414,193 @@ mod tests {
         // Starting git takes most of it, and starting a process is slow on Windows.
         let limit = if cfg!(windows) { 150 } else { 50 };
         assert!(mean < std::time::Duration::from_millis(limit), "{mean:?}");
+    }
+
+    #[cfg(unix)]
+    mod unix {
+        use super::*;
+        use std::process::Command;
+
+        pub(super) fn git(dir: &Path, args: &[&str]) {
+            let output = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(["-c", "protocol.file.allow=always"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        #[test]
+        fn a_symlink_to_a_private_file_is_private() {
+            let dir = tempfile::tempdir().unwrap();
+            write(dir.path(), ".env", "TOKEN=1");
+            std::os::unix::fs::symlink(dir.path().join(".env"), dir.path().join("settings.txt"))
+                .unwrap();
+            let rule = FileRule::from(SessionFolder::new(dir.path(), None));
+            assert_eq!(rule.decide("settings.txt"), Err(NotShown::Private));
+        }
+
+        #[test]
+        fn ignored_files_are_not_shown_tracked_ones_are() {
+            let dir = tempfile::tempdir().unwrap();
+            git(dir.path(), &["init", "-q"]);
+            write(dir.path(), ".gitignore", "build/\n*.log\n");
+            write(dir.path(), "tracked.log", "kept");
+            git(dir.path(), &["add", "-f", "tracked.log", ".gitignore"]);
+            git(dir.path(), &["commit", "-q", "-m", "first"]);
+            let untracked = write(dir.path(), "build/x.ts", "export {}");
+            let rule = rule(dir.path());
+            assert_eq!(rule.decide(&untracked), Err(NotShown::Ignored));
+            assert_eq!(rule.decide("build/new/gone.ts"), Err(NotShown::Ignored), "not there yet");
+            assert!(rule.shown("tracked.log").is_some(), "tracked although a pattern matches");
+            write(dir.path(), "main.ts", "export {}");
+            assert!(rule.shown("main.ts").is_some());
+        }
+
+        #[test]
+        fn a_submodule_answers_for_its_own_files() {
+            let base = tempfile::tempdir().unwrap();
+            let lib = base.path().join("lib");
+            std::fs::create_dir(&lib).unwrap();
+            git(&lib, &["init", "-q"]);
+            write(&lib, ".gitignore", "build/\n");
+            git(&lib, &["add", "."]);
+            git(&lib, &["commit", "-q", "-m", "lib"]);
+            let project = base.path().join("project");
+            std::fs::create_dir(&project).unwrap();
+            git(&project, &["init", "-q"]);
+            git(&project, &["submodule", "add", "-q", &lib.to_string_lossy(), "vendor/lib"]);
+            let out = write(&project, "vendor/lib/build/out.txt", "secret");
+            let rule = rule(&project);
+            assert_eq!(rule.decide(&out), Err(NotShown::Ignored));
+            write(&project, "vendor/lib/src.txt", "ok");
+            assert!(rule.shown("vendor/lib/src.txt").is_some());
+        }
+
+        #[test]
+        fn a_clone_below_a_folder_that_is_no_repository() {
+            let project = tempfile::tempdir().unwrap();
+            let api = project.path().join("api");
+            std::fs::create_dir(&api).unwrap();
+            git(&api, &["init", "-q"]);
+            write(&api, ".gitignore", "local.json\n");
+            write(&api, "local.json", "{}");
+            write(&api, "server.ts", "export {}");
+            write(project.path(), "notes.txt", "notes");
+            let rule = rule(project.path());
+            assert_eq!(rule.decide("api/local.json"), Err(NotShown::Ignored));
+            assert!(rule.shown("api/server.ts").is_some());
+            assert!(rule.shown("notes.txt").is_some(), "in no repository: nothing is ignored");
+        }
+
+        /// A shell command's files are decided together, each with its own answer, with one git call
+        /// for each repository.
+        #[test]
+        fn many_files_are_decided_at_once() {
+            let base = tempfile::tempdir().unwrap();
+            let lib = base.path().join("lib");
+            std::fs::create_dir(&lib).unwrap();
+            git(&lib, &["init", "-q"]);
+            write(&lib, ".gitignore", "build/\n");
+            git(&lib, &["add", "."]);
+            git(&lib, &["commit", "-q", "-m", "lib"]);
+            let project = base.path().join("project");
+            std::fs::create_dir(&project).unwrap();
+            git(&project, &["init", "-q"]);
+            write(&project, ".gitignore", "*.log\n!keep.log\n");
+            write(&project, "tracked.log", "kept");
+            git(&project, &["add", "-f", ".gitignore", "tracked.log"]);
+            git(&project, &["submodule", "add", "-q", &lib.to_string_lossy(), "vendor/lib"]);
+            let mut paths = Vec::new();
+            for (name, text) in [
+                ("a.txt", "a"),
+                ("run.log", "log"),
+                ("keep.log", "kept"),
+                ("vendor/lib/build/out.txt", "out"),
+                ("vendor/lib/src.txt", "src"),
+                (".env", "TOKEN=1"),
+                ("dir with space/b.txt", "b"),
+            ] {
+                write(&project, name, text);
+                paths.push(name.to_owned());
+            }
+            paths.push("tracked.log".into());
+            paths.push("../outside.txt".into());
+            let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+            let rule = rule(&project);
+            let reasons: Vec<Option<NotShown>> =
+                rule.decide_all(&paths).into_iter().map(Result::err).collect();
+            assert_eq!(
+                reasons,
+                [
+                    None,
+                    Some(NotShown::Ignored),
+                    None,
+                    Some(NotShown::Ignored),
+                    None,
+                    Some(NotShown::Private),
+                    None,
+                    None,
+                    Some(NotShown::Outside),
+                ]
+            );
+            let one_by_one: Vec<Option<NotShown>> =
+                paths.iter().map(|path| rule.decide(path).err()).collect();
+            assert_eq!(reasons, one_by_one);
+        }
+
+        #[test]
+        fn a_damaged_repository_shows_nothing() {
+            let dir = tempfile::tempdir().unwrap();
+            git(dir.path(), &["init", "-q"]);
+            write(dir.path(), "a.txt", "a");
+            std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+            assert_eq!(rule(dir.path()).decide("a.txt"), Err(NotShown::CheckFailed));
+        }
+
+        #[test]
+        fn a_repository_made_during_the_session_is_asked() {
+            let dir = tempfile::tempdir().unwrap();
+            write(dir.path(), "notes.txt", "x");
+            let rule = rule(dir.path());
+            assert!(rule.shown("notes.txt").is_some(), "in no repository yet");
+            git(dir.path(), &["init", "-q"]);
+            write(dir.path(), ".gitignore", "secret.json\n");
+            write(dir.path(), "secret.json", "{}");
+            assert_eq!(rule.decide("secret.json"), Err(NotShown::Ignored));
+            assert!(rule.shown("notes.txt").is_some());
+        }
+
+        #[test]
+        fn a_private_folder_reached_through_a_symlink_is_private() {
+            let dir = tempfile::tempdir().unwrap();
+            write(dir.path(), "keys/config", "Host x");
+            std::os::unix::fs::symlink(dir.path().join("keys"), dir.path().join(".ssh")).unwrap();
+            let rule = FileRule::from(SessionFolder::new(dir.path(), None));
+            assert_eq!(rule.decide(".ssh/config"), Err(NotShown::Private));
+            let absolute = dir.path().join(".ssh/config");
+            assert_eq!(rule.decide(&absolute.to_string_lossy()), Err(NotShown::Private));
+            assert!(
+                rule.shown("keys/config").is_some(),
+                "by its own name, the folder is not private"
+            );
+        }
+
+        #[test]
+        fn the_ignore_check_runs_no_file_system_monitor() {
+            let dir = tempfile::tempdir().unwrap();
+            let marker = dir.path().join("ran");
+            let trap = crate::status::tests::repository_with_a_trap(dir.path(), &marker);
+            git(dir.path(), &["config", "core.fsmonitor", &trap.to_string_lossy()]);
+            write(dir.path(), "a.txt", "changed");
+            assert!(rule(dir.path()).shown("a.txt").is_some());
+            assert!(!marker.exists(), "the monitor ran");
+        }
     }
 }
