@@ -3,6 +3,7 @@
 //! ignored.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -12,7 +13,9 @@ use specdeck_protocol::timeline::{
 };
 
 use crate::browser_targets::{self, Acts, Browser, Targets};
+use crate::diag;
 use crate::documents::{self, DocumentText};
+use crate::file_rule::{Decided, FileRule, NotShown};
 use crate::hooks::HookPayload;
 use crate::screenshots;
 use crate::session_folder::SessionFolder;
@@ -208,8 +211,12 @@ const BROWSER_TOOLS: &str = "mcp__specdeck__";
 const MAX_REPORT_BYTES: usize = 200 * 1024;
 
 pub struct TimelineBuilder {
-    /// Session folder: only files inside it are shared in full, and paths are shown by it.
-    folder: SessionFolder,
+    /// Which files' content is shared (the session folder's files that may be shown), and the
+    /// folder paths are shown by.
+    rule: Arc<FileRule>,
+    /// The rule's answers for the hook being handled, decided by its handler; other paths are
+    /// asked of the rule.
+    decided: Decided,
     /// Tool calls without a result yet, in call order.
     open_calls: Vec<OpenCall>,
     /// Helpers running in the background: agent id → (tool_use_id, prompt_id) of their call.
@@ -224,15 +231,57 @@ pub struct TimelineBuilder {
 }
 
 impl TimelineBuilder {
+    /// A builder for `folder`, whose rule knows no git: see [`with_rule`](Self::with_rule).
     pub fn new(folder: SessionFolder) -> Self {
         Self {
-            folder,
+            rule: Arc::new(FileRule::from(folder)),
+            decided: Decided::new(),
             open_calls: Vec::new(),
             background_helpers: HashMap::new(),
             requested_notice: false,
             screenshots: true,
             targets: Targets::default(),
         }
+    }
+
+    /// The rule that decides whose content is shared (`keep-private-files-private` design
+    /// decision 1), with git to ask whether a file is ignored.
+    pub fn with_rule(mut self, rule: Arc<FileRule>) -> Self {
+        self.rule = rule;
+        self
+    }
+
+    /// The rule's answers for the hook about to be handled, so that its files are not asked about
+    /// again on the session's loop; until the next call.
+    pub fn use_decided(&mut self, decided: Decided) {
+        self.decided = decided;
+    }
+
+    /// Whether each file's content may be shown: as decided for this hook, otherwise asked of the
+    /// rule, once for all of them.
+    fn decisions(&self, paths: &[&str]) -> Vec<Result<(), NotShown>> {
+        let undecided: Vec<&str> =
+            paths.iter().copied().filter(|path| !self.decided.contains_key(*path)).collect();
+        let asked = self.rule.decided(&undecided);
+        paths
+            .iter()
+            .map(|path| {
+                let decision = self.decided.get(*path).or_else(|| asked.get(*path));
+                decision.copied().unwrap_or(Err(NotShown::CheckFailed))
+            })
+            .collect()
+    }
+
+    /// Whether each file's content may be shown, recording why not when it may not.
+    fn shown_all(&self, paths: &[&str]) -> Vec<bool> {
+        let decisions = self.decisions(paths).into_iter();
+        decisions
+            .map(|d| d.inspect_err(|reason| diag::file_not_shown(reason.as_str())).is_ok())
+            .collect()
+    }
+
+    fn shown(&self, path: &str) -> bool {
+        self.shown_all(&[path]).pop().unwrap_or(false)
     }
 
     /// Whether images from MCP tools are kept (`session-timeline`, *Show screenshots in the
@@ -484,34 +533,38 @@ impl TimelineBuilder {
 
     /// `entries` with each file's text right after the change that produced it: a `Document` for
     /// Markdown, a `FileText` for a code file. A text is only sent with a change of its own, never
-    /// for a deletion, and never for a file outside the session folder.
+    /// for a deletion, and never for a file whose content may not be shown.
     pub fn with_texts(&self, entries: Vec<Entry>, texts: Vec<DocumentText>) -> Vec<Entry> {
         if texts.is_empty() {
             return entries;
         }
+        let paths: Vec<&str> = texts.iter().map(|text| text.path.as_str()).collect();
+        let shown = self.decisions(&paths);
+        let texts: Vec<&DocumentText> = texts
+            .iter()
+            .zip(shown)
+            .filter(|(_, shown)| shown.is_ok())
+            .map(|(text, _)| text)
+            .collect();
         let mut out = Vec::with_capacity(entries.len() + texts.len());
         for entry in entries {
             let document = match &entry {
                 Entry::FileChange { prompt_id, tool_use_id, path, change, .. }
                     if *change != FileChangeKind::Deleted =>
                 {
-                    texts
-                        .iter()
-                        .filter(|doc| self.folder.contains(&doc.path))
-                        .find(|doc| self.display_path(&doc.path) == *path)
-                        .map(|doc| {
-                            let (prompt_id, tool_use_id, path, text) = (
-                                prompt_id.clone(),
-                                tool_use_id.clone(),
-                                path.clone(),
-                                doc.text.clone(),
-                            );
-                            if documents::is_document(&doc.path) {
-                                Entry::Document { prompt_id, tool_use_id, path, text }
-                            } else {
-                                Entry::FileText { prompt_id, tool_use_id, path, text }
-                            }
-                        })
+                    texts.iter().find(|doc| self.display_path(&doc.path) == *path).map(|doc| {
+                        let (prompt_id, tool_use_id, path, text) = (
+                            prompt_id.clone(),
+                            tool_use_id.clone(),
+                            path.clone(),
+                            doc.text.clone(),
+                        );
+                        if documents::is_document(&doc.path) {
+                            Entry::Document { prompt_id, tool_use_id, path, text }
+                        } else {
+                            Entry::FileText { prompt_id, tool_use_id, path, text }
+                        }
+                    })
                 }
                 _ => None,
             };
@@ -523,13 +576,16 @@ impl TimelineBuilder {
 
     /// Entries for the files a shell command changed, after its result (decision 10b).
     pub fn command_changes(&self, changes: CommandChanges) -> Vec<Entry> {
+        let paths: Vec<&str> = changes.files.iter().map(|file| file.path.as_str()).collect();
+        let shown = self.shown_all(&paths);
         changes
             .files
             .into_iter()
-            .map(|file| Entry::FileChange {
+            .zip(shown)
+            .map(|(file, shown)| Entry::FileChange {
                 prompt_id: changes.prompt_id.clone(),
                 tool_use_id: changes.tool_use_id.clone(),
-                hunks: if self.folder.contains(&file.path) { file.hunks } else { Vec::new() },
+                hunks: if shown { file.hunks } else { Vec::new() },
                 path: self.display_path(&file.path),
                 change: file.change,
             })
@@ -550,8 +606,9 @@ impl TimelineBuilder {
             _ if !response.structured_patch.is_empty() => response.structured_patch,
             _ => return None,
         };
-        // Outside the session folder, viewers learn only that the file changed.
-        if !self.folder.contains(&response.file_path) {
+        // Outside the session folder, and for a private or ignored file, viewers learn only that
+        // the file changed.
+        if !self.shown(&response.file_path) {
             hunks.clear();
         }
         Some(Entry::FileChange {
@@ -588,7 +645,7 @@ impl TimelineBuilder {
 
     /// A path as viewers see it (see `SessionFolder::display`).
     fn display_path(&self, path: &str) -> String {
-        self.folder.display(path)
+        self.rule.folder().display(path)
     }
 }
 
@@ -1273,6 +1330,164 @@ mod tests {
         let (path, hunks) = changed_file(wrote(&mut builder, "/work/new.rs", Value::Null));
         assert_eq!(path, "new.rs");
         assert_eq!(hunks[0].lines, ["+secret"]);
+    }
+
+    fn edited(builder: &mut TimelineBuilder, path: &str) -> Vec<Entry> {
+        let response = serde_json::json!({
+            "tool_input": { "file_path": path, "old_string": "a", "new_string": "b" },
+            "tool_response": {
+                "filePath": path, "originalFile": "a\n",
+                "structuredPatch": [
+                    { "oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-a", "+b"] }
+                ]
+            }
+        });
+        builder.handle(call("PostToolUse", "Edit", "e", response)).unwrap()
+    }
+
+    fn created(entries: Vec<Entry>) -> (FileChangeKind, Vec<DiffHunk>) {
+        entries
+            .into_iter()
+            .find_map(|entry| match entry {
+                Entry::FileChange { change, hunks, .. } => Some((change, hunks)),
+                _ => None,
+            })
+            .expect("a file change")
+    }
+
+    #[test]
+    fn private_files_are_named_only() {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        let (change, hunks) = created(wrote(&mut builder, "/work/.env", Value::Null));
+        assert_eq!((change, hunks), (FileChangeKind::Created, Vec::new()));
+        let (change, hunks) = created(wrote(&mut builder, "/work/.aws/config", Value::Null));
+        assert_eq!((change, hunks), (FileChangeKind::Created, Vec::new()));
+        let (path, hunks) = changed_file(edited(&mut builder, "/work/config/server.pem"));
+        assert_eq!((path.as_str(), hunks), ("config/server.pem", Vec::new()));
+        let (path, hunks) = changed_file(edited(&mut builder, "/work/src/main.rs"));
+        assert_eq!((path.as_str(), hunks.len()), ("src/main.rs", 1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignored_files_are_named_only_tracked_ones_keep_their_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::create_dir(dir.path().join("local")).unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "local/\n").unwrap();
+        std::fs::write(dir.path().join("tracked.txt"), "a\n").unwrap();
+        std::fs::write(dir.path().join("local/settings.json"), "{}").unwrap();
+        git(&["add", ".gitignore", "tracked.txt"]);
+        git(&["commit", "-q", "-m", "first"]);
+        let env = crate::environment::Environment::from_process();
+        let rule = Arc::new(FileRule::new(dir.path(), &env));
+        let mut builder =
+            TimelineBuilder::new(SessionFolder::new(dir.path(), None)).with_rule(rule);
+        let path = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+        let (_, hunks) = changed_file(edited(&mut builder, &path("local/settings.json")));
+        assert_eq!(hunks, Vec::new());
+        let (_, hunks) = changed_file(edited(&mut builder, &path("tracked.txt")));
+        assert_eq!(hunks.len(), 1);
+    }
+
+    #[test]
+    fn a_shell_change_to_a_private_file_has_no_diff() {
+        let builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        let file = |path: &str, change| crate::shell_changes::ChangedFile {
+            path: path.into(),
+            change,
+            hunks: vec![added_file("TOKEN=1")],
+        };
+        let entries = builder.command_changes(CommandChanges {
+            prompt_id: "p".into(),
+            tool_use_id: "b".into(),
+            files: vec![
+                file("/work/.env", FileChangeKind::Edited),
+                file("/work/old.pem", FileChangeKind::Deleted),
+                file("/work/infra/terraform.tfstate", FileChangeKind::Edited),
+                file("/work/a.rs", FileChangeKind::Edited),
+            ],
+            texts: Vec::new(),
+        });
+        let hunks: Vec<usize> = entries
+            .into_iter()
+            .map(|entry| match entry {
+                Entry::FileChange { hunks, .. } => hunks.len(),
+                other => panic!("not a file change: {other:?}"),
+            })
+            .collect();
+        assert_eq!(hunks, [0, 0, 0, 1]);
+    }
+
+    /// The hook handler's answers are used for its files: git is not asked again on the loop.
+    #[test]
+    fn the_handler_s_answers_are_used() {
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        builder.use_decided(
+            [
+                ("/work/build/out.txt".to_owned(), Err(NotShown::Ignored)),
+                ("/work/notes.md".to_owned(), Err(NotShown::CheckFailed)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let file = |path: &str| crate::shell_changes::ChangedFile {
+            path: path.into(),
+            change: FileChangeKind::Edited,
+            hunks: vec![added_file("x")],
+        };
+        let entries = builder.command_changes(CommandChanges {
+            prompt_id: "p".into(),
+            tool_use_id: "b".into(),
+            files: vec![file("/work/build/out.txt"), file("/work/a.rs")],
+            texts: Vec::new(),
+        });
+        let hunks: Vec<usize> = entries
+            .iter()
+            .map(|entry| match entry {
+                Entry::FileChange { hunks, .. } => hunks.len(),
+                other => panic!("not a file change: {other:?}"),
+            })
+            .collect();
+        assert_eq!(hunks, [0, 1]);
+        let entries = vec![change("notes.md", FileChangeKind::Edited)];
+        let texts = vec![DocumentText { path: "/work/notes.md".into(), text: Some("x".into()) }];
+        assert_eq!(builder.with_texts(entries.clone(), texts), entries);
+    }
+
+    #[test]
+    fn a_text_of_a_file_that_may_not_be_shown_is_dropped() {
+        let builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        let entries = vec![
+            change("credentials.md", FileChangeKind::Created),
+            change(".env", FileChangeKind::Edited),
+        ];
+        let texts = vec![
+            DocumentText { path: "/work/credentials.md".into(), text: Some("token".into()) },
+            DocumentText { path: "/work/.env".into(), text: Some("TOKEN=1".into()) },
+        ];
+        assert_eq!(builder.with_texts(entries.clone(), texts), entries);
+    }
+
+    #[test]
+    fn a_file_not_shown_is_recorded_without_its_path() {
+        let (capture, _guard) = crate::capture::Capture::start();
+        let mut builder = TimelineBuilder::new(SessionFolder::new("/work", None));
+        wrote(&mut builder, "/work/Marker-Name.pem", Value::Null);
+        let events = capture.named("file.not-shown");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].field("reason"), Some("private"));
+        assert!(!format!("{:?}", capture.events()).contains("Marker"));
     }
 
     #[test]

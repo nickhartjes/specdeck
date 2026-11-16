@@ -104,6 +104,8 @@ async fn host(url: &str) -> Hosted {
             username: "nick".into(),
             peer: loopback(),
             viewer_limit: 20,
+            hello_deadline: specdeck_core::sharing::HELLO_DEADLINE,
+            join_deadline: specdeck_core::sharing::JOIN_DEADLINE,
         },
     );
     Hosted { _session: session, _sharing: sharing, events, _dirs: (bin, data) }
