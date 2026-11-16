@@ -10,8 +10,8 @@
 # with a suffix (v1.1.0-rc.1) are published as prereleases.
 #
 # The sharing service image (web viewer included) goes to ghcr.io/nickhartjes/specdeck-server for
-# linux/amd64 and linux/arm64, tagged 1.7.0, and for stable releases also 1.7, 1 and latest. Until
-# 1.9.0 the same image also goes to ghcr.io/nickhartjes/specdeck-signalling, its name before 1.7.0.
+# linux/amd64 and linux/arm64, tagged 1.7.0, and for stable releases also 1.7, 1 and latest. Its
+# name before 1.7.0, ghcr.io/nickhartjes/specdeck-signalling, got releases up to 1.8.x.
 # Each name is signed with keyless cosign as this workflow at the tag; the release is published
 # only after that (publish-signalling-image design decisions 1 to 5, rename-signalling-to-server
 # decisions 3 to 5). Pushed with GITHUB_TOKEN: no secret.
@@ -281,11 +281,10 @@ jobs:
     env:
       # Where image pushed the digests.
       IMAGE: ghcr.io/${{ github.repository_owner }}/specdeck-server
-      # Every name the release is published and signed under, one per line. specdeck-signalling is
-      # the name before 1.7.0: remove it in 1.9.0 (rename-signalling-to-server decision 5).
+      # Every name the release is published and signed under, one per line. The name before 1.7.0,
+      # specdeck-signalling, got releases up to 1.8.x (rename-signalling-to-server decision 5).
       IMAGES: |
         ghcr.io/${{ github.repository_owner }}/specdeck-server
-        ghcr.io/${{ github.repository_owner }}/specdeck-signalling
     steps:
       - uses: actions/download-artifact@v8
         with:
