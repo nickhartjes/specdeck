@@ -23,6 +23,8 @@
     "allow-reconnect-viewer",
     "allow-diagnostics-export",
     "allow-diagnostics-heartbeat",
+    "allow-diagnostics-step",
+    "allow-diagnostics-step",
     "allow-agent-versions",
     "allow-open-install-page",
     "allow-update-status",

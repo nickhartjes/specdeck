@@ -127,10 +127,13 @@ mod tests {
     #[tokio::test]
     async fn records_connecting_and_closing_without_the_address() {
         let (capture, _guard) = crate::capture::Capture::start();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("ws://{}/signal", listener.local_addr().unwrap());
-        drop(listener);
+        // A port that is bound but not listening refuses connections. Freeing a port instead
+        // lets a test running alongside take it, and the connection is then closed, not refused.
+        let bound = tokio::net::TcpSocket::new_v4().unwrap();
+        bound.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let url = format!("ws://{}/signal", bound.local_addr().unwrap());
         assert!(connect(&url).await.is_err());
+        drop(bound);
         let failed = capture.named("signalling.connect_failed");
         assert_eq!(failed[0].field("reason"), Some("refused"));
 

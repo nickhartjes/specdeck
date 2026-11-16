@@ -93,6 +93,11 @@ mod tests {
     /// A window of Claude's browser is refused the app's commands even on the app's own page,
     /// through the app manifest and the capabilities, which Tauri's mock runtime resolves as the
     /// app does (`confine-window-navigation` task 3.4).
+    ///
+    /// Not on Windows: a whole mock app needs Common Controls 6, which `tauri-build` names only
+    /// in the app's own binary, so the test binary would not start there. The grants are the
+    /// same on every platform, so macOS and Linux check them.
+    #[cfg(not(windows))]
     mod grants {
         use tauri::ipc::{CallbackFn, InvokeBody};
         use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder};
@@ -109,7 +114,9 @@ mod tests {
         fn a_browser_window_may_call_no_app_command() {
             let app = mock_builder()
                 .invoke_handler(tauri::generate_handler![get_profile])
-                .build(tauri::generate_context!())
+                // `test = true` embeds no Info.plist: `run()` already does, and a second copy
+                // of that symbol stops the test build on macOS.
+                .build(tauri::generate_context!(test = true))
                 .unwrap();
             let own_page = crate::navigation::app_origin(app.handle());
             let call = |label: &str| {

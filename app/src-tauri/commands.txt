@@ -19,6 +19,8 @@ diagnostics_report_terminal
 reconnect_viewer
 diagnostics_export
 diagnostics_heartbeat
+diagnostics_step
+diagnostics_step
 agent_versions
 open_install_page
 update_status
