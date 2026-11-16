@@ -18,7 +18,11 @@ impl Connection {
     fn new<S: AsyncRead + AsyncWrite + Send + 'static>(stream: S) -> Self {
         let (reader, writer) = tokio::io::split(stream);
         Connection {
-            reader: FrameReader { reader: Box::new(reader), decoder: Decoder::default() },
+            reader: FrameReader {
+                reader: Box::new(reader),
+                decoder: Decoder::default(),
+                buffer: vec![0; 64 * 1024].into_boxed_slice(),
+            },
             writer: FrameWriter { writer: Box::new(writer) },
         }
     }
@@ -27,21 +31,22 @@ impl Connection {
 pub struct FrameReader {
     reader: Box<dyn AsyncRead + Unpin + Send>,
     decoder: Decoder,
+    // Keep the read buffer out of the recv future and its callers' stack frames.
+    buffer: Box<[u8]>,
 }
 
 impl FrameReader {
     /// The next frame; `None` when the other side closed the connection.
     pub async fn recv(&mut self) -> io::Result<Option<Frame>> {
-        let mut buffer = [0u8; 64 * 1024];
         loop {
             if let Some(frame) = self.decoder.next_frame().map_err(invalid)? {
                 return Ok(Some(frame));
             }
-            let read = self.reader.read(&mut buffer).await?;
+            let read = self.reader.read(&mut self.buffer).await?;
             if read == 0 {
                 return Ok(None);
             }
-            self.decoder.push(&buffer[..read]);
+            self.decoder.push(&self.buffer[..read]);
         }
     }
 }
@@ -303,6 +308,14 @@ mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recv_future_does_not_carry_the_read_buffer() {
+        let (stream, _) = tokio::io::duplex(64);
+        let mut connection = Connection::new(stream);
+        let future_size = std::mem::size_of_val(&connection.reader.recv());
+        assert!(future_size < connection.reader.buffer.len());
+    }
 
     #[tokio::test]
     async fn a_frame_goes_both_ways() {
