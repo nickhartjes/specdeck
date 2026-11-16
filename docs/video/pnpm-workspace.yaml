@@ -6,6 +6,6 @@ packages:
 minimumReleaseAge: 1440
 overrides:
   # hyperframes pins undici 7.25.0, which has known vulnerabilities; 7.30.1 fixes them all.
-  undici: ^7.30.1
+  undici: ^8.0.0
 allowBuilds:
   esbuild: true
