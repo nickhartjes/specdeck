@@ -110,7 +110,7 @@ let
     # Fewer parallel requests: the release-age check fetches metadata for every package, which
     # breaks on virtualised networks (Colima, some CI) at pnpm's default concurrency.
     pnpmInstallFlags = [ "--network-concurrency=4" ];
-    hash = "sha256-P4iMdVQQzmDhh+aW6FwIs87/bVsxLuY3nG5qeLNG9RY=";
+    hash = "sha256-A14/9ZL2AxI6ewNDHWt2d3bfIr93i7srv7sdwEuCduM=";
   };
 in
 craneLib.buildPackage (
